@@ -1,0 +1,55 @@
+# IMU input for the policy observation.
+#
+# The policy uses:
+#   base_ang_vel       -> gyroscope in body frame, rad/s
+#   projected_gravity  -> gravity direction in body frame, upright is [0, 0, -1]
+#
+# Keep source: fake for dry runs. For your Xsens MTData2 IMU, use source: xsens.
+# serial_json and serial_csv are available only for helper programs that print
+# text lines.
+
+imu:
+  source: xsens
+  port: /dev/ttyUSB0
+  baud: 115200
+  timeout: 0.001
+  stale_timeout: 0.25
+  require_live: true
+
+  # Policy base linear velocity input:
+  #   zero    -> force [0, 0, 0]
+  #   command -> [joystick_vx, joystick_vy, 0]
+  #   imu     -> use the IMU/estimator base_linear_vel value
+  base_linear_velocity_source: zero
+
+  # If true, the IMU reader reports base_linear_vel as [0, 0, 0].
+  force_zero_base_linear_velocity: true
+
+  # Xsens only: integrate free acceleration to estimate base velocity.
+  # This is approximate and can drift, so keep it off unless you explicitly need it.
+  estimate_linear_velocity: false
+  velocity_decay: 0.98
+
+  # Used by source: xsens. The MTData2 parser is built into src/imu_interface.py,
+  # so this deploy folder has no dependency on an external absolute path.
+  sensor_to_base_rotation:
+    - [1.0, 0.0, 0.0]
+    - [0.0, 1.0, 0.0]
+    - [0.0, 0.0, 1.0]
+  flip_gravity: true
+
+  # Use rad_s if your IMU already outputs rad/s, or deg_s to convert to rad/s.
+  gyro_units: rad_s
+  gyro_axis_signs: [1.0, 1.0, 1.0]
+  gravity_axis_signs: [1.0, 1.0, 1.0]
+
+  # JSON line examples accepted:
+  #   {"gyro":[0,0,0],"projected_gravity":[0,0,-1]}
+  #   {"ang_vel":[0,0,0],"quat":[1,0,0,0]}
+  #
+  # CSV default order:
+  #   gx,gy,gz,qw,qx,qy,qz
+  csv_fields: [gx, gy, gz, qw, qx, qy, qz]
+
+  quaternion_order: wxyz
+  quaternion_frame: world_from_body

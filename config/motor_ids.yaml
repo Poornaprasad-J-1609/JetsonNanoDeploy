@@ -1,0 +1,38 @@
+motor_ids:
+  FR_hip_joint: 0x01
+  FR_thigh_joint: 0x02
+  FR_calf_joint: 0x03
+
+  FL_hip_joint: 0x04
+  FL_thigh_joint: 0x05
+  FL_calf_joint: 0x06
+
+  BR_hip_joint: 0x07
+  BR_thigh_joint: 0x08
+  BR_calf_joint: 0x09
+
+  BL_hip_joint: 0x0A
+  BL_thigh_joint: 0x0B
+  BL_calf_joint: 0x0C
+
+# Empty means command all 12 joints.
+# For a one-leg two-motor test, either edit this list or pass:
+#   --active-joints FL_thigh_joint FL_calf_joint
+active_joints: []
+
+# Which CAN bus each joint's motor is wired to.
+# front bus -> FL + FR legs (6 motors)
+# back  bus -> BL + BR legs (6 motors)
+joint_can_bus:
+  FR_hip_joint: front
+  FR_thigh_joint: front
+  FR_calf_joint: front
+  FL_hip_joint: front
+  FL_thigh_joint: front
+  FL_calf_joint: front
+  BR_hip_joint: back
+  BR_thigh_joint: back
+  BR_calf_joint: back
+  BL_hip_joint: back
+  BL_thigh_joint: back
+  BL_calf_joint: back

@@ -1,0 +1,47 @@
+# Runtime control limits and switches.
+#
+# Set enabled: false on a section to let the policy command through that soft
+# limit layer. The hard joint limits in config/joint_limits.yaml are still
+# enforced in the final MIT packet builder before anything is sent to motors.
+# The joystick always owns commanded vx/vy/yaw. RobStride protocol packing still
+# saturates to the physical protocol ranges in mit_motor_control.yaml.
+
+velocity_command:
+  enabled: true
+  # Match the IsaacSim keyboard play command envelope. Joystick speed_scale
+  # still keeps first tests slow, but the policy is no longer clipped to a
+  # near-standing command before inference.
+  vx_min: -1.80
+  vx_max: 1.80
+  vy_min: -0.80
+  vy_max: 0.80
+  yaw_min: -0.70
+  yaw_max: 0.70
+
+joystick_speed_scale:
+  initial: 0.10
+  min: 0.05
+  max: 0.40
+  step: 0.05
+
+joint_position:
+  enabled: true
+
+joint_rate:
+  enabled: true
+
+mit_parameters:
+  enabled: true
+  p_min: -12.5
+  p_max: 12.5
+  v_min: -30.0
+  v_max: 30.0
+  kp_min: 0.0
+  kp_max: 30.0
+  kd_min: 0.0
+  kd_max: 2.0
+  tau_ff_min: -1.0
+  tau_ff_max: 1.0
+
+telemetry:
+  compact_only: true

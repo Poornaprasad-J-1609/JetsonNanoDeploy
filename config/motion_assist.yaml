@@ -1,0 +1,41 @@
+# Small command-side helpers used after the policy target and before safety
+# limits. Keep values conservative; joint_limits.yaml is still the hard stop.
+
+imu_posture:
+  # Adds a small roll/pitch correction from projected_gravity on top of stand
+  # and policy targets. Disable with --no-imu-stabilization.
+  enabled: false
+  roll_kp: 0.12
+  pitch_kp: 0.08
+  max_roll_correction: 0.08
+  max_pitch_correction: 0.06
+
+  # q += roll_gain * roll_correction + pitch_gain * pitch_correction
+  # Signs are robot-calibration dependent. If tilt correction pushes the wrong
+  # way, flip the corresponding signs here.
+  joint_gains:
+    FL_hip_joint: {roll: -1.0, pitch: 0.0}
+    FR_hip_joint: {roll:  1.0, pitch: 0.0}
+    BL_hip_joint: {roll: -1.0, pitch: 0.0}
+    BR_hip_joint: {roll:  1.0, pitch: 0.0}
+
+    FL_thigh_joint: {roll: 0.0, pitch: -1.0}
+    FR_thigh_joint: {roll: 0.0, pitch: -1.0}
+    BL_thigh_joint: {roll: 0.0, pitch:  1.0}
+    BR_thigh_joint: {roll: 0.0, pitch:  1.0}
+
+    FL_calf_joint: {roll: 0.0, pitch: -0.5}
+    FR_calf_joint: {roll: 0.0, pitch: -0.5}
+    BL_calf_joint: {roll: 0.0, pitch:  0.5}
+    BR_calf_joint: {roll: 0.0, pitch:  0.5}
+
+gait_assist:
+  # Off by default. Enable with --gait-assist for suspended one/two-leg tests
+  # when you want to see a walking-style swing even without full body dynamics.
+  enabled: false
+  frequency_hz: 1.0
+  min_command: 0.03
+  full_scale_command: 0.15
+  thigh_amplitude: 0.18
+  calf_amplitude: 0.25
+  hip_amplitude: 0.03

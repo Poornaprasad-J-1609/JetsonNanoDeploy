@@ -1,0 +1,48 @@
+control_dt: 0.02
+# Must match the JointPositionAction scale used during policy training.
+# The current grallator flat/rough configs use 0.25. Lower this only for
+# intentionally softened first-contact tests.
+policy_action_scale: 0.25
+
+# Policy output/observation joint order.
+#
+# The trained IsaacLab asset was created from grallator_quadruped_isaac and its
+# articulation order is leg-grouped:
+#   FR hip/thigh/calf, FL hip/thigh/calf, RR hip/thigh/calf, RL hip/thigh/calf.
+#
+# The deploy URDF/config names the rear legs BR/BL instead of RR/RL, so the last
+# two policy legs are mapped by position:
+#   policy RR_* -> real BR_*
+#   policy RL_* -> real BL_*
+policy_to_real_order:
+  - FR_hip_joint
+  - FR_thigh_joint
+  - FR_calf_joint
+  - FL_hip_joint
+  - FL_thigh_joint
+  - FL_calf_joint
+  - BR_hip_joint
+  - BR_thigh_joint
+  - BR_calf_joint
+  - BL_hip_joint
+  - BL_thigh_joint
+  - BL_calf_joint
+
+observation_layout:
+  base_lin_vel: [0, 1, 2]
+  base_ang_vel: [3, 4, 5]
+  projected_gravity: [6, 7, 8]
+  command: [9, 10, 11]
+  joint_pos_relative: [12, 23]
+  joint_vel: [24, 35]
+  previous_action: [36, 47]
+
+command_limits:
+  # Fallback command limits when config/control_limits.yaml disables its
+  # velocity_command section. Keep these aligned with play_grallator_keyboard.py.
+  vx_min: -1.80
+  vx_max: 1.80
+  vy_min: -0.80
+  vy_max: 0.80
+  yaw_min: -0.70
+  yaw_max: 0.70

@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+*.log
+logs/*.csv
+logs/*.txt
+.DS_Store
+.vscode/*
+!.vscode/settings.json

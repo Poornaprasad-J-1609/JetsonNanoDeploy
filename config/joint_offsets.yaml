@@ -1,0 +1,22 @@
+# Joint/motor calibration offsets in radians.
+# Positive value means:
+#   motor_command = target_from_policy_or_pose + offset
+#
+# Keep all zero first.
+# Tune one motor at a time only after checking direction.
+
+joint_offsets:
+  FL_hip_joint: 0.0
+  FR_hip_joint: 0.0
+  BL_hip_joint: 0.0
+  BR_hip_joint: 0.0
+
+  FL_thigh_joint: 0.0
+  FR_thigh_joint: 0.0
+  BL_thigh_joint: 0.0
+  BR_thigh_joint: 0.0
+
+  FL_calf_joint: 0.0
+  FR_calf_joint: 0.0
+  BL_calf_joint: 0.0
+  BR_calf_joint: 0.0

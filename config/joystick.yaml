@@ -1,0 +1,58 @@
+# Joystick walking direction control
+
+axes:
+  # left stick Y -> forward/backward
+  vx_axis: 1
+
+  # left stick X -> left/right
+  vy_axis: 0
+
+  # right stick X -> turning/yaw
+  # Logitech RumblePad/F710-style controllers usually expose this as axis 2.
+  yaw_axis: 2
+
+invert:
+  # Many controllers give left-stick-up as -1, so vx is usually inverted.
+  vx: true
+  # Isaac keyboard convention: A/left is +Y, D/right is -Y.
+  # Most joystick X axes report left=-1 and right=+1, so invert this axis.
+  vy: true
+  # Isaac keyboard convention: Q/left turn is +yaw, E/right turn is -yaw.
+  # Most joystick X axes report left=-1 and right=+1, so invert this axis.
+  yaw: true
+
+speed_limits:
+  # Full-stick command before runtime speed_scale is applied.
+  # These match play_grallator_keyboard.py:
+  #   W/S -> +/-1.8 vx, A/D -> +/-0.8 vy, Q/E -> +/-0.7 yaw.
+  # Runtime speed_scale remains low in control_limits.yaml for safe tests.
+  max_vx: 1.80
+  max_vy: 0.80
+  max_yaw: 0.70
+
+filter:
+  deadzone: 0.08
+  expo: 0.35
+  smoothing: 0.20
+  # If the Logitech MODE button puts the left stick/D-pad into hat mode,
+  # use hat up/down for vx and hat left/right for vy.
+  use_hat_fallback: true
+
+connection:
+  # Wait briefly for wireless receivers/controllers to enumerate.
+  wait_seconds: 5.0
+
+buttons:
+  # Button 5 moves to stand pose.
+  stand: 5
+  policy: -1
+
+  # Button 4 stops walking policy and moves to crouch/sit pose.
+  sit: 4
+
+  # Any of these buttons immediately exits the controller loop.
+  emergency_stop: [0, 1, 2, 3]
+
+  # Runtime speed scale buttons.
+  speed_down: 6
+  speed_up: 7

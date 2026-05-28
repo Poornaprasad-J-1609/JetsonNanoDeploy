@@ -1,0 +1,66 @@
+# Joint safety limits in radians.
+#
+# Edit this file to tune per-joint command limits. The controller clips every
+# policy, sit, and stand target through these limits before MIT packets are sent.
+#
+# dq_max_per_step is the maximum target change per 20 ms control step by default
+# because config/joint_map.yaml currently sets control_dt: 0.02.
+# These values are target slew limits, not hard joint angles. Hard angle limits
+# below are still always applied before MIT packets are sent.
+#
+# First full-robot testing defaults:
+#   hip   0.012 rad/step = 0.60 rad/s
+#   thigh 0.015 rad/step = 0.75 rad/s
+#   calf  0.018 rad/step = 0.90 rad/s
+
+joint_limits:
+  FL_hip_joint:
+    min: -0.35
+    max: 0.35
+    dq_max_per_step: 0.012
+  FR_hip_joint:
+    min: -0.35
+    max: 0.35
+    dq_max_per_step: 0.012
+  BL_hip_joint:
+    min: -0.35
+    max: 0.35
+    dq_max_per_step: 0.012
+  BR_hip_joint:
+    min: -0.35
+    max: 0.35
+    dq_max_per_step: 0.012
+
+  FL_thigh_joint:
+    min: -1.2
+    max: 1.2
+    dq_max_per_step: 0.015
+  FR_thigh_joint:
+    min: -1.2
+    max: 1.2
+    dq_max_per_step: 0.015
+  BL_thigh_joint:
+    min: -1.2
+    max: 1.2
+    dq_max_per_step: 0.015
+  BR_thigh_joint:
+    min: -1.2
+    max: 1.2
+    dq_max_per_step: 0.015
+
+  FL_calf_joint:
+    min: -1.2
+    max: 1.42
+    dq_max_per_step: 0.018
+  FR_calf_joint:
+    min: -1.42
+    max: 1.2
+    dq_max_per_step: 0.018
+  BL_calf_joint:
+    min: -1.2
+    max: 1.42
+    dq_max_per_step: 0.018
+  BR_calf_joint:
+    min: -1.42
+    max: 1.2
+    dq_max_per_step: 0.018

@@ -1,0 +1,264 @@
+GRALLATOR_DEPLOY command guide
+==============================
+
+Run all commands from this folder:
+
+cd /path/to/GRALLATOR_DEPLOY
+
+For a migrated system, change only these three device variables after checking
+which /dev/ttyUSB* belongs to each device:
+
+export FRONT_CAN=/dev/ttyUSB0
+export BACK_CAN=/dev/ttyUSB1
+export IMU_PORT=/dev/ttyUSB2
+export PYTHONPATH="$PWD/src"
+
+If the GUI does not open from a desktop terminal, check:
+
+echo $DISPLAY
+export DISPLAY=:0
+
+Install Python requirements:
+
+/usr/bin/python3 -m pip install -r requirements.txt
+
+Ubuntu/Debian GUI dependency if tkinter is missing:
+
+sudo apt-get update
+sudo apt-get install -y python3-tk
+
+
+1. Port check
+-------------
+
+ls -l /dev/ttyUSB* /dev/input/js* /dev/input/event* 2>/dev/null
+
+/usr/bin/python3 src/check_can_routing.py
+
+
+2. Joystick connection test
+---------------------------
+
+/usr/bin/python3 src/joystick_interface.py \
+  --source joystick \
+  --list-joysticks \
+  --joystick-wait-seconds 10
+
+To see raw axes/buttons:
+
+/usr/bin/python3 src/joystick_interface.py \
+  --source joystick \
+  --joystick-wait-seconds 10 \
+  --seconds 30 \
+  --hz 20 \
+  --show-raw
+
+
+3. IMU check without GUI
+------------------------
+
+/usr/bin/python3 src/imu_interface.py \
+  --source xsens \
+  --port "$IMU_PORT" \
+  --seconds 20 \
+  --hz 20
+
+
+4. IMU check with GUI, no motors/CAN
+------------------------------------
+
+/usr/bin/python3 src/main_controller.py \
+  --mode print \
+  --feedback-source fake \
+  --command-source fixed \
+  --vx 0.0 \
+  --vy 0.0 \
+  --yaw 0.0 \
+  --imu-source xsens \
+  --imu-port "$IMU_PORT" \
+  --start-control-mode hold \
+  --startup-action hold \
+  --policy-steps 0 \
+  --log-every 5 \
+  --gui
+
+
+5. Motor connection check, GUI encoder view only
+------------------------------------------------
+
+/usr/bin/python3 src/check_motor_connections.py \
+  --port-front "$FRONT_CAN" \
+  --port-back "$BACK_CAN" \
+  --all \
+  --rate 20 \
+  --print-every 1.0 \
+  --gui-only
+
+
+6. Motor set zero
+-----------------
+
+Put the robot manually in its stand/default pose, then run:
+
+/usr/bin/python3 src/check_motor_connections.py \
+  --port-front "$FRONT_CAN" \
+  --port-back "$BACK_CAN" \
+  --all \
+  --rate 20 \
+  --print-every 1.0 \
+  --gui-only
+
+Keyboard while this command is running:
+
+s = send RobStride set-zero to all active motors and save default_pose/stand_pose as zero
+q = quit
+
+
+7. Motor set zero plus set crouch pose
+--------------------------------------
+
+Step 1: manually put the robot in stand/default pose and press s.
+Step 2: manually put the robot in crouch/sit pose and press c.
+Step 3: press q to quit.
+
+/usr/bin/python3 src/check_motor_connections.py \
+  --port-front "$FRONT_CAN" \
+  --port-back "$BACK_CAN" \
+  --all \
+  --rate 20 \
+  --print-every 1.0 \
+  --gui-only
+
+Keyboard while this command is running:
+
+s = set current motor positions as zero/default/stand
+c = save current feedback angles as crouch_pose in config/default_pose.yaml
+q = quit
+
+
+8. Dry run, no motors/CAN/real IMU
+----------------------------------
+
+/usr/bin/python3 src/main_controller.py \
+  --mode print \
+  --feedback-source fake \
+  --command-source fixed \
+  --vx 0.30 \
+  --vy 0.00 \
+  --yaw 0.00 \
+  --imu-source fake \
+  --no-imu-stabilization \
+  --no-gait-assist \
+  --base-lin-vel-source zero \
+  --start-control-mode policy \
+  --startup-action hold \
+  --policy-steps 100 \
+  --log-every 5 \
+  --gui
+
+
+9. IMU stabilization test, no walking
+-------------------------------------
+
+This sends real MIT commands. Keep the robot suspended/secured.
+Joystick walking is disabled by the huge walk threshold and zero velocity limits.
+
+/usr/bin/python3 src/main_controller.py \
+  --mode mit-signal \
+  --port-front "$FRONT_CAN" \
+  --port-back "$BACK_CAN" \
+  --feedback-source mit \
+  --command-source joystick \
+  --imu-source xsens \
+  --imu-port "$IMU_PORT" \
+  --imu-stabilization \
+  --no-gait-assist \
+  --base-lin-vel-source zero \
+  --start-control-mode stand \
+  --startup-action hold \
+  --policy-steps 0 \
+  --walk-command-threshold 999 \
+  --max-vx 0.0 \
+  --max-vy 0.0 \
+  --max-yaw 0.0 \
+  --speed-scale-initial 0.05 \
+  --speed-scale-min 0.05 \
+  --speed-scale-max 0.05 \
+  --feedback-timeout 0.05 \
+  --log-every 5 \
+  --joint-debug \
+  --gui
+
+
+10. Walk control with policy, real IMU, joystick
+------------------------------------------------
+
+This sends real MIT commands. First full robot tests should be suspended/secured.
+Use joystick button 6 to reduce speed and button 7 to increase speed.
+Emergency stop is joystick buttons 0, 1, 2, or 3. Ctrl+C also stops.
+
+/usr/bin/python3 src/main_controller.py \
+  --mode mit-signal \
+  --port-front "$FRONT_CAN" \
+  --port-back "$BACK_CAN" \
+  --feedback-source mit \
+  --command-source joystick \
+  --imu-source xsens \
+  --imu-port "$IMU_PORT" \
+  --imu-stabilization \
+  --no-gait-assist \
+  --base-lin-vel-source zero \
+  --start-control-mode hold \
+  --startup-action hold \
+  --policy-steps 0 \
+  --joystick-wait-seconds 10 \
+  --walk-command-threshold 0.02 \
+  --speed-scale-initial 0.05 \
+  --speed-scale-min 0.05 \
+  --speed-scale-max 0.40 \
+  --speed-scale-step 0.05 \
+  --feedback-timeout 0.05 \
+  --log-every 5 \
+  --joint-debug \
+  --gui
+
+
+11. Walk control with policy, fake IMU/no real IMU, joystick
+------------------------------------------------------------
+
+This sends real MIT commands but uses fake upright IMU values.
+
+/usr/bin/python3 src/main_controller.py \
+  --mode mit-signal \
+  --port-front "$FRONT_CAN" \
+  --port-back "$BACK_CAN" \
+  --feedback-source mit \
+  --command-source joystick \
+  --imu-source fake \
+  --imu-stabilization \
+  --no-gait-assist \
+  --base-lin-vel-source zero \
+  --start-control-mode hold \
+  --startup-action hold \
+  --policy-steps 0 \
+  --joystick-wait-seconds 10 \
+  --walk-command-threshold 0.02 \
+  --speed-scale-initial 0.05 \
+  --speed-scale-min 0.05 \
+  --speed-scale-max 0.40 \
+  --speed-scale-step 0.05 \
+  --feedback-timeout 0.05 \
+  --log-every 5 \
+  --joint-debug \
+  --gui
+
+
+12. Quick code checks after migration
+-------------------------------------
+
+/usr/bin/python3 -m py_compile src/*.py
+
+/usr/bin/python3 src/check_policy_limits.py \
+  --base-lin-vel-source zero
+
+/usr/bin/python3 src/check_can_routing.py

@@ -1,0 +1,28 @@
+# Emergency-stop thresholds.
+#
+# Per-joint position and rate limits now live in:
+#   config/joint_limits.yaml
+
+emergency:
+  projected_gravity_gz_min: -0.75
+  max_body_ang_vel_norm: 8.0
+
+# Live encoder sanity checks. These are checked before sit, stand, and walking
+# commands are generated. In MIT feedback mode, active joints must report live
+# encoder values before motion starts.
+encoder:
+  enabled: true
+
+  # Stops immediately if an active joint has no MIT feedback before motion.
+  # This is ignored for fake-feedback dry runs.
+  require_feedback_for_motion: true
+
+  # Absolute sanity limit for measured joint angle after joint offset removal.
+  # 360 degrees = 6.283 rad, so the default catches an un-zeroed/wrapped encoder.
+  max_abs_position_rad: 3.5
+
+  # Also stop if measured q is outside config/joint_limits.yaml by this margin.
+  # This catches bad zero positions before they become violent motion commands.
+  joint_limit_margin_rad: 0.75
+
+  report_max_joints: 4

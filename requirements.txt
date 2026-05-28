@@ -1,0 +1,20 @@
+# Python packages used by GRALLATOR_DEPLOY.
+#
+# Install from this folder with:
+#   /usr/bin/python3 -m pip install -r requirements.txt
+#
+# Notes:
+# - tkinter is used by the GUI but is provided by the operating system package
+#   python3-tk on Ubuntu/Debian, not by pip.
+# - On Jetson, PyTorch may need NVIDIA's Jetson wheel instead of the default
+#   PyPI wheel. Keep torch installed in the same Python used to run the code.
+
+numpy>=1.23
+PyYAML>=6.0
+pyserial>=3.5
+pygame>=2.5
+torch>=2.0
+Pillow>=9.5
+
+# pygame 2.6.x imports pkg_resources; this keeps that compatibility stable.
+setuptools<81

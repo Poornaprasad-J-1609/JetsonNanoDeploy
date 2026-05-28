@@ -1,0 +1,59 @@
+mit_protocol:
+  # RobStride / CyberGear-style MIT control frame.
+  # master_id is used only for filtering/diagnostics; operation-control
+  # commands put feed-forward torque in the extended ID extra-data field.
+  comm_type_mit_control: 1
+  comm_type_feedback: 2
+  comm_type_enable: 3
+  comm_type_stop: 4
+  comm_type_set_zero: 6
+  comm_type_active_feedback: 24
+  # Host/controller ID used in RobStride management and polling frames.
+  # This matches the working read_three_robstride_encoders.py script.
+  master_id: 0xFD
+
+  p_min: -12.5
+  p_max: 12.5
+  v_min: -30.0
+  v_max: 30.0
+  kp_min: 0.0
+  kp_max: 500.0
+  kd_min: 0.0
+  kd_max: 5.0
+  tau_min: -12.0
+  tau_max: 12.0
+
+startup:
+  standup_seconds: 5.0
+
+communication:
+  # Manual gait scripts use a short gap between RobStride frames.
+  # Keep this conservative for real hardware; lower only after bus tests.
+  frame_gap_s: 0.0015
+
+gains:
+  startup:
+    hip:
+      kp: 75
+      kd: 3.8
+    thigh:
+      kp: 50.0
+      kd: 3.1
+    calf:
+      kp: 75.0
+      kd: 3.8
+
+  policy:
+    hip:
+      kp: 8.0
+      kd: 0.8
+    thigh:
+      kp: 10.0
+      kd: 1.0
+    calf:
+      kp: 12.0
+      kd: 1.2
+
+feedforward:
+  tau_ff: 0.0
+  v_des: 0.0
