@@ -101,12 +101,12 @@ To see raw axes/buttons:
 Put the robot manually in its stand/default pose, then run:
 
 /usr/bin/python3 src/check_motor_connections.py \
-  --port-front "$FRONT_CAN" \
-  --port-back "$BACK_CAN" \
+  --port-front /dev/ttyUSB1 \
+  --port-back /dev/ttyUSB0 \
   --all \
   --rate 20 \
   --print-every 1.0 \
-  --gui-only
+  
 
 Keyboard while this command is running:
 

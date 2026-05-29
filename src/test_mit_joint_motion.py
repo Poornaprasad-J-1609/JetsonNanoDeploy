@@ -16,7 +16,11 @@ try:
 except ImportError as exc:
     raise ImportError("Install PyYAML first: pip3 install pyyaml") from exc
 
-from motor_command_layer import MotorCommandLayer, print_mit_commands
+from motor_command_layer import (
+    MotorCommandLayer,
+    motor_position_to_joint_angle,
+    print_mit_commands,
+)
 from policy_runner import PolicyRunner
 from robstride_can_interface import ATUsbCan
 from state_estimator import MitFeedbackStateEstimator
@@ -50,7 +54,14 @@ def print_joint_feedback(step, commands, estimator):
             )
             continue
 
-        q_fb = float(feedback["position"]) - float(cmd["offset"])
+        q_fb = float(feedback.get(
+            "joint_position",
+            motor_position_to_joint_angle(
+                feedback["position"],
+                offset=float(cmd["offset"]),
+                reference=float(cmd["q_des"]),
+            ),
+        ))
         print(
             f"step={step:05d} {joint_name:16s} "
             f"id=0x{cmd['motor_id']:02X} "
@@ -144,6 +155,11 @@ def main():
             motor_layer=layer,
             bus=buses,
             imu_sensor=None,
+            pose_references={
+                "default": runner.q_default,
+                "stand": runner.q_stand,
+                "crouch": runner.q_crouch,
+            },
         )
 
         print("Polling feedback...")
@@ -178,7 +194,11 @@ def main():
                     joint_phase = phase + joint_number * 0.5 * np.pi
                     q_target[index] = q_center[index] + float(args.amplitude) * np.sin(joint_phase)
 
-            commands = layer.build_mit_commands(q_target, phase="policy")
+            commands = layer.build_mit_commands(
+                q_target,
+                phase="policy",
+                feedback_by_joint=getattr(estimator, "last_feedback_by_joint", None),
+            )
             layer.send_signal_commands(buses, commands)
             estimator.refresh_from_bus(timeout=0.02)
 

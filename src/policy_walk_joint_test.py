@@ -432,6 +432,11 @@ def main():
                 motor_layer=motor_layer,
                 bus=buses,
                 imu_sensor=imu_sensor,
+                pose_references={
+                    "default": runner.q_default,
+                    "stand": runner.q_stand,
+                    "crouch": runner.q_crouch,
+                },
             )
             print("Polling feedback and enabling sent joints...")
             motor_layer.send_raw_commands(buses, motor_layer.build_feedback_poll_commands())
@@ -506,14 +511,22 @@ def main():
                     q_previous_target=q_previous_target,
                     max_target_step=args.max_target_step,
                 )
-                commands = motor_layer.build_mit_commands(q_safe_target, phase=args.mit_phase)
+                commands = motor_layer.build_mit_commands(
+                    q_safe_target,
+                    phase=args.mit_phase,
+                    feedback_by_joint=getattr(estimator, "last_feedback_by_joint", None),
+                )
                 previous_action = action.copy()
                 has_motion_target = True
                 active_mode = "policy"
             else:
                 q_safe_target = q_previous_target.copy()
                 commands = (
-                    motor_layer.build_mit_commands(q_safe_target, phase="startup")
+                    motor_layer.build_mit_commands(
+                        q_safe_target,
+                        phase="startup",
+                        feedback_by_joint=getattr(estimator, "last_feedback_by_joint", None),
+                    )
                     if has_motion_target
                     else []
                 )

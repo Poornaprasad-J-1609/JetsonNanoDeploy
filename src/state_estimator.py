@@ -2,7 +2,11 @@
 import time
 import numpy as np
 
-from motor_command_layer import MotorCommandLayer, decode_mit_feedback_frame
+from motor_command_layer import (
+    MotorCommandLayer,
+    decode_mit_feedback_frame,
+    motor_position_to_joint_angle,
+)
 
 
 class FakeStateEstimator:
@@ -99,7 +103,16 @@ class MitFeedbackStateEstimator(FakeStateEstimator):
     subtracting the configured joint offset used when commands are sent.
     """
 
-    def __init__(self, q_initial, policy_order, motor_ids, motor_layer, bus, imu_sensor=None):
+    def __init__(
+        self,
+        q_initial,
+        policy_order,
+        motor_ids,
+        motor_layer,
+        bus,
+        imu_sensor=None,
+        pose_references=None,
+    ):
         super().__init__(q_initial=q_initial, imu_sensor=imu_sensor)
 
         self.policy_order = list(policy_order)
@@ -109,6 +122,7 @@ class MitFeedbackStateEstimator(FakeStateEstimator):
         self.joint_index_by_name = {
             name: index for index, name in enumerate(self.policy_order)
         }
+        self.pose_references_by_joint = self._build_pose_references(pose_references)
         self.joint_name_by_bus_motor_id = {
             (self.motor_layer.joint_can_bus.get(joint_name, "front"), int(motor_id)): joint_name
             for joint_name, motor_id in motor_ids.items()
@@ -129,6 +143,26 @@ class MitFeedbackStateEstimator(FakeStateEstimator):
         }
         self.last_feedback_by_joint = {}
         self.last_feedback_count = 0
+
+    def _build_pose_references(self, pose_references):
+        refs_by_joint = {joint_name: [] for joint_name in self.policy_order}
+        if pose_references is None:
+            return refs_by_joint
+
+        if isinstance(pose_references, dict):
+            iterable = pose_references.values()
+        else:
+            iterable = pose_references
+
+        for pose in iterable:
+            pose = np.asarray(pose, dtype=np.float32)
+            if pose.shape[0] != len(self.policy_order):
+                continue
+            for index, joint_name in enumerate(self.policy_order):
+                value = float(pose[index])
+                if np.isfinite(value):
+                    refs_by_joint[joint_name].append(value)
+        return refs_by_joint
 
     def update_from_frames(self, frames):
         count = 0
@@ -154,9 +188,23 @@ class MitFeedbackStateEstimator(FakeStateEstimator):
 
             index = self.joint_index_by_name[joint_name]
             offset = float(self.motor_layer.joint_offsets[joint_name])
+            if joint_name in self.last_feedback_by_joint:
+                q_references = [float(self.q_current[index])]
+            else:
+                q_references = list(self.pose_references_by_joint.get(joint_name, []))
+                q_references.append(float(self.q_current[index]))
+            q_joint = motor_position_to_joint_angle(
+                feedback["position"],
+                offset=offset,
+                references=q_references,
+            )
 
-            self.q_current[index] = float(feedback["position"]) - offset
+            self.q_current[index] = q_joint
             self.qd_current[index] = float(feedback["velocity"])
+            feedback = dict(feedback)
+            feedback["position_raw"] = float(feedback["position"])
+            feedback["joint_position"] = q_joint
+            feedback["position_unwrapped"] = q_joint + offset
             self.last_feedback_by_joint[joint_name] = feedback
             count += 1
 

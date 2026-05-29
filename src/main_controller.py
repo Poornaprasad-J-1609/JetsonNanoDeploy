@@ -730,7 +730,11 @@ def run_startup_to_stand(
         q_desired = (1.0 - alpha) * q_start + alpha * runner.q_stand
         q_safe = safety.safety_filter(q_desired, q_previous_target)
 
-        commands = motor_layer.build_mit_commands(q_safe, phase="startup")
+        commands = motor_layer.build_mit_commands(
+            q_safe,
+            phase="startup",
+            feedback_by_joint=getattr(estimator, "last_feedback_by_joint", None),
+        )
 
         if mode == "signal":
             motor_layer.send_harmless_frames(buses, commands)
@@ -1025,7 +1029,11 @@ def run_policy_loop(
         if active_control_mode == "hold":
             q_safe_target = q_previous_target.copy()
             commands = (
-                motor_layer.build_mit_commands(q_safe_target, phase="startup")
+                motor_layer.build_mit_commands(
+                    q_safe_target,
+                    phase="startup",
+                    feedback_by_joint=getattr(estimator, "last_feedback_by_joint", None),
+                )
                 if has_motion_target
                 else []
             )
@@ -1043,13 +1051,21 @@ def run_policy_loop(
                 use_gait=False,
             )
             q_safe_target = safety.safety_filter(q_policy_target, q_previous_target)
-            commands = motor_layer.build_mit_commands(q_safe_target, phase="startup")
+            commands = motor_layer.build_mit_commands(
+                q_safe_target,
+                phase="startup",
+                feedback_by_joint=getattr(estimator, "last_feedback_by_joint", None),
+            )
             action = np.zeros(action_dim, dtype=np.float32)
 
         elif active_control_mode == "sit":
             q_policy_target = runner.q_crouch.copy()
             q_safe_target = safety.safety_filter(q_policy_target, q_previous_target)
-            commands = motor_layer.build_mit_commands(q_safe_target, phase="startup")
+            commands = motor_layer.build_mit_commands(
+                q_safe_target,
+                phase="startup",
+                feedback_by_joint=getattr(estimator, "last_feedback_by_joint", None),
+            )
             action = np.zeros(action_dim, dtype=np.float32)
 
         elif active_control_mode == "policy":
@@ -1075,7 +1091,11 @@ def run_policy_loop(
                 use_gait=True,
             )
             q_safe_target = safety.safety_filter(q_policy_target, q_previous_target)
-            commands = motor_layer.build_mit_commands(q_safe_target, phase="policy")
+            commands = motor_layer.build_mit_commands(
+                q_safe_target,
+                phase="policy",
+                feedback_by_joint=getattr(estimator, "last_feedback_by_joint", None),
+            )
 
         else:
             raise RuntimeError(f"Unknown control_mode: {active_control_mode}")
@@ -1540,6 +1560,11 @@ def main():
                 motor_layer=motor_layer,
                 bus=buses,
                 imu_sensor=imu_sensor,
+                pose_references={
+                    "default": runner.q_default,
+                    "stand": runner.q_stand,
+                    "crouch": runner.q_crouch,
+                },
             )
             print("Polling initial motor encoder feedback...")
             motor_layer.send_raw_commands(buses, motor_layer.build_feedback_poll_commands())

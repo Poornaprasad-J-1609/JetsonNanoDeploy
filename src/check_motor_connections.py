@@ -16,7 +16,11 @@ try:
 except ImportError as exc:
     raise ImportError("Install PyYAML first: pip3 install pyyaml") from exc
 
-from motor_command_layer import MotorCommandLayer, decode_mit_feedback_frame
+from motor_command_layer import (
+    MotorCommandLayer,
+    decode_mit_feedback_frame,
+    motor_position_to_joint_angle,
+)
 from robstride_can_interface import ATUsbCan
 
 
@@ -68,6 +72,23 @@ def load_config():
     return joint_cfg, motor_cfg
 
 
+def load_pose_references(policy_order):
+    pose_cfg = load_yaml(ROOT / "config" / "default_pose.yaml")
+    pose_names = ("default_pose", "stand_pose", "crouch_pose")
+    refs_by_joint = {joint_name: [] for joint_name in policy_order}
+    poses = {}
+    for pose_name in pose_names:
+        pose = pose_cfg.get(pose_name, {})
+        values = {}
+        for joint_name in policy_order:
+            if joint_name in pose:
+                value = float(pose[joint_name])
+                refs_by_joint[joint_name].append(value)
+                values[joint_name] = value
+        poses[pose_name] = values
+    return refs_by_joint, poses
+
+
 def resolve_joints(policy_order, motor_cfg, active_joints_arg):
     if active_joints_arg is not None:
         joints = list(active_joints_arg)
@@ -94,6 +115,50 @@ def feedback_status(feedback, now, stale_seconds):
     if int(feedback.get("fault_bits", 0)) != 0:
         return "FAULT"
     return "CONNECTED"
+
+
+def feedback_joint_position(joint_name, layer, feedback, reference=None, pose_references=None):
+    if feedback is None:
+        return None
+    offset = float(layer.joint_offsets.get(joint_name, 0.0))
+    references = []
+    if pose_references is not None:
+        references.extend(pose_references.get(joint_name, []))
+    if reference is not None:
+        references.insert(0, reference)
+    return motor_position_to_joint_angle(
+        feedback["position"],
+        offset=offset,
+        references=references,
+    )
+
+
+def estimate_pose_from_angles(joints, angles, poses):
+    if not angles:
+        return "unknown", None, None
+
+    best_name = "unknown"
+    best_rms = None
+    best_max = None
+    for pose_name, pose in poses.items():
+        errors = []
+        for joint_name in joints:
+            if joint_name in angles and joint_name in pose:
+                errors.append(float(angles[joint_name]) - float(pose[joint_name]))
+        if not errors:
+            continue
+        rms = float((sum(err * err for err in errors) / len(errors)) ** 0.5)
+        max_err = float(max(abs(err) for err in errors))
+        if best_rms is None or rms < best_rms:
+            best_name = pose_name.replace("_pose", "")
+            best_rms = rms
+            best_max = max_err
+
+    if best_rms is None:
+        return "unknown", None, None
+    if best_rms > 0.35 or best_max > 0.80:
+        return "unknown", best_rms, best_max
+    return best_name, best_rms, best_max
 
 
 def update_feedback_from_frames(
@@ -129,6 +194,9 @@ def print_table(
     joints,
     motor_ids,
     joint_can_bus,
+    layer,
+    pose_references,
+    poses,
     feedback_by_bus_motor_id,
     feedback_by_motor_id,
     stale_seconds,
@@ -144,9 +212,9 @@ def print_table(
     now = time.monotonic()
     if clear_screen:
         print("\033[2J\033[H", end="")
-    print("=" * 142)
+    print("=" * 158)
     print("GRALLATOR ROBSTRIDE MOTOR CONNECTION CHECK")
-    print("=" * 142)
+    print("=" * 158)
     print("Poll loop sends RobStride comm-type 4 stop/poll frames. It does not enable MIT torque control.")
     if keyboard_enabled:
         actions = []
@@ -164,14 +232,16 @@ def print_table(
         print("Keyboard input is disabled because stdin is not an interactive terminal.")
     if status_message:
         print(status_message)
-    print("-" * 142)
+    print("-" * 158)
     print(
         f"{'Joint':20s} | {'Bus':>5s} | {'Motor':>7s} | {'State':>13s} | {'Age ms':>8s} | "
-        f"{'Pos rad':>10s} | {'Vel rad/s':>10s} | {'Torque':>9s} | {'Temp C':>7s} | Fault"
+        f"{'Joint rad':>10s} | {'Raw rad':>10s} | {'Vel rad/s':>10s} | "
+        f"{'Torque':>9s} | {'Temp C':>7s} | Fault"
     )
-    print("-" * 142)
+    print("-" * 158)
 
     connected = 0
+    angles = {}
     for joint_name in joints:
         motor_id = int(motor_ids[joint_name])
         bus_name = joint_can_bus.get(joint_name, "front")
@@ -189,14 +259,22 @@ def print_table(
         if feedback is None:
             print(
                 f"{joint_name:20s} | {bus_name:>5s} | 0x{motor_id:02X}    | {state:>13s} | "
-                f"{'-':>8s} | {'-':>10s} | {'-':>10s} | {'-':>9s} | {'-':>7s} | -"
+                f"{'-':>8s} | {'-':>10s} | {'-':>10s} | {'-':>10s} | {'-':>9s} | {'-':>7s} | -"
             )
             continue
 
         age_ms = 1000.0 * (now - feedback["timestamp"])
+        q_joint = feedback_joint_position(
+            joint_name,
+            layer,
+            feedback,
+            pose_references=pose_references,
+        )
+        angles[joint_name] = q_joint
         print(
             f"{joint_name:20s} | {bus_name:>5s} | 0x{motor_id:02X}    | {state:>13s} | "
             f"{age_ms:8.1f} | "
+            f"{q_joint:+10.4f} | "
             f"{feedback['position']:+10.4f} | "
             f"{feedback['velocity']:+10.4f} | "
             f"{feedback['torque']:+9.4f} | "
@@ -204,9 +282,17 @@ def print_table(
             f"0x{int(feedback['fault_bits']):02X}"
         )
 
-    print("-" * 142)
+    print("-" * 158)
     print(f"Connected: {connected}/{len(joints)}")
-    print("=" * 142)
+    pose_name, pose_rms, pose_max = estimate_pose_from_angles(joints, angles, poses)
+    if pose_rms is None:
+        print("Pose estimate: unknown")
+    else:
+        print(
+            f"Pose estimate: {pose_name} "
+            f"(rms_error={pose_rms:.4f} rad, max_error={pose_max:.4f} rad)"
+        )
+    print("=" * 158)
 
 
 def feedback_for_joint(
@@ -229,6 +315,7 @@ def active_joint_angles_from_feedback(
     motor_ids,
     joint_can_bus,
     layer,
+    pose_references,
     feedback_by_bus_motor_id,
     feedback_by_motor_id,
     stale_seconds,
@@ -257,8 +344,12 @@ def active_joint_angles_from_feedback(
             faults.append(joint_name)
             continue
 
-        offset = float(layer.joint_offsets.get(joint_name, 0.0))
-        angles[joint_name] = float(feedback["position"]) - offset
+        angles[joint_name] = feedback_joint_position(
+            joint_name,
+            layer,
+            feedback,
+            pose_references=pose_references,
+        )
 
     if missing or stale or faults:
         details = []
@@ -307,6 +398,7 @@ def capture_crouch_pose(
     motor_ids,
     joint_can_bus,
     layer,
+    pose_references,
     feedback_by_bus_motor_id,
     feedback_by_motor_id,
     stale_seconds,
@@ -316,6 +408,7 @@ def capture_crouch_pose(
         motor_ids=motor_ids,
         joint_can_bus=joint_can_bus,
         layer=layer,
+        pose_references=pose_references,
         feedback_by_bus_motor_id=feedback_by_bus_motor_id,
         feedback_by_motor_id=feedback_by_motor_id,
         stale_seconds=stale_seconds,
@@ -352,6 +445,8 @@ def build_gui_packet(
     motor_ids,
     joint_can_bus,
     layer,
+    pose_references,
+    poses,
     feedback_by_bus_motor_id,
     feedback_by_motor_id,
     stale_seconds,
@@ -386,9 +481,13 @@ def build_gui_packet(
         }
 
         if feedback is not None and now - feedback["timestamp"] <= stale_seconds:
-            offset = float(layer.joint_offsets.get(joint_name, 0.0))
             row.update({
-                "qf": float(feedback["position"]) - offset,
+                "qf": feedback_joint_position(
+                    joint_name,
+                    layer,
+                    feedback,
+                    pose_references=pose_references,
+                ),
                 "vf": float(feedback["velocity"]),
                 "tf": float(feedback["torque"]),
                 "temp": float(feedback["temperature_c"]),
@@ -399,6 +498,9 @@ def build_gui_packet(
 
         joint_rows.append(row)
 
+    angles = {row["n"]: row["qf"] for row in joint_rows if row["qf"] is not None}
+    pose_name, pose_rms, pose_max = estimate_pose_from_angles(joints, angles, poses)
+
     return {
         "step": int(step),
         "mode": "encoder",
@@ -407,6 +509,9 @@ def build_gui_packet(
         "imu": "none",
         "safe": not has_fault,
         "fault_reason": "motor feedback fault bit set" if has_fault else "",
+        "pose_estimate": pose_name,
+        "pose_error_rms": pose_rms,
+        "pose_error_max": pose_max,
         "act_max": 0.0,
         "base_vel": [0.0, 0.0, 0.0],
         "ang_vel": [0.0, 0.0, 0.0],
@@ -456,6 +561,9 @@ def print_compact_status(
     joints,
     motor_ids,
     joint_can_bus,
+    layer,
+    pose_references,
+    poses,
     feedback_by_bus_motor_id,
     feedback_by_motor_id,
     stale_seconds,
@@ -464,6 +572,7 @@ def print_compact_status(
     connected = 0
     stale = 0
     faults = 0
+    angles = {}
     for joint_name in joints:
         feedback = feedback_for_joint(
             joint_name=joint_name,
@@ -475,14 +584,25 @@ def print_compact_status(
         state = feedback_status(feedback, now, stale_seconds)
         if state == "CONNECTED":
             connected += 1
+            angles[joint_name] = feedback_joint_position(
+                joint_name,
+                layer,
+                feedback,
+                pose_references=pose_references,
+            )
         elif state == "STALE":
             stale += 1
         elif state == "FAULT":
             faults += 1
 
+    pose_name, pose_rms, pose_max = estimate_pose_from_angles(joints, angles, poses)
+    pose_text = "pose=unknown"
+    if pose_rms is not None:
+        pose_text = f"pose={pose_name} pose_rms={pose_rms:.4f} pose_max={pose_max:.4f}"
+
     print(
         f"encoder_gui step={step:06d} connected={connected:02d}/{len(joints):02d} "
-        f"stale={stale:02d} faults={faults:02d}",
+        f"stale={stale:02d} faults={faults:02d} {pose_text}",
         flush=True,
     )
 
@@ -490,6 +610,7 @@ def print_compact_status(
 def main():
     joint_cfg, motor_cfg = load_config()
     policy_order = list(joint_cfg["policy_to_real_order"])
+    pose_references, poses = load_pose_references(policy_order)
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", default="/dev/ttyUSB0",
@@ -632,6 +753,7 @@ def main():
                             motor_ids=motor_ids,
                             joint_can_bus=joint_can_bus,
                             layer=layer,
+                            pose_references=pose_references,
                             feedback_by_bus_motor_id=feedback_by_bus_motor_id,
                             feedback_by_motor_id=feedback_by_motor_id,
                             stale_seconds=args.stale_seconds,
@@ -661,6 +783,9 @@ def main():
                             joints=layer.active_joints,
                             motor_ids=motor_ids,
                             joint_can_bus=joint_can_bus,
+                            layer=layer,
+                            pose_references=pose_references,
+                            poses=poses,
                             feedback_by_bus_motor_id=feedback_by_bus_motor_id,
                             feedback_by_motor_id=feedback_by_motor_id,
                             stale_seconds=args.stale_seconds,
@@ -670,6 +795,9 @@ def main():
                             joints=layer.active_joints,
                             motor_ids=motor_ids,
                             joint_can_bus=joint_can_bus,
+                            layer=layer,
+                            pose_references=pose_references,
+                            poses=poses,
                             feedback_by_bus_motor_id=feedback_by_bus_motor_id,
                             feedback_by_motor_id=feedback_by_motor_id,
                             stale_seconds=args.stale_seconds,
@@ -693,6 +821,8 @@ def main():
                         motor_ids=motor_ids,
                         joint_can_bus=joint_can_bus,
                         layer=layer,
+                        pose_references=pose_references,
+                        poses=poses,
                         feedback_by_bus_motor_id=feedback_by_bus_motor_id,
                         feedback_by_motor_id=feedback_by_motor_id,
                         stale_seconds=args.stale_seconds,

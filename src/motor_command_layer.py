@@ -10,6 +10,7 @@ except ImportError as exc:
 
 
 ROOT = Path(__file__).resolve().parents[1]
+TWO_PI = 2.0 * np.pi
 
 
 def load_yaml(path):
@@ -27,6 +28,91 @@ def uint_to_float(x, x_min, x_max, bits):
     x = int(np.clip(x, 0, (1 << bits) - 1))
     span = x_max - x_min
     return float(x_min + span * x / ((1 << bits) - 1))
+
+
+def wrap_to_pi(angle):
+    """Wrap a revolute angle to [-pi, pi)."""
+    return float((float(angle) + np.pi) % TWO_PI - np.pi)
+
+
+def nearest_equivalent_angle(angle, reference=None, period=TWO_PI):
+    """
+    Return angle + k*period nearest to reference.
+
+    RobStride feedback can report a joint zero as either 0 or about 2*pi after
+    power cycling. The physical joint limits are inside one revolution, so the
+    controller works in the equivalent angle nearest the current/reference pose.
+    """
+    angle = float(angle)
+    if reference is None or not np.isfinite(reference):
+        return wrap_to_pi(angle)
+    return float(angle + period * round((float(reference) - angle) / period))
+
+
+def motor_position_to_joint_angle(position, offset=0.0, reference=None, references=None):
+    """Convert raw motor position feedback into deployed joint coordinates."""
+    q_raw = float(position) - float(offset)
+    candidate_references = []
+
+    if references is not None:
+        for value in references:
+            if value is not None and np.isfinite(value):
+                candidate_references.append(float(value))
+    if reference is not None and np.isfinite(reference):
+        candidate_references.insert(0, float(reference))
+
+    if not candidate_references:
+        return wrap_to_pi(q_raw)
+
+    candidates = [
+        nearest_equivalent_angle(q_raw, reference=ref)
+        for ref in candidate_references
+    ]
+    return float(min(
+        candidates,
+        key=lambda q: min(abs(q - ref) for ref in candidate_references),
+    ))
+
+
+def motor_command_position_near_feedback(
+    q_des,
+    offset=0.0,
+    feedback_position=None,
+    feedback_joint_position=None,
+    p_min=None,
+    p_max=None,
+):
+    """
+    Convert desired joint angle to a raw MIT position on the encoder's branch.
+
+    Example: if q_des is 0 but the motor currently reports +6.28 rad for the
+    same physical zero, send +6.28 rather than 0.0 so the motor does not try to
+    rotate one full revolution.
+    """
+    p_base = float(q_des) + float(offset)
+    if feedback_position is None or not np.isfinite(feedback_position):
+        return p_base
+
+    period = TWO_PI
+    if p_min is None:
+        p_min = -np.inf
+    if p_max is None:
+        p_max = np.inf
+    p_min = float(p_min)
+    p_max = float(p_max)
+
+    if feedback_joint_position is not None and np.isfinite(feedback_joint_position):
+        p_branch = float(feedback_position) + (float(q_des) - float(feedback_joint_position))
+        if p_min <= p_branch <= p_max:
+            return float(p_branch)
+
+    k_min = int(np.ceil((p_min - p_base) / period)) if np.isfinite(p_min) else -3
+    k_max = int(np.floor((p_max - p_base) / period)) if np.isfinite(p_max) else 3
+    if k_min > k_max:
+        return p_base
+
+    candidates = [p_base + k * period for k in range(k_min, k_max + 1)]
+    return float(min(candidates, key=lambda p: abs(p - float(feedback_position))))
 
 
 def signed_offset_to_uint(x, x_min, x_max):
@@ -261,7 +347,7 @@ class MotorCommandLayer:
             float(np.clip(tau_ff, lim["tau_ff_min"], lim["tau_ff_max"])),
         )
 
-    def build_mit_commands(self, q_target, phase="policy"):
+    def build_mit_commands(self, q_target, phase="policy", feedback_by_joint=None):
         q_target = np.asarray(q_target, dtype=np.float32)
         if q_target.shape[0] != len(self.policy_order):
             raise ValueError(
@@ -270,6 +356,7 @@ class MotorCommandLayer:
             )
 
         commands = []
+        feedback_by_joint = feedback_by_joint or {}
 
         if phase not in self.gains:
             raise ValueError(f"Unknown phase {phase}. Expected one of {list(self.gains.keys())}")
@@ -286,7 +373,18 @@ class MotorCommandLayer:
             tau_ff = float(self.feedforward["tau_ff"])
             q_requested = float(q_target[i])
             q_des = self.apply_hard_joint_limit(joint_name, q_requested)
-            p_des = q_des + offset
+            p_base = q_des + offset
+            feedback = feedback_by_joint.get(joint_name, {})
+            feedback_position = feedback.get("position") if isinstance(feedback, dict) else None
+            feedback_joint_position = feedback.get("joint_position") if isinstance(feedback, dict) else None
+            p_des = motor_command_position_near_feedback(
+                q_des=q_des,
+                offset=offset,
+                feedback_position=feedback_position,
+                feedback_joint_position=feedback_joint_position,
+                p_min=self.proto["p_min"],
+                p_max=self.proto["p_max"],
+            )
             p_des, v_des, kp, kd, tau_ff = self.apply_mit_parameter_limits(
                 p_des=p_des,
                 v_des=v_des,
@@ -294,11 +392,7 @@ class MotorCommandLayer:
                 kd=kd,
                 tau_ff=tau_ff,
             )
-            p_des, q_des_sent = self.apply_hard_joint_limit_to_motor_position(
-                joint_name,
-                p_des,
-                offset,
-            )
+            q_des_sent = q_des
 
             can_id = mit_can_id(motor_id, self.proto, tau_ff=tau_ff)
             data = pack_mit_command(
@@ -318,6 +412,8 @@ class MotorCommandLayer:
                 "q_requested": q_requested,
                 "offset": offset,
                 "p_des": p_des,
+                "p_base": p_base,
+                "p_wrap_adjustment": p_des - p_base,
                 "v_des": v_des,
                 "kp": kp,
                 "kd": kd,
