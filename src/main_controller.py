@@ -1140,7 +1140,12 @@ def run_policy_loop(
             elif control_mode not in ("hold", "sit"):
                 print("[ZERO CAL] ignored; zero calibration is only allowed from hold/sit.")
             else:
-                request_feedback_snapshot(motor_layer, buses, mode)
+                if count_fresh_active_feedback(
+                    estimator,
+                    motor_layer.active_joints,
+                    getattr(safety, "max_feedback_age_s", 0.25),
+                ) < len(motor_layer.active_joints):
+                    request_feedback_snapshot(motor_layer, buses, mode)
                 q_zeroed = apply_software_zero_calibration(
                     estimator=estimator,
                     motor_layer=motor_layer,
@@ -1693,6 +1698,12 @@ def main():
         ],
     )
     parser.add_argument(
+        "--zero-calibration-hat-any",
+        action=argparse.BooleanOptionalAction,
+        default=bool(joystick_defaults.get("dpad", {}).get("zero_calibration_hat_any", False)),
+        help="use any non-centered D-pad/hat direction as the software-zero trigger",
+    )
+    parser.add_argument(
         "--zero-calibration-axis",
         type=int,
         default=int(joystick_defaults.get("dpad", {}).get("zero_calibration_axis", 1)),
@@ -1984,6 +1995,7 @@ def main():
             button_zero_calibration=args.button_zero_calibration,
             zero_calibration_hat_index=args.zero_calibration_hat_index,
             zero_calibration_hat_direction=args.zero_calibration_hat_direction,
+            zero_calibration_hat_any=args.zero_calibration_hat_any,
             zero_calibration_axis=args.zero_calibration_axis,
             zero_calibration_axis_direction=args.zero_calibration_axis_direction,
             zero_calibration_axis_threshold=args.zero_calibration_axis_threshold,

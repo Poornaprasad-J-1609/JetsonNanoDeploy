@@ -193,6 +193,7 @@ class JoystickCommandSource:
         button_zero_calibration=-1,
         zero_calibration_hat_index=0,
         zero_calibration_hat_direction=None,
+        zero_calibration_hat_any=False,
         zero_calibration_axis=1,
         zero_calibration_axis_direction=1.0,
         zero_calibration_axis_threshold=0.8,
@@ -234,6 +235,7 @@ class JoystickCommandSource:
             int(zero_calibration_hat_direction[0]),
             int(zero_calibration_hat_direction[1]),
         )
+        self.zero_calibration_hat_any = bool(zero_calibration_hat_any)
         self.zero_calibration_axis = int(zero_calibration_axis)
         self.zero_calibration_axis_direction = (
             1.0 if float(zero_calibration_axis_direction) >= 0.0 else -1.0
@@ -314,10 +316,16 @@ class JoystickCommandSource:
         print(f"  speed down button: {self.button_speed_down}")
         print(f"  speed up   button: {self.button_speed_up}")
         print(f"  zero-cal   button: {self.button_zero_calibration}")
-        print(
-            "  zero-cal   dpad: "
-            f"hat {self.zero_calibration_hat_index} {self.zero_calibration_hat_direction}"
-        )
+        if self.zero_calibration_hat_any:
+            print(
+                "  zero-cal   dpad: "
+                f"hat {self.zero_calibration_hat_index} any non-center direction"
+            )
+        else:
+            print(
+                "  zero-cal   dpad: "
+                f"hat {self.zero_calibration_hat_index} {self.zero_calibration_hat_direction}"
+            )
         print(
             "  zero-cal   axis: "
             f"axis {self.zero_calibration_axis} "
@@ -354,7 +362,10 @@ class JoystickCommandSource:
     def _hat_active(self, hat_id, direction):
         if hat_id < 0 or hat_id >= self.joy.get_numhats():
             return False
-        return self.joy.get_hat(hat_id) == tuple(direction)
+        hat = self.joy.get_hat(hat_id)
+        if self.zero_calibration_hat_any:
+            return hat != (0, 0)
+        return hat == tuple(direction)
 
     def _zero_axis_active(self):
         axis_id = self.zero_calibration_axis
@@ -565,6 +576,10 @@ class CommandSource:
                     "zero_calibration_hat_direction",
                     defaults.get("dpad", {}).get("zero_calibration_hat_direction", [0, -1]),
                 ),
+                zero_calibration_hat_any=kwargs.get(
+                    "zero_calibration_hat_any",
+                    defaults.get("dpad", {}).get("zero_calibration_hat_any", False),
+                ),
                 zero_calibration_axis=kwargs.get(
                     "zero_calibration_axis",
                     defaults.get("dpad", {}).get("zero_calibration_axis", 1),
@@ -684,6 +699,12 @@ def main():
         ],
     )
     parser.add_argument(
+        "--zero-calibration-hat-any",
+        action=argparse.BooleanOptionalAction,
+        default=bool(defaults.get("dpad", {}).get("zero_calibration_hat_any", False)),
+        help="use any non-centered D-pad/hat direction as the software-zero trigger",
+    )
+    parser.add_argument(
         "--zero-calibration-axis",
         type=int,
         default=int(defaults.get("dpad", {}).get("zero_calibration_axis", 1)),
@@ -764,6 +785,7 @@ def main():
             button_zero_calibration=args.button_zero_calibration,
             zero_calibration_hat_index=args.zero_calibration_hat_index,
             zero_calibration_hat_direction=args.zero_calibration_hat_direction,
+            zero_calibration_hat_any=args.zero_calibration_hat_any,
             zero_calibration_axis=args.zero_calibration_axis,
             zero_calibration_axis_direction=args.zero_calibration_axis_direction,
             zero_calibration_axis_threshold=args.zero_calibration_axis_threshold,

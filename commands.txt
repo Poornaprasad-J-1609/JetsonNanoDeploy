@@ -227,6 +227,11 @@ move the joystick sticks. D-pad zero is optional.
   --start-control-mode hold \
   --startup-action hold \
   --initial-zero-frame crouch \
+  --auto-zero-on-startup \
+  --auto-stand-zero \
+  --zero-calibration-hat-index 0 \
+  --zero-calibration-hat-any \
+  --zero-calibration-axis -1 \
   --policy-steps 0 \
   --joystick-wait-seconds 10 \
   --walk-command-threshold 0.02 \
@@ -267,6 +272,11 @@ move the joystick sticks. D-pad zero is optional.
   --start-control-mode hold \
   --startup-action hold \
   --initial-zero-frame crouch \
+  --auto-zero-on-startup \
+  --auto-stand-zero \
+  --zero-calibration-hat-index 0 \
+  --zero-calibration-hat-any \
+  --zero-calibration-axis -1 \
   --policy-steps 0 \
   --joystick-wait-seconds 10 \
   --walk-command-threshold 0.02 \
