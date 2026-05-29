@@ -167,6 +167,11 @@ def load_motion_assist_config():
     return load_yaml(ROOT / "config" / "motion_assist.yaml")
 
 
+def load_policy_deployment_defaults():
+    cfg = load_yaml(ROOT / "config" / "control_limits.yaml")
+    return cfg.get("policy_deployment", {})
+
+
 def smoothstep(alpha):
     alpha = float(np.clip(alpha, 0.0, 1.0))
     return alpha * alpha * (3.0 - 2.0 * alpha)
@@ -204,6 +209,31 @@ def select_policy_base_lin_vel(source, estimator_base_lin_vel_b, command):
     if source == "imu":
         return np.asarray(estimator_base_lin_vel_b, dtype=np.float32)
     raise ValueError(f"Unknown base linear velocity source: {source}")
+
+
+def scaled_policy_command(command, gain=1.0, vx_abs_max=0.0, vy_abs_max=0.0, yaw_abs_max=0.0):
+    cmd = np.asarray(command, dtype=np.float32).copy()
+    cmd *= max(0.0, float(gain))
+
+    limits = (vx_abs_max, vy_abs_max, yaw_abs_max)
+    for i, limit in enumerate(limits):
+        limit = float(limit)
+        if limit > 0.0:
+            cmd[i] = float(np.clip(cmd[i], -limit, limit))
+    return cmd.astype(np.float32)
+
+
+def filtered_policy_action(raw_action, previous_action, clip_abs=0.0, smoothing=0.0):
+    action = np.asarray(raw_action, dtype=np.float32).copy()
+    clip_abs = float(clip_abs)
+    if clip_abs > 0.0:
+        action = np.clip(action, -clip_abs, clip_abs)
+
+    smoothing = float(np.clip(smoothing, 0.0, 0.98))
+    if smoothing > 0.0:
+        previous_action = np.asarray(previous_action, dtype=np.float32)
+        action = (1.0 - smoothing) * action + smoothing * previous_action
+    return action.astype(np.float32)
 
 
 def projected_gravity_to_roll_pitch(projected_gravity_b):
@@ -369,8 +399,19 @@ def estimator_imu_status(estimator):
     return "none"
 
 
-def compact_telemetry_record(step, mode, command, command_source, commands, estimator, action=None, phase="policy"):
+def compact_telemetry_record(
+    step,
+    mode,
+    command,
+    command_source,
+    commands,
+    estimator,
+    action=None,
+    phase="policy",
+    policy_command=None,
+):
     command = np.asarray(command, dtype=np.float32)
+    policy_command = command if policy_command is None else np.asarray(policy_command, dtype=np.float32)
     tau_cmd_mean, tau_cmd_max = command_torque_stats(commands)
     bus_counts = command_bus_counts(commands)
     tau_fb = feedback_torque_stats(estimator)
@@ -384,6 +425,10 @@ def compact_telemetry_record(step, mode, command, command_source, commands, esti
         "vy": float(command[1]),
         "vxy": float(np.linalg.norm(command[:2])),
         "yaw": float(command[2]),
+        "policy_vx": float(policy_command[0]),
+        "policy_vy": float(policy_command[1]),
+        "policy_vxy": float(np.linalg.norm(policy_command[:2])),
+        "policy_yaw": float(policy_command[2]),
         "speed": float(command_speed_scale(command_source)),
         "imu": estimator_imu_status(estimator),
         "act_max": action_abs_max,
@@ -417,6 +462,17 @@ def compact_telemetry_line(record):
         f"cmds={int(record['cmds']):02d} "
         f"bus={record.get('bus_counts', 'none')}"
     )
+    if (
+        abs(float(record.get("policy_vx", record["vx"])) - float(record["vx"])) > 1e-5
+        or abs(float(record.get("policy_vy", record["vy"])) - float(record["vy"])) > 1e-5
+        or abs(float(record.get("policy_yaw", record["yaw"])) - float(record["yaw"])) > 1e-5
+    ):
+        line += (
+            f" policy_cmd=["
+            f"{float(record['policy_vx']): .3f},"
+            f"{float(record['policy_vy']): .3f},"
+            f"{float(record['policy_yaw']): .3f}]"
+        )
 
     if record["tau_fb"] is None:
         line += " tau_fb=na tau_fb_max=na"
@@ -453,6 +509,10 @@ class CsvRunLogger:
         "vy",
         "vxy",
         "yaw",
+        "policy_vx",
+        "policy_vy",
+        "policy_vxy",
+        "policy_yaw",
         "speed",
         "imu",
         "act_max",
@@ -973,6 +1033,12 @@ def run_policy_loop(
     stand_zero_error_rad,
     stand_zero_settle_steps,
     pose_sync_error_rad,
+    policy_command_gain,
+    policy_command_vx_max,
+    policy_command_vy_max,
+    policy_command_yaw_max,
+    policy_action_clip,
+    policy_action_smoothing,
     telemetry=None,
     csv_logger=None,
 ):
@@ -1018,6 +1084,16 @@ def run_policy_loop(
         print("[ZERO CAL] MIT hold is active at q=0 for the crouch/default pose.")
     print("auto_stand_zero:", bool(auto_stand_zero))
     print("pose_sync_error_rad:", float(pose_sync_error_rad))
+    print("policy_command_gain:", float(policy_command_gain))
+    print(
+        "policy_command_caps:",
+        f"vx={float(policy_command_vx_max):.3f}",
+        f"vy={float(policy_command_vy_max):.3f}",
+        f"yaw={float(policy_command_yaw_max):.3f}",
+        "(0 disables each cap)",
+    )
+    print("policy_action_clip:", float(policy_action_clip), "(0 disables)")
+    print("policy_action_smoothing:", float(policy_action_smoothing), "(0 disables)")
     if stand_zero_pending:
         print("[ZERO CAL] initial stand target will auto-zero when settled.")
     print("imu_stabilization:", bool(motion_assist_cfg.get("imu_posture", {}).get("enabled", False)))
@@ -1260,10 +1336,17 @@ def run_policy_loop(
         command = command_source.read()
         if step < calibration_hold_until_step:
             command = np.zeros(3, dtype=np.float32)
+        policy_command = scaled_policy_command(
+            command=command,
+            gain=policy_command_gain,
+            vx_abs_max=policy_command_vx_max,
+            vy_abs_max=policy_command_vy_max,
+            yaw_abs_max=policy_command_yaw_max,
+        )
         policy_base_lin_vel_b = select_policy_base_lin_vel(
             base_lin_vel_source,
             base_lin_vel_b,
-            command,
+            policy_command,
         )
         walk_requested = joystick_walk_requested(command, walk_command_threshold)
         if zero_frame != "stand" and walk_requested:
@@ -1302,7 +1385,7 @@ def run_policy_loop(
                 q_policy_target = runner.q_stand.copy()
             q_policy_target = apply_motion_assists(
                 q_target=q_policy_target,
-                command=command,
+                command=policy_command,
                 elapsed_time=step * dt,
                 projected_gravity_b=projected_gravity_b,
                 runner=runner,
@@ -1335,17 +1418,23 @@ def run_policy_loop(
                 base_lin_vel_b=policy_base_lin_vel_b,
                 base_ang_vel_b=base_ang_vel_b,
                 projected_gravity_b=projected_gravity_b,
-                command=command,
+                command=policy_command,
                 q_current=q_current,
                 qd_current=qd_current,
                 previous_action=previous_action,
             )
 
-            action = runner.infer_action(obs)
+            raw_action = runner.infer_action(obs)
+            action = filtered_policy_action(
+                raw_action=raw_action,
+                previous_action=previous_action,
+                clip_abs=policy_action_clip,
+                smoothing=policy_action_smoothing,
+            )
             q_policy_target = runner.action_to_q_target(action)
             q_policy_target = apply_motion_assists(
                 q_target=q_policy_target,
-                command=command,
+                command=policy_command,
                 elapsed_time=step * dt,
                 projected_gravity_b=projected_gravity_b,
                 runner=runner,
@@ -1466,6 +1555,7 @@ def run_policy_loop(
                 commands=commands,
                 estimator=estimator,
                 action=action,
+                policy_command=policy_command,
                 phase="policy",
             )
             print(compact_telemetry_line(telemetry_record))
@@ -1511,6 +1601,7 @@ def main():
     speed_defaults = load_speed_scale_defaults()
     imu_defaults = load_imu_config()
     motion_assist_defaults = load_motion_assist_config()
+    policy_deploy_defaults = load_policy_deployment_defaults()
 
     parser = argparse.ArgumentParser()
 
@@ -1739,6 +1830,42 @@ def main():
         default=None,
         help="enable/disable walking-style sinusoidal leg overlay for suspended tests",
     )
+    parser.add_argument(
+        "--policy-command-gain",
+        type=float,
+        default=float(policy_deploy_defaults.get("command_gain", 1.0)),
+        help="multiply joystick vx/vy/yaw only for the policy observation; motor speed scale stays unchanged",
+    )
+    parser.add_argument(
+        "--policy-command-vx-max",
+        type=float,
+        default=float(policy_deploy_defaults.get("command_vx_abs_max", 0.0)),
+        help="absolute cap for policy-observed vx after gain; 0 disables this extra cap",
+    )
+    parser.add_argument(
+        "--policy-command-vy-max",
+        type=float,
+        default=float(policy_deploy_defaults.get("command_vy_abs_max", 0.0)),
+        help="absolute cap for policy-observed vy after gain; 0 disables this extra cap",
+    )
+    parser.add_argument(
+        "--policy-command-yaw-max",
+        type=float,
+        default=float(policy_deploy_defaults.get("command_yaw_abs_max", 0.0)),
+        help="absolute cap for policy-observed yaw after gain; 0 disables this extra cap",
+    )
+    parser.add_argument(
+        "--policy-action-clip",
+        type=float,
+        default=float(policy_deploy_defaults.get("action_clip_abs", 0.0)),
+        help="absolute clip on raw policy actions before action_scale; 0 matches IsaacSim no-clip behavior",
+    )
+    parser.add_argument(
+        "--policy-action-smoothing",
+        type=float,
+        default=float(policy_deploy_defaults.get("action_smoothing", 0.0)),
+        help="blend current policy action with previous sent action; 0 disables, larger is smoother/slower",
+    )
 
     parser.add_argument(
         "--fake-start",
@@ -1777,6 +1904,12 @@ def main():
     args.log_every = max(1, args.log_every)
     args.policy_steps = None if args.policy_steps <= 0 else args.policy_steps
     args.walk_command_threshold = max(0.0, args.walk_command_threshold)
+    args.policy_command_gain = max(0.0, float(args.policy_command_gain))
+    args.policy_command_vx_max = max(0.0, float(args.policy_command_vx_max))
+    args.policy_command_vy_max = max(0.0, float(args.policy_command_vy_max))
+    args.policy_command_yaw_max = max(0.0, float(args.policy_command_yaw_max))
+    args.policy_action_clip = max(0.0, float(args.policy_action_clip))
+    args.policy_action_smoothing = float(np.clip(args.policy_action_smoothing, 0.0, 0.98))
 
     port_front = args.port_front if args.port_front is not None else args.port
     port_back  = args.port_back  if args.port_back  is not None else args.port
@@ -1879,6 +2012,15 @@ def main():
     print("Command source:", args.command_source)
     print("Initial command:", command_source.read())
     print("Initial speed scale:", f"{command_speed_scale(command_source):.2f}")
+    print("Policy command gain:", f"{args.policy_command_gain:.2f}")
+    print(
+        "Policy command caps:",
+        f"vx={args.policy_command_vx_max:.3f}",
+        f"vy={args.policy_command_vy_max:.3f}",
+        f"yaw={args.policy_command_yaw_max:.3f}",
+    )
+    print("Policy action clip:", f"{args.policy_action_clip:.3f}")
+    print("Policy action smoothing:", f"{args.policy_action_smoothing:.2f}")
     print("Start control mode:", args.start_control_mode)
     print("Startup action:", args.startup_action)
     print("Policy:", runner.policy_path)
@@ -2104,6 +2246,12 @@ def main():
             stand_zero_error_rad=args.stand_zero_error_rad,
             stand_zero_settle_steps=max(1, args.stand_zero_settle_steps),
             pose_sync_error_rad=max(0.0, args.pose_sync_error_rad),
+            policy_command_gain=args.policy_command_gain,
+            policy_command_vx_max=args.policy_command_vx_max,
+            policy_command_vy_max=args.policy_command_vy_max,
+            policy_command_yaw_max=args.policy_command_yaw_max,
+            policy_action_clip=args.policy_action_clip,
+            policy_action_smoothing=args.policy_action_smoothing,
             telemetry=telemetry,
             csv_logger=csv_logger,
         )

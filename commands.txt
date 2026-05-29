@@ -232,8 +232,14 @@ move the joystick sticks. D-pad zero is optional.
   --walk-command-threshold 0.02 \
   --speed-scale-initial 0.05 \
   --speed-scale-min 0.05 \
-  --speed-scale-max 0.40 \
+  --speed-scale-max 0.15 \
   --speed-scale-step 0.05 \
+  --policy-command-gain 2.5 \
+  --policy-command-vx-max 0.35 \
+  --policy-command-vy-max 0.20 \
+  --policy-command-yaw-max 0.20 \
+  --policy-action-clip 2.0 \
+  --policy-action-smoothing 0.25 \
   --feedback-timeout 0.03 \
   --pose-sync-error-rad 0.12 \
   --log-every 5 \
@@ -266,8 +272,14 @@ move the joystick sticks. D-pad zero is optional.
   --walk-command-threshold 0.02 \
   --speed-scale-initial 0.05 \
   --speed-scale-min 0.05 \
-  --speed-scale-max 0.40 \
+  --speed-scale-max 0.15 \
   --speed-scale-step 0.05 \
+  --policy-command-gain 2.5 \
+  --policy-command-vx-max 0.35 \
+  --policy-command-vy-max 0.20 \
+  --policy-command-yaw-max 0.20 \
+  --policy-action-clip 2.0 \
+  --policy-action-smoothing 0.25 \
   --feedback-timeout 0.03 \
   --pose-sync-error-rad 0.12 \
   --log-every 5 \

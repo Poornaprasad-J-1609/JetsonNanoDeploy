@@ -24,6 +24,22 @@ joystick_speed_scale:
   max: 0.40
   step: 0.05
 
+policy_deployment:
+  # These affect only the policy inference path. The joystick speed_scale still
+  # limits the real commanded velocity, and config/joint_limits.yaml is still
+  # the final hard wall before MIT packets are sent.
+  command_gain: 1.0
+  # Absolute caps after command_gain. Use 0.0 to disable a cap and match the
+  # IsaacSim play script more directly.
+  command_vx_abs_max: 0.0
+  command_vy_abs_max: 0.0
+  command_yaw_abs_max: 0.0
+  # 0.0 matches IsaacSim RSL-RL default no action clipping. For suspended tests,
+  # pass --policy-action-clip on the command line if you want a softer preview.
+  action_clip_abs: 0.0
+  # 0.0 matches IsaacSim. For first hanging tests, 0.20-0.35 makes motion slower.
+  action_smoothing: 0.0
+
 joint_position:
   enabled: true
 
