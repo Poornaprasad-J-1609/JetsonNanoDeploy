@@ -878,11 +878,15 @@ def run_startup_to_stand(
             max(0.002, 0.35 * float(dt)),
         )
         refresh_estimator_feedback(estimator, timeout=active_feedback_timeout)
+        require_command_feedback = bool(
+            commands and encoder_feedback_required(mode, estimator)
+        )
         reason = encoder_safety_stop_reason(
             safety=safety,
             estimator=estimator,
             active_joints=motor_layer.active_joints,
             mode=mode,
+            require_feedback=require_command_feedback,
         )
         if reason is not None:
             print("\nEMERGENCY STOP:", reason)
@@ -1361,11 +1365,15 @@ def run_policy_loop(
             max(0.002, 0.35 * float(dt)),
         )
         refresh_estimator_feedback(estimator, timeout=active_feedback_timeout)
+        require_command_feedback = bool(
+            commands and encoder_feedback_required(mode, estimator)
+        )
         reason = encoder_safety_stop_reason(
             safety=safety,
             estimator=estimator,
             active_joints=motor_layer.active_joints,
             mode=mode,
+            require_feedback=require_command_feedback,
         )
         if reason is not None:
             print("\nEMERGENCY STOP:", reason)
