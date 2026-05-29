@@ -65,9 +65,9 @@ dpad:
   # Default is D-pad down on Logitech-style controllers.
   zero_calibration_hat_index: 0
   zero_calibration_hat_direction: [0, -1]
-  # When true, any D-pad direction sets software zero. This is more robust on
-  # gamepads that report the physical D-pad differently between X/D modes.
-  zero_calibration_hat_any: true
+  # Keep this false for stable hold behavior: only the configured D-pad
+  # direction below is allowed to set software zero.
+  zero_calibration_hat_any: false
 
   # Keep this disabled during walking: axis 1 is also the forward/back stick on
   # the F710, so using it as zero-calibration can accidentally recalibrate while

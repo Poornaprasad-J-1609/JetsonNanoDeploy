@@ -1140,12 +1140,7 @@ def run_policy_loop(
             elif control_mode not in ("hold", "sit"):
                 print("[ZERO CAL] ignored; zero calibration is only allowed from hold/sit.")
             else:
-                if count_fresh_active_feedback(
-                    estimator,
-                    motor_layer.active_joints,
-                    getattr(safety, "max_feedback_age_s", 0.25),
-                ) < len(motor_layer.active_joints):
-                    request_feedback_snapshot(motor_layer, buses, mode)
+                request_feedback_snapshot(motor_layer, buses, mode)
                 q_zeroed = apply_software_zero_calibration(
                     estimator=estimator,
                     motor_layer=motor_layer,

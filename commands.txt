@@ -230,7 +230,7 @@ move the joystick sticks. D-pad zero is optional.
   --auto-zero-on-startup \
   --auto-stand-zero \
   --zero-calibration-hat-index 0 \
-  --zero-calibration-hat-any \
+  --zero-calibration-hat-direction 0 -1 \
   --zero-calibration-axis -1 \
   --policy-steps 0 \
   --joystick-wait-seconds 10 \
@@ -275,7 +275,7 @@ move the joystick sticks. D-pad zero is optional.
   --auto-zero-on-startup \
   --auto-stand-zero \
   --zero-calibration-hat-index 0 \
-  --zero-calibration-hat-any \
+  --zero-calibration-hat-direction 0 -1 \
   --zero-calibration-axis -1 \
   --policy-steps 0 \
   --joystick-wait-seconds 10 \
