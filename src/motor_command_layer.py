@@ -322,16 +322,28 @@ class MotorCommandLayer:
         if active_joints is None:
             active_joints = self.active_joints
 
-        updated = {}
+        # First pass: validate that every active joint has fresh feedback
+        # BEFORE mutating any offset. A partial calibration leaves some motors
+        # referenced to a stale raw position, so they fail to hold while the
+        # rest do. Make the whole operation all-or-nothing.
+        new_offsets = {}
         missing = []
-        old_offsets = dict(self.joint_offsets)
         for joint_name in active_joints:
             feedback = feedback_by_joint.get(joint_name)
             if feedback is None or "position" not in feedback:
                 missing.append(joint_name)
                 continue
-            self.joint_offsets[joint_name] = float(feedback["position"])
-            updated[joint_name] = self.joint_offsets[joint_name]
+            new_offsets[joint_name] = float(feedback["position"])
+
+        if missing:
+            # Do not touch self.joint_offsets at all.
+            return {}, missing
+
+        updated = {}
+        old_offsets = dict(self.joint_offsets)
+        for joint_name, position in new_offsets.items():
+            self.joint_offsets[joint_name] = position
+            updated[joint_name] = position
         try:
             self.reload_joint_limits(force=True)
         except Exception:

@@ -807,8 +807,7 @@ def apply_software_zero_calibration(
     if missing:
         print(
             f"\n[ZERO CAL] {label}: missing feedback for "
-            + ", ".join(missing[:6])
-            + (" ..." if len(missing) > 6 else "")
+            + ", ".join(missing)
         )
         return False
 
@@ -1140,12 +1139,30 @@ def run_policy_loop(
             elif control_mode not in ("hold", "sit"):
                 print("[ZERO CAL] ignored; zero calibration is only allowed from hold/sit.")
             else:
-                if count_fresh_active_feedback(
-                    estimator,
-                    motor_layer.active_joints,
-                    getattr(safety, "max_feedback_age_s", 0.25),
-                ) < len(motor_layer.active_joints):
+                # Collect a COMPLETE feedback snapshot before zeroing. The dpad
+                # press is a single instant; with a tight --feedback-timeout the
+                # last motors on each CAN bus often have not returned a frame
+                # yet. Poll/refresh repeatedly until every active joint is fresh
+                # (or a short budget elapses) so the software zero is applied to
+                # all 12 motors, not just the ones that happened to be ready.
+                max_age_s = getattr(safety, "max_feedback_age_s", 0.25)
+                n_active = len(motor_layer.active_joints)
+                deadline = time.monotonic() + 0.5  # max 500 ms to gather all
+                fresh = count_fresh_active_feedback(
+                    estimator, motor_layer.active_joints, max_age_s
+                )
+                while fresh < n_active and time.monotonic() < deadline:
                     request_feedback_snapshot(motor_layer, buses, mode)
+                    refresh_estimator_feedback(estimator, timeout=feedback_timeout)
+                    fresh = count_fresh_active_feedback(
+                        estimator, motor_layer.active_joints, max_age_s
+                    )
+                if fresh < n_active:
+                    print(
+                        f"[ZERO CAL] aborted: only {fresh}/{n_active} joints "
+                        "returned fresh feedback. Check CAN wiring/IDs on the "
+                        "missing motors or raise --feedback-timeout."
+                    )
                 q_zeroed = apply_software_zero_calibration(
                     estimator=estimator,
                     motor_layer=motor_layer,
