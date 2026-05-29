@@ -226,6 +226,7 @@ class MitFeedbackStateEstimator(FakeStateEstimator):
             torque_raw = float(feedback["torque"])
             self.qd_current[index] = direction * velocity_raw
             feedback = dict(feedback)
+            feedback["timestamp"] = float(getattr(frame, "timestamp", time.monotonic()))
             feedback["position_raw"] = float(feedback["position"])
             feedback["velocity_raw"] = velocity_raw
             feedback["torque_raw"] = torque_raw

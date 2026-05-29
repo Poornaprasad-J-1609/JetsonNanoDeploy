@@ -962,7 +962,9 @@ def run_policy_loop(
     has_motion_target = control_mode in ("stand", "sit")
     zero_frame = str(initial_zero_frame).lower()
     zero_calibrated = zero_frame == "stand" or bool(initial_zero_calibrated)
-    stand_zero_pending = False
+    stand_zero_pending = bool(
+        auto_stand_zero and control_mode == "stand" and zero_frame == "crouch"
+    )
     stand_zero_settle_count = 0
     calibration_hold_until_step = -1
     active_indices = active_joint_indices(runner.policy_order, motor_layer.active_joints)
@@ -989,6 +991,8 @@ def run_policy_loop(
     print("zero_calibrated:", bool(zero_calibrated))
     print("auto_stand_zero:", bool(auto_stand_zero))
     print("pose_sync_error_rad:", float(pose_sync_error_rad))
+    if stand_zero_pending:
+        print("[ZERO CAL] initial stand target will auto-zero when settled.")
     print("imu_stabilization:", bool(motion_assist_cfg.get("imu_posture", {}).get("enabled", False)))
     print("gait_assist:", bool(motion_assist_cfg.get("gait_assist", {}).get("enabled", False)))
     if steps is None:

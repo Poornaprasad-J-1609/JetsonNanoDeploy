@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import time
 import numpy as np
 
 try:
@@ -35,6 +36,7 @@ class SafetyMonitor:
         self.encoder_sanity_enabled = True
         self.require_feedback_for_motion = True
         self.max_abs_encoder_position_rad = 3.5
+        self.max_feedback_age_s = 0.25
         self.encoder_joint_limit_margin_rad = 0.75
         self.encoder_report_max_joints = 4
         self.projected_gravity_gz_min = -0.75
@@ -116,6 +118,9 @@ class SafetyMonitor:
         self.max_abs_encoder_position_rad = float(
             encoder.get("max_abs_position_rad", 3.5)
         )
+        self.max_feedback_age_s = float(
+            encoder.get("max_feedback_age_s", 0.25)
+        )
         self.encoder_joint_limit_margin_rad = float(
             encoder.get("joint_limit_margin_rad", 0.75)
         )
@@ -123,6 +128,8 @@ class SafetyMonitor:
 
         if self.max_abs_encoder_position_rad <= 0.0:
             raise ValueError("encoder.max_abs_position_rad must be > 0")
+        if self.max_feedback_age_s <= 0.0:
+            raise ValueError("encoder.max_feedback_age_s must be > 0")
         if self.encoder_joint_limit_margin_rad < 0.0:
             raise ValueError("encoder.joint_limit_margin_rad must be >= 0")
         if self.encoder_report_max_joints < 1:
@@ -218,6 +225,28 @@ class SafetyMonitor:
                 return (
                     True,
                     "ABNORMAL ENCODER ANGLE: missing MIT encoder feedback before motion "
+                    f"for active joint(s): {shown}",
+                )
+
+            now = time.monotonic()
+            stale = []
+            for name, _ in active_indices:
+                feedback = (feedback_by_joint or {}).get(name, {})
+                timestamp = feedback.get("timestamp") if isinstance(feedback, dict) else None
+                try:
+                    age = now - float(timestamp)
+                except (TypeError, ValueError):
+                    stale.append(f"{name}=no timestamp")
+                    continue
+                if not np.isfinite(age) or age > self.max_feedback_age_s:
+                    stale.append(f"{name} age={age:.3f}s")
+            if stale:
+                shown = ", ".join(stale[:self.encoder_report_max_joints])
+                if len(stale) > self.encoder_report_max_joints:
+                    shown += f", +{len(stale) - self.encoder_report_max_joints} more"
+                return (
+                    True,
+                    "ABNORMAL ENCODER ANGLE: stale MIT encoder feedback before motion "
                     f"for active joint(s): {shown}",
                 )
 

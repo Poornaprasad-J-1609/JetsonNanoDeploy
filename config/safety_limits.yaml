@@ -17,6 +17,10 @@ encoder:
   # This is ignored for fake-feedback dry runs.
   require_feedback_for_motion: true
 
+  # Once motion is active, each active motor must keep replying. This prevents
+  # stale encoder data from being reused if a CAN cable, adapter, or motor drops.
+  max_feedback_age_s: 0.25
+
   # Absolute sanity limit for measured joint angle after software zero offset
   # and direction correction. No 2*pi filtering is applied; if a motor reports
   # a shifted raw angle, press the joystick D-pad software-zero calibration
