@@ -160,6 +160,7 @@ def main():
                 "stand": runner.q_stand,
                 "crouch": runner.q_crouch,
             },
+            pose_snap_tolerance=0.35,
         )
 
         print("Polling feedback...")

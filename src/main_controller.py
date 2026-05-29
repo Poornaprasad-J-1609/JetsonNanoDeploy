@@ -1565,6 +1565,7 @@ def main():
                     "stand": runner.q_stand,
                     "crouch": runner.q_crouch,
                 },
+                pose_snap_tolerance=0.35,
             )
             print("Polling initial motor encoder feedback...")
             motor_layer.send_raw_commands(buses, motor_layer.build_feedback_poll_commands())

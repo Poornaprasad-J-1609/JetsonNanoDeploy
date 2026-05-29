@@ -26,6 +26,7 @@ from robstride_can_interface import ATUsbCan
 
 ROOT = Path(__file__).resolve().parents[1]
 TELEMETRY_PORT_DEFAULT = 57543
+POSE_SNAP_TOLERANCE_RAD = 0.35
 
 
 class KeyboardReader:
@@ -130,6 +131,7 @@ def feedback_joint_position(joint_name, layer, feedback, reference=None, pose_re
         feedback["position"],
         offset=offset,
         references=references,
+        pose_snap_tolerance=POSE_SNAP_TOLERANCE_RAD if pose_references is not None else 0.0,
     )
 
 

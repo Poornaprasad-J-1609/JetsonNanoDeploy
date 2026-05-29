@@ -49,7 +49,13 @@ def nearest_equivalent_angle(angle, reference=None, period=TWO_PI):
     return float(angle + period * round((float(reference) - angle) / period))
 
 
-def motor_position_to_joint_angle(position, offset=0.0, reference=None, references=None):
+def motor_position_to_joint_angle(
+    position,
+    offset=0.0,
+    reference=None,
+    references=None,
+    pose_snap_tolerance=0.0,
+):
     """Convert raw motor position feedback into deployed joint coordinates."""
     q_raw = float(position) - float(offset)
     candidate_references = []
@@ -68,10 +74,16 @@ def motor_position_to_joint_angle(position, offset=0.0, reference=None, referenc
         nearest_equivalent_angle(q_raw, reference=ref)
         for ref in candidate_references
     ]
-    return float(min(
+    q_best = float(min(
         candidates,
         key=lambda q: min(abs(q - ref) for ref in candidate_references),
     ))
+    snap_tolerance = max(0.0, float(pose_snap_tolerance))
+    if snap_tolerance > 0.0:
+        nearest_ref = min(candidate_references, key=lambda ref: abs(q_best - ref))
+        if abs(q_best - nearest_ref) <= snap_tolerance:
+            return float(nearest_ref)
+    return q_best
 
 
 def motor_command_position_near_feedback(
