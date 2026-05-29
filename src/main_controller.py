@@ -1613,6 +1613,12 @@ def main():
         help="absolute axis threshold for software-zero trigger",
     )
     parser.add_argument(
+        "--zero-calibration-cooldown-s",
+        type=float,
+        default=float(joystick_defaults.get("dpad", {}).get("zero_calibration_cooldown_s", 1.0)),
+        help="minimum seconds between repeated D-pad/axis software-zero requests",
+    )
+    parser.add_argument(
         "--button-emergency-stop",
         type=int,
         nargs="+",
@@ -1841,6 +1847,7 @@ def main():
             zero_calibration_axis=args.zero_calibration_axis,
             zero_calibration_axis_direction=args.zero_calibration_axis_direction,
             zero_calibration_axis_threshold=args.zero_calibration_axis_threshold,
+            zero_calibration_cooldown_s=args.zero_calibration_cooldown_s,
             emergency_stop_buttons=args.button_emergency_stop,
             speed_scale_initial=args.speed_scale_initial,
             speed_scale_min=args.speed_scale_min,

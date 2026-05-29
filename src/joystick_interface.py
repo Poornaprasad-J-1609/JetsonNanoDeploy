@@ -196,6 +196,7 @@ class JoystickCommandSource:
         zero_calibration_axis=1,
         zero_calibration_axis_direction=1.0,
         zero_calibration_axis_threshold=0.8,
+        zero_calibration_cooldown_s=1.0,
         emergency_stop_buttons=None,
         speed_scale_initial=0.5,
         speed_scale_min=0.2,
@@ -240,6 +241,8 @@ class JoystickCommandSource:
         self.zero_calibration_axis_threshold = float(
             np.clip(abs(float(zero_calibration_axis_threshold)), 0.0, 1.0)
         )
+        self.zero_calibration_cooldown_s = float(max(0.1, zero_calibration_cooldown_s))
+        self.last_zero_calibration_time = -1.0e9
         if emergency_stop_buttons is None:
             emergency_stop_buttons = [0, 1, 2, 3]
         self.emergency_stop_buttons = [int(button_id) for button_id in emergency_stop_buttons]
@@ -347,6 +350,11 @@ class JoystickCommandSource:
         prev = self.prev_hats.get(hat_id, (0, 0))
         self.prev_hats[hat_id] = now
         return now == tuple(direction) and prev != tuple(direction)
+
+    def _hat_active(self, hat_id, direction):
+        if hat_id < 0 or hat_id >= self.joy.get_numhats():
+            return False
+        return self.joy.get_hat(hat_id) == tuple(direction)
 
     def _zero_axis_active(self):
         axis_id = self.zero_calibration_axis
@@ -459,15 +467,30 @@ class JoystickCommandSource:
         self.pygame.event.pump()
 
         if self._button_rising_edge(self.button_zero_calibration):
+            self.last_zero_calibration_time = time.monotonic()
+            print("[JOYSTICK] zero calibration requested by button")
             return "zero_current_pose"
 
-        if self._hat_rising_edge(
-            self.zero_calibration_hat_index,
-            self.zero_calibration_hat_direction,
+        now = time.monotonic()
+        cooldown_ok = (
+            now - self.last_zero_calibration_time
+            >= self.zero_calibration_cooldown_s
+        )
+
+        if (
+            cooldown_ok
+            and self._hat_active(
+                self.zero_calibration_hat_index,
+                self.zero_calibration_hat_direction,
+            )
         ):
+            self.last_zero_calibration_time = now
+            print("[JOYSTICK] zero calibration requested by D-pad")
             return "zero_current_pose"
 
-        if self._zero_axis_rising_edge():
+        if cooldown_ok and self._zero_axis_active():
+            self.last_zero_calibration_time = now
+            print("[JOYSTICK] zero calibration requested by axis")
             return "zero_current_pose"
 
         return None
@@ -553,6 +576,10 @@ class CommandSource:
                 zero_calibration_axis_threshold=kwargs.get(
                     "zero_calibration_axis_threshold",
                     defaults.get("dpad", {}).get("zero_calibration_axis_threshold", 0.8),
+                ),
+                zero_calibration_cooldown_s=kwargs.get(
+                    "zero_calibration_cooldown_s",
+                    defaults.get("dpad", {}).get("zero_calibration_cooldown_s", 1.0),
                 ),
                 emergency_stop_buttons=kwargs.get(
                     "emergency_stop_buttons",

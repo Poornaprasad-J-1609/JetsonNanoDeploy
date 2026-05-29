@@ -34,9 +34,8 @@ filter:
   deadzone: 0.08
   expo: 0.35
   smoothing: 0.20
-  # If the Logitech MODE button puts the left stick/D-pad into hat mode,
-  # use hat up/down for vx and hat left/right for vy.
-  use_hat_fallback: true
+  # Keep D-pad reserved for software zero calibration. Movement uses sticks.
+  use_hat_fallback: false
 
 connection:
   # Wait briefly for wireless receivers/controllers to enumerate.
@@ -73,3 +72,4 @@ dpad:
   zero_calibration_axis: -1
   zero_calibration_axis_direction: 1.0
   zero_calibration_axis_threshold: 0.8
+  zero_calibration_cooldown_s: 1.0
