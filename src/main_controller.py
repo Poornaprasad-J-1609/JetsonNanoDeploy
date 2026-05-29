@@ -609,16 +609,19 @@ def encoder_feedback_required(mode, estimator):
     return mode == "mit-signal" and hasattr(estimator, "last_feedback_by_joint")
 
 
-def encoder_safety_stop_reason(safety, estimator, active_joints, mode):
+def encoder_safety_stop_reason(safety, estimator, active_joints, mode, require_feedback=None):
     q_current = getattr(estimator, "q_current", None)
     if q_current is None:
         return "ABNORMAL ENCODER ANGLE: estimator has no joint position vector"
+
+    if require_feedback is None:
+        require_feedback = encoder_feedback_required(mode, estimator)
 
     stop, reason = safety.encoder_sanity_check(
         q_current=q_current,
         active_joints=active_joints,
         feedback_by_joint=getattr(estimator, "last_feedback_by_joint", None),
-        require_feedback=encoder_feedback_required(mode, estimator),
+        require_feedback=require_feedback,
     )
     return reason if stop else None
 
@@ -937,6 +940,7 @@ def run_policy_loop(
     base_lin_vel_source,
     motion_assist_cfg,
     initial_zero_frame,
+    initial_zero_calibrated,
     auto_stand_zero,
     stand_zero_error_rad,
     stand_zero_settle_steps,
@@ -950,7 +954,7 @@ def run_policy_loop(
     control_mode = start_control_mode  # options: hold, policy, stand, sit
     has_motion_target = control_mode in ("stand", "sit")
     zero_frame = str(initial_zero_frame).lower()
-    zero_calibrated = zero_frame == "stand"
+    zero_calibrated = zero_frame == "stand" or bool(initial_zero_calibrated)
     stand_zero_pending = False
     stand_zero_settle_count = 0
     calibration_hold_until_step = -1
@@ -975,6 +979,7 @@ def run_policy_loop(
     print("walk_command_threshold:", walk_command_threshold)
     print("base_lin_vel_source:", base_lin_vel_source)
     print("zero_frame:", zero_frame)
+    print("zero_calibrated:", bool(zero_calibrated))
     print("auto_stand_zero:", bool(auto_stand_zero))
     print("imu_stabilization:", bool(motion_assist_cfg.get("imu_posture", {}).get("enabled", False)))
     print("gait_assist:", bool(motion_assist_cfg.get("gait_assist", {}).get("enabled", False)))
@@ -1046,6 +1051,10 @@ def run_policy_loop(
             estimator=estimator,
             active_joints=motor_layer.active_joints,
             mode=mode,
+            require_feedback=bool(
+                (has_motion_target or control_mode != "hold")
+                and encoder_feedback_required(mode, estimator)
+            ),
         )
         if reason is not None:
             print("\nEMERGENCY STOP:", reason)
@@ -1108,8 +1117,28 @@ def run_policy_loop(
         mode_request = command_source.get_mode_request()
         if mode_request is not None:
             if mode_request in ("stand", "sit") and zero_frame == "crouch" and not zero_calibrated:
-                print("\n[ZERO CAL] ignored pose command: press D-pad down first to zero the crouch/default pose.")
-                mode_request = None
+                print("\n[ZERO CAL] first pose command is auto-zeroing current crouch/default pose.")
+                q_zeroed = apply_software_zero_calibration(
+                    estimator=estimator,
+                    motor_layer=motor_layer,
+                    active_joints=motor_layer.active_joints,
+                    feedback_timeout=feedback_timeout,
+                    buses=buses,
+                    mode=mode,
+                    label="crouch/default pose",
+                )
+                if q_zeroed is False:
+                    print(
+                        "[ZERO CAL] pose command blocked because valid feedback was not "
+                        "available for all active joints."
+                    )
+                    mode_request = None
+                else:
+                    q_previous_target = q_zeroed.copy()
+                    q_current = q_zeroed.copy()
+                    qd_current = np.zeros_like(q_current, dtype=np.float32)
+                    zero_calibrated = True
+                    calibration_hold_until_step = step + 5
             if mode_request is None:
                 pass
             elif mode_request in ("stand", "sit"):
@@ -1555,6 +1584,12 @@ def main():
         default=True,
         help="after standing from crouch-zero frame, make current stand pose software zero",
     )
+    parser.add_argument(
+        "--auto-zero-on-startup",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="when starting in crouch frame, software-zero current encoder pose automatically before joystick commands",
+    )
     parser.add_argument("--stand-zero-error-rad", type=float, default=0.08)
     parser.add_argument("--stand-zero-settle-steps", type=int, default=15)
     parser.add_argument(
@@ -1779,6 +1814,7 @@ def main():
     telemetry = None
     gui_proc = None
     csv_logger = None
+    startup_zero_calibrated = False
 
     try:
         csv_logger = CsvRunLogger(
@@ -1858,6 +1894,26 @@ def main():
         else:
             estimator = FakeStateEstimator(q_initial=q_fake_start, imu_sensor=imu_sensor)
 
+        if args.auto_zero_on_startup and str(args.initial_zero_frame).lower() == "crouch":
+            print("\n[ZERO CAL] startup auto-zero enabled for current crouch/default pose.")
+            q_auto_zero = apply_software_zero_calibration(
+                estimator=estimator,
+                motor_layer=motor_layer,
+                active_joints=motor_layer.active_joints,
+                feedback_timeout=args.feedback_timeout,
+                buses=buses,
+                mode=args.mode,
+                label="startup crouch/default pose",
+            )
+            if q_auto_zero is not False:
+                startup_zero_calibrated = True
+                print("[ZERO CAL] startup crouch/default pose is now q=0. D-pad zero is optional.")
+            else:
+                print(
+                    "[ZERO CAL] startup auto-zero did not complete. The first stand/sit "
+                    "request will try again from live MIT feedback."
+                )
+
         # ── optional GUI subprocess ────────────────────────────────────────────
         if args.gui or args.telemetry_port != TELEMETRY_PORT_DEFAULT:
             telemetry = TelemetrySender(
@@ -1900,8 +1956,8 @@ def main():
                 if reason is not None:
                     print("\nWARNING:", reason)
                     print(
-                        "Startup is continuing so you can press the joystick D-pad "
-                        "software-zero calibration before commanding sit, stand, or walk."
+                        "Startup is continuing so auto-zero or joystick D-pad "
+                        "software-zero can calibrate before commanding sit, stand, or walk."
                     )
             print("Sending motor enable frames...")
             motor_layer.send_raw_commands(buses, motor_layer.build_enable_commands())
@@ -1948,6 +2004,7 @@ def main():
             base_lin_vel_source=args.base_lin_vel_source,
             motion_assist_cfg=motion_assist_cfg,
             initial_zero_frame=args.initial_zero_frame,
+            initial_zero_calibrated=startup_zero_calibrated,
             auto_stand_zero=args.auto_stand_zero,
             stand_zero_error_rad=args.stand_zero_error_rad,
             stand_zero_settle_steps=max(1, args.stand_zero_settle_steps),

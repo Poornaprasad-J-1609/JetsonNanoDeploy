@@ -56,7 +56,9 @@ To see raw axes/buttons:
 Main controller joystick workflow:
 
 1. Start with the robot manually in crouch/default pose.
-2. Press D-pad down once. This applies software zero from live encoder feedback.
+2. The controller automatically software-zeros the current crouch/default pose
+   from live encoder feedback at startup. D-pad down is optional and can still
+   be used to recalibrate manually before standing.
 3. Press button 5 to stand. When stand settles, the controller auto-applies
    software zero again, so stand becomes q=0 for the RL policy.
 4. Move the sticks to walk. Button 4 returns to sit/crouch. Buttons 0-3 stop.
@@ -170,7 +172,7 @@ q = quit
 
 This sends real MIT commands. Keep the robot suspended/secured.
 Joystick walking is disabled by the huge walk threshold and zero velocity limits.
-After launch: press D-pad down in crouch, then press button 5 to stand.
+After launch: press button 5 to stand. D-pad zero is optional.
 
 /usr/bin/python3 src/main_controller.py \
   --mode mit-signal \
@@ -206,8 +208,8 @@ After launch: press D-pad down in crouch, then press button 5 to stand.
 This sends real MIT commands. First full robot tests should be suspended/secured.
 Use joystick button 6 to reduce speed and button 7 to increase speed.
 Emergency stop is joystick buttons 0, 1, 2, or 3. Ctrl+C also stops.
-After launch: press D-pad down in crouch, press button 5 to stand, wait for
-"zero_frame -> stand", then move the joystick sticks.
+After launch: press button 5 to stand, wait for "zero_frame -> stand", then
+move the joystick sticks. D-pad zero is optional.
 
 /usr/bin/python3 src/main_controller.py \
   --mode mit-signal \
@@ -240,8 +242,8 @@ After launch: press D-pad down in crouch, press button 5 to stand, wait for
 ------------------------------------------------------------
 
 This sends real MIT commands but uses fake upright IMU values.
-After launch: press D-pad down in crouch, press button 5 to stand, wait for
-"zero_frame -> stand", then move the joystick sticks.
+After launch: press button 5 to stand, wait for "zero_frame -> stand", then
+move the joystick sticks. D-pad zero is optional.
 
 /usr/bin/python3 src/main_controller.py \
   --mode mit-signal \

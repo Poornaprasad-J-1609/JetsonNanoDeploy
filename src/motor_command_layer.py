@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 from pathlib import Path
 import time
-import threading
 import numpy as np
 
 try:
@@ -201,7 +200,6 @@ class MotorCommandLayer:
         self.feedforward = self.cfg["feedforward"]
         communication_cfg = self.cfg.get("communication", {})
         self.frame_gap_s = float(communication_cfg.get("frame_gap_s", 0.0))
-        self.parallel_bus_send = bool(communication_cfg.get("parallel_bus_send", True))
         self.joint_offsets = self.offset_cfg["joint_offsets"]
         self.joint_directions = self._load_joint_directions()
         self.active_joints = self.resolve_active_joints(active_joints)
@@ -478,10 +476,6 @@ class MotorCommandLayer:
         Motors do not have to be connected for the serial adapter to transmit.
         If motors ARE connected and powered, these packets can move them.
         """
-        commands = list(commands)
-        if self.parallel_bus_send and isinstance(buses, dict):
-            return self._send_signal_commands_parallel_by_bus(buses, commands)
-
         sent = []
         for cmd in commands:
             bus = self._resolve_bus(buses, cmd.get("bus_name", "front"))
@@ -489,63 +483,6 @@ class MotorCommandLayer:
             sent.append(pkt)
             if self.frame_gap_s > 0.0:
                 time.sleep(self.frame_gap_s)
-        return sent
-
-    def _send_signal_commands_parallel_by_bus(self, buses, commands):
-        groups = []
-        group_by_bus_id = {}
-
-        for cmd in commands:
-            bus = self._resolve_bus(buses, cmd.get("bus_name", "front"))
-            bus_id = id(bus)
-            if bus_id not in group_by_bus_id:
-                group_by_bus_id[bus_id] = len(groups)
-                groups.append((bus, []))
-            groups[group_by_bus_id[bus_id]][1].append(cmd)
-
-        if len(groups) <= 1:
-            sent = []
-            for cmd in commands:
-                bus = self._resolve_bus(buses, cmd.get("bus_name", "front"))
-                pkt = bus.send_raw(cmd["can_id"], cmd["data"])
-                sent.append(pkt)
-                if self.frame_gap_s > 0.0:
-                    time.sleep(self.frame_gap_s)
-            return sent
-
-        results = [[] for _ in groups]
-        errors = []
-
-        def worker(group_index, bus, group_commands):
-            try:
-                local_sent = []
-                for cmd in group_commands:
-                    local_sent.append(bus.send_raw(cmd["can_id"], cmd["data"]))
-                    if self.frame_gap_s > 0.0:
-                        time.sleep(self.frame_gap_s)
-                results[group_index] = local_sent
-            except Exception as exc:
-                errors.append(exc)
-
-        threads = []
-        for group_index, (bus, group_commands) in enumerate(groups):
-            thread = threading.Thread(
-                target=worker,
-                args=(group_index, bus, group_commands),
-                daemon=True,
-            )
-            threads.append(thread)
-            thread.start()
-
-        for thread in threads:
-            thread.join()
-
-        if errors:
-            raise errors[0]
-
-        sent = []
-        for group_result in results:
-            sent.extend(group_result)
         return sent
 
     def build_enable_commands(self):
