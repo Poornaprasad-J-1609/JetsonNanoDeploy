@@ -605,6 +605,24 @@ def count_active_feedback(estimator, active_joints):
     return sum(1 for joint_name in active_joints if joint_name in feedback)
 
 
+def count_fresh_active_feedback(estimator, active_joints, max_age_s):
+    feedback = getattr(estimator, "last_feedback_by_joint", {}) or {}
+    now = time.monotonic()
+    count = 0
+    for joint_name in active_joints:
+        item = feedback.get(joint_name)
+        if not isinstance(item, dict):
+            continue
+        timestamp = item.get("timestamp")
+        try:
+            age = now - float(timestamp)
+        except (TypeError, ValueError):
+            continue
+        if np.isfinite(age) and age <= float(max_age_s):
+            count += 1
+    return count
+
+
 def encoder_feedback_required(mode, estimator):
     return mode == "mit-signal" and hasattr(estimator, "last_feedback_by_joint")
 
@@ -1059,33 +1077,35 @@ def run_policy_loop(
                     calibration_hold_until_step = step + 10
                     print("[ZERO CAL] zero_frame -> crouch. Press STAND to move to stand and auto-zero for policy.")
 
-        reason = encoder_safety_stop_reason(
-            safety=safety,
-            estimator=estimator,
-            active_joints=motor_layer.active_joints,
-            mode=mode,
-            require_feedback=bool(
-                (has_motion_target or control_mode != "hold")
-                and encoder_feedback_required(mode, estimator)
-            ),
+        motion_feedback_guard_active = bool(
+            (has_motion_target or control_mode != "hold")
+            and encoder_feedback_required(mode, estimator)
         )
-        if reason is not None:
-            print("\nEMERGENCY STOP:", reason)
-            command = command_source.read()
-            publish_safety_fault(
-                telemetry=telemetry,
-                csv_logger=csv_logger,
-                step=step,
-                mode="encoder_fault",
-                command=command,
-                command_source=command_source,
-                commands=[],
+        if motion_feedback_guard_active:
+            reason = encoder_safety_stop_reason(
+                safety=safety,
                 estimator=estimator,
-                reason=reason,
-                action=np.zeros(action_dim, dtype=np.float32),
-                phase="policy",
+                active_joints=motor_layer.active_joints,
+                mode=mode,
+                require_feedback=True,
             )
-            break
+            if reason is not None:
+                print("\nEMERGENCY STOP:", reason)
+                command = command_source.read()
+                publish_safety_fault(
+                    telemetry=telemetry,
+                    csv_logger=csv_logger,
+                    step=step,
+                    mode="encoder_fault",
+                    command=command,
+                    command_source=command_source,
+                    commands=[],
+                    estimator=estimator,
+                    reason=reason,
+                    action=np.zeros(action_dim, dtype=np.float32),
+                    phase="policy",
+                )
+                break
 
         stop, reason = safety.emergency_stop_check(
             projected_gravity_b=projected_gravity_b,
@@ -1155,6 +1175,16 @@ def run_policy_loop(
             if mode_request is None:
                 pass
             elif mode_request in ("stand", "sit"):
+                if (
+                    not has_motion_target
+                    and encoder_feedback_required(mode, estimator)
+                    and count_fresh_active_feedback(
+                        estimator,
+                        motor_layer.active_joints,
+                        getattr(safety, "max_feedback_age_s", 0.25),
+                    ) < len(motor_layer.active_joints)
+                ):
+                    request_feedback_snapshot(motor_layer, buses, mode)
                 feedback_count = refresh_estimator_feedback(
                     estimator,
                     timeout=feedback_timeout,
@@ -1994,6 +2024,7 @@ def main():
                     estimator=estimator,
                     active_joints=motor_layer.active_joints,
                     mode=args.mode,
+                    require_feedback=False,
                 )
                 if reason is not None:
                     print("\nWARNING:", reason)

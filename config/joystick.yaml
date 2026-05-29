@@ -67,11 +67,9 @@ dpad:
   zero_calibration_hat_index: 0
   zero_calibration_hat_direction: [0, -1]
 
-  # Some controllers expose the D-pad as joystick axes instead of hats. Your
-  # pygame event log showed axis 1 reaching +1/-1, so axis 1 +1 is enabled as a
-  # software-zero trigger. Set zero_calibration_axis: -1 to disable it, or flip
-  # zero_calibration_axis_direction to -1.0 if your chosen D-pad direction is the
-  # opposite sign.
-  zero_calibration_axis: 1
+  # Keep this disabled during walking: axis 1 is also the forward/back stick on
+  # the F710, so using it as zero-calibration can accidentally recalibrate while
+  # commanding motion. D-pad/hat zero remains enabled above.
+  zero_calibration_axis: -1
   zero_calibration_axis_direction: 1.0
   zero_calibration_axis_threshold: 0.8
