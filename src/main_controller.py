@@ -981,9 +981,12 @@ def run_policy_loop(
     previous_action = np.zeros(action_dim, dtype=np.float32)
 
     control_mode = start_control_mode  # options: hold, policy, stand, sit
-    has_motion_target = control_mode in ("stand", "sit")
     zero_frame = str(initial_zero_frame).lower()
     zero_calibrated = zero_frame == "stand" or bool(initial_zero_calibrated)
+    has_motion_target = (
+        control_mode in ("stand", "sit")
+        or bool(zero_calibrated and zero_frame == "crouch")
+    )
     stand_zero_pending = bool(
         auto_stand_zero and control_mode == "stand" and zero_frame == "crouch"
     )
@@ -1011,6 +1014,8 @@ def run_policy_loop(
     print("base_lin_vel_source:", base_lin_vel_source)
     print("zero_frame:", zero_frame)
     print("zero_calibrated:", bool(zero_calibrated))
+    if has_motion_target and control_mode == "hold" and zero_frame == "crouch":
+        print("[ZERO CAL] MIT hold is active at q=0 for the crouch/default pose.")
     print("auto_stand_zero:", bool(auto_stand_zero))
     print("pose_sync_error_rad:", float(pose_sync_error_rad))
     if stand_zero_pending:
@@ -1059,6 +1064,7 @@ def run_policy_loop(
             elif control_mode not in ("hold", "sit"):
                 print("[ZERO CAL] ignored; zero calibration is only allowed from hold/sit.")
             else:
+                request_feedback_snapshot(motor_layer, buses, mode)
                 q_zeroed = apply_software_zero_calibration(
                     estimator=estimator,
                     motor_layer=motor_layer,
@@ -1079,7 +1085,8 @@ def run_policy_loop(
                     stand_zero_pending = False
                     stand_zero_settle_count = 0
                     calibration_hold_until_step = step + 10
-                    print("[ZERO CAL] zero_frame -> crouch. Press STAND to move to stand and auto-zero for policy.")
+                    print("[ZERO CAL] zero_frame -> crouch. MIT hold is now active at q=0 for this pose.")
+                    print("[ZERO CAL] Press STAND to move to stand and auto-zero for policy.")
 
         motion_feedback_guard_active = bool(
             (has_motion_target or control_mode != "hold")
