@@ -133,9 +133,10 @@ def check_motor_commands(label, q_target, runner, motor_layer, limits, phase="po
                 f"{label}: {joint_name} q_des={q_des:+.4f} outside [{q_lo:+.4f},{q_hi:+.4f}]"
             )
 
-        if abs(float(cmd["p_des"]) - (q_des + float(cmd["offset"]))) > 2e-5:
+        expected_p = float(cmd["offset"]) + float(cmd.get("direction", 1.0)) * q_des
+        if abs(float(cmd["p_des"]) - expected_p) > 2e-5:
             violations.append(
-                f"{label}: {joint_name} p_des does not match q_des + offset"
+                f"{label}: {joint_name} p_des does not match direction*q_des + offset"
             )
 
         if motor_layer.mit_parameter_limits_enabled:

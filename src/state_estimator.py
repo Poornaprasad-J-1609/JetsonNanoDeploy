@@ -147,6 +147,7 @@ class MitFeedbackStateEstimator(FakeStateEstimator):
         }
         self.last_feedback_by_joint = {}
         self.last_feedback_count = 0
+        self.position_branch_offsets = {}
 
     def _pose_reference_iterable(self, pose_references):
         if pose_references is None:
@@ -178,6 +179,8 @@ class MitFeedbackStateEstimator(FakeStateEstimator):
     def infer_initial_pose_reference(self, feedback_items):
         if not feedback_items or not self.pose_reference_arrays:
             return None
+        if len(feedback_items) < 4:
+            return None
 
         best_pose = None
         best_score = None
@@ -185,7 +188,8 @@ class MitFeedbackStateEstimator(FakeStateEstimator):
             errors = []
             for joint_name, index, feedback in feedback_items:
                 offset = float(self.motor_layer.joint_offsets[joint_name])
-                q_raw = float(feedback["position"]) - offset
+                direction = float(self.motor_layer.joint_directions[joint_name])
+                q_raw = direction * (float(feedback["position"]) - offset)
                 q_equiv = nearest_equivalent_angle(q_raw, reference=float(pose[index]))
                 errors.append(q_equiv - float(pose[index]))
             if not errors:
@@ -228,29 +232,54 @@ class MitFeedbackStateEstimator(FakeStateEstimator):
         count = 0
         for joint_name, index, feedback in feedback_items:
             offset = float(self.motor_layer.joint_offsets[joint_name])
+            direction = float(self.motor_layer.joint_directions[joint_name])
+            raw_position = float(feedback["position"])
             if joint_name in self.last_feedback_by_joint:
-                q_references = [float(self.q_current[index])]
-                pose_snap_tolerance = 0.0
+                branch_offset = float(self.position_branch_offsets.get(joint_name, 0.0))
+                q_raw = direction * (raw_position - offset - branch_offset)
+                q_joint = nearest_equivalent_angle(q_raw, reference=float(self.q_current[index]))
             elif initial_pose_reference is not None:
                 q_references = [float(initial_pose_reference[index])]
-                pose_snap_tolerance = self.pose_snap_tolerance
+                q_joint = motor_position_to_joint_angle(
+                    feedback["position"],
+                    offset=offset,
+                    direction=direction,
+                    references=q_references,
+                    pose_snap_tolerance=self.pose_snap_tolerance,
+                )
+                self.position_branch_offsets[joint_name] = (
+                    raw_position - offset - direction * q_joint
+                )
             else:
-                q_references = list(self.pose_references_by_joint.get(joint_name, []))
-                q_references.append(float(self.q_current[index]))
-                pose_snap_tolerance = self.pose_snap_tolerance
-            q_joint = motor_position_to_joint_angle(
-                feedback["position"],
-                offset=offset,
-                references=q_references,
-                pose_snap_tolerance=pose_snap_tolerance,
-            )
+                q_references = [float(self.q_current[index])]
+                q_references.extend(self.pose_references_by_joint.get(joint_name, []))
+                q_joint = motor_position_to_joint_angle(
+                    feedback["position"],
+                    offset=offset,
+                    direction=direction,
+                    references=q_references,
+                    pose_snap_tolerance=self.pose_snap_tolerance,
+                )
+                self.position_branch_offsets[joint_name] = (
+                    raw_position - offset - direction * q_joint
+                )
 
             self.q_current[index] = q_joint
-            self.qd_current[index] = float(feedback["velocity"])
+            velocity_raw = float(feedback["velocity"])
+            torque_raw = float(feedback["torque"])
+            self.qd_current[index] = direction * velocity_raw
             feedback = dict(feedback)
             feedback["position_raw"] = float(feedback["position"])
+            feedback["velocity_raw"] = velocity_raw
+            feedback["torque_raw"] = torque_raw
             feedback["joint_position"] = q_joint
-            feedback["position_unwrapped"] = q_joint + offset
+            feedback["joint_velocity"] = direction * velocity_raw
+            feedback["joint_torque"] = direction * torque_raw
+            feedback["velocity"] = direction * velocity_raw
+            feedback["torque"] = direction * torque_raw
+            feedback["position_unwrapped"] = offset + direction * q_joint
+            feedback["position_branch_offset"] = float(self.position_branch_offsets[joint_name])
+            feedback["joint_direction"] = direction
             self.last_feedback_by_joint[joint_name] = feedback
             count += 1
 

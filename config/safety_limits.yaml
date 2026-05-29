@@ -17,8 +17,9 @@ encoder:
   # This is ignored for fake-feedback dry runs.
   require_feedback_for_motion: true
 
-  # Absolute sanity limit for measured joint angle after joint offset removal.
-  # 360 degrees = 6.283 rad, so the default catches an un-zeroed/wrapped encoder.
+  # Absolute sanity limit for measured joint angle after offset, direction, and
+  # 2*pi branch correction. A raw encoder branch near 6.283 rad is normalized
+  # before this check; genuinely abnormal joint coordinates still stop motion.
   max_abs_position_rad: 3.5
 
   # Also stop if measured q is outside config/joint_limits.yaml by this margin.

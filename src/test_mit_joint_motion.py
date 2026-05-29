@@ -59,6 +59,7 @@ def print_joint_feedback(step, commands, estimator):
             motor_position_to_joint_angle(
                 feedback["position"],
                 offset=float(cmd["offset"]),
+                direction=float(cmd.get("direction", 1.0)),
                 reference=float(cmd["q_des"]),
             ),
         ))

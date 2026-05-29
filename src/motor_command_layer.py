@@ -52,12 +52,13 @@ def nearest_equivalent_angle(angle, reference=None, period=TWO_PI):
 def motor_position_to_joint_angle(
     position,
     offset=0.0,
+    direction=1.0,
     reference=None,
     references=None,
     pose_snap_tolerance=0.0,
 ):
     """Convert raw motor position feedback into deployed joint coordinates."""
-    q_raw = float(position) - float(offset)
+    q_raw = float(direction) * (float(position) - float(offset))
     candidate_references = []
 
     if references is not None:
@@ -70,6 +71,16 @@ def motor_position_to_joint_angle(
     if not candidate_references:
         return wrap_to_pi(q_raw)
 
+    snap_tolerance = max(0.0, float(pose_snap_tolerance))
+    if snap_tolerance > 0.0:
+        # References are ordered by trust. Prefer the first plausible pose
+        # reference instead of picking a slightly closer crouch value for a
+        # stand-position joint whose raw encoder branch is near 2*pi.
+        for ref in candidate_references:
+            q_ref = nearest_equivalent_angle(q_raw, reference=ref)
+            if abs(q_ref - ref) <= snap_tolerance:
+                return float(ref)
+
     candidates = [
         nearest_equivalent_angle(q_raw, reference=ref)
         for ref in candidate_references
@@ -78,17 +89,13 @@ def motor_position_to_joint_angle(
         candidates,
         key=lambda q: min(abs(q - ref) for ref in candidate_references),
     ))
-    snap_tolerance = max(0.0, float(pose_snap_tolerance))
-    if snap_tolerance > 0.0:
-        nearest_ref = min(candidate_references, key=lambda ref: abs(q_best - ref))
-        if abs(q_best - nearest_ref) <= snap_tolerance:
-            return float(nearest_ref)
     return q_best
 
 
 def motor_command_position_near_feedback(
     q_des,
     offset=0.0,
+    direction=1.0,
     feedback_position=None,
     feedback_joint_position=None,
     p_min=None,
@@ -101,7 +108,8 @@ def motor_command_position_near_feedback(
     same physical zero, send +6.28 rather than 0.0 so the motor does not try to
     rotate one full revolution.
     """
-    p_base = float(q_des) + float(offset)
+    direction = float(direction)
+    p_base = float(offset) + direction * float(q_des)
     if feedback_position is None or not np.isfinite(feedback_position):
         return p_base
 
@@ -114,7 +122,10 @@ def motor_command_position_near_feedback(
     p_max = float(p_max)
 
     if feedback_joint_position is not None and np.isfinite(feedback_joint_position):
-        p_branch = float(feedback_position) + (float(q_des) - float(feedback_joint_position))
+        p_branch = (
+            float(feedback_position)
+            + direction * (float(q_des) - float(feedback_joint_position))
+        )
         if p_min <= p_branch <= p_max:
             return float(p_branch)
 
@@ -253,10 +264,21 @@ class MotorCommandLayer:
         self.feedforward = self.cfg["feedforward"]
         self.frame_gap_s = float(self.cfg.get("communication", {}).get("frame_gap_s", 0.0))
         self.joint_offsets = self.offset_cfg["joint_offsets"]
+        self.joint_directions = self._load_joint_directions()
         self.active_joints = self.resolve_active_joints(active_joints)
         self.joint_can_bus = dict(joint_can_bus) if joint_can_bus else {}
         self.reload_joint_limits(force=True)
         self.reload_control_limits(force=True)
+
+    def _load_joint_directions(self):
+        configured = self.offset_cfg.get("joint_directions", {}) or {}
+        directions = {}
+        for joint_name in self.policy_order:
+            value = float(configured.get(joint_name, 1.0))
+            if not np.isfinite(value) or abs(value) < 1e-9:
+                raise ValueError(f"{joint_name}: joint direction must be +1 or -1")
+            directions[joint_name] = 1.0 if value > 0.0 else -1.0
+        return directions
 
     def resolve_active_joints(self, active_joints):
         if not active_joints:
@@ -270,6 +292,8 @@ class MotorCommandLayer:
                 raise KeyError(f"Missing motor ID for active joint: {joint_name}")
             if joint_name not in self.joint_offsets:
                 raise KeyError(f"Missing joint offset for active joint: {joint_name}")
+            if joint_name not in self.joint_directions:
+                raise KeyError(f"Missing joint direction for active joint: {joint_name}")
             resolved.append(joint_name)
 
         return resolved
@@ -322,8 +346,11 @@ class MotorCommandLayer:
             if q_min > q_max:
                 raise ValueError(f"{joint_name}: min {q_min} is greater than max {q_max}")
             offset = float(self.joint_offsets[joint_name])
-            p_min = q_min + offset
-            p_max = q_max + offset
+            direction = float(self.joint_directions[joint_name])
+            p_a = offset + direction * q_min
+            p_b = offset + direction * q_max
+            p_min = min(p_a, p_b)
+            p_max = max(p_a, p_b)
             if p_min < float(self.proto["p_min"]) or p_max > float(self.proto["p_max"]):
                 raise ValueError(
                     f"{joint_name}: joint limits plus offset [{p_min}, {p_max}] exceed "
@@ -340,10 +367,10 @@ class MotorCommandLayer:
         q_min, q_max = self.hard_joint_limits[joint_name]
         return float(np.clip(q_des, q_min, q_max))
 
-    def apply_hard_joint_limit_to_motor_position(self, joint_name, p_des, offset):
-        q_des = float(p_des) - float(offset)
+    def apply_hard_joint_limit_to_motor_position(self, joint_name, p_des, offset, direction=1.0):
+        q_des = float(direction) * (float(p_des) - float(offset))
         q_des = self.apply_hard_joint_limit(joint_name, q_des)
-        return q_des + float(offset), q_des
+        return float(offset) + float(direction) * q_des, q_des
 
     def apply_mit_parameter_limits(self, p_des, v_des, kp, kd, tau_ff):
         self.reload_control_limits()
@@ -378,6 +405,7 @@ class MotorCommandLayer:
             motor_id = int(self.motor_ids[joint_name])
             group = joint_group(joint_name)
             offset = float(self.joint_offsets[joint_name])
+            direction = float(self.joint_directions[joint_name])
 
             kp = float(self.gains[phase][group]["kp"])
             kd = float(self.gains[phase][group]["kd"])
@@ -385,13 +413,14 @@ class MotorCommandLayer:
             tau_ff = float(self.feedforward["tau_ff"])
             q_requested = float(q_target[i])
             q_des = self.apply_hard_joint_limit(joint_name, q_requested)
-            p_base = q_des + offset
+            p_base = offset + direction * q_des
             feedback = feedback_by_joint.get(joint_name, {})
             feedback_position = feedback.get("position") if isinstance(feedback, dict) else None
             feedback_joint_position = feedback.get("joint_position") if isinstance(feedback, dict) else None
             p_des = motor_command_position_near_feedback(
                 q_des=q_des,
                 offset=offset,
+                direction=direction,
                 feedback_position=feedback_position,
                 feedback_joint_position=feedback_joint_position,
                 p_min=self.proto["p_min"],
@@ -423,6 +452,7 @@ class MotorCommandLayer:
                 "q_des": q_des_sent,
                 "q_requested": q_requested,
                 "offset": offset,
+                "direction": direction,
                 "p_des": p_des,
                 "p_base": p_base,
                 "p_wrap_adjustment": p_des - p_base,
@@ -586,6 +616,8 @@ def print_mit_commands(commands, show_hex=False):
         )
         if abs(cmd["offset"]) > 1e-6:
             line += f" offset={cmd['offset']: .4f}"
+        if abs(float(cmd.get("direction", 1.0)) - 1.0) > 1e-6:
+            line += f" direction={cmd['direction']: .0f}"
         if show_hex:
             line += f" can_id=0x{cmd['can_id']:08X} data={cmd['data'].hex()}"
         print(line)
