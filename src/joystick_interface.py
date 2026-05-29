@@ -143,6 +143,9 @@ class FixedCommandSource:
     def get_speed_scale(self):
         return 1.0
 
+    def get_calibration_request(self):
+        return None
+
     def raw_state(self):
         return None
 
@@ -187,6 +190,12 @@ class JoystickCommandSource:
         button_policy=-1,
         button_speed_down=6,
         button_speed_up=7,
+        button_zero_calibration=-1,
+        zero_calibration_hat_index=0,
+        zero_calibration_hat_direction=None,
+        zero_calibration_axis=1,
+        zero_calibration_axis_direction=1.0,
+        zero_calibration_axis_threshold=0.8,
         emergency_stop_buttons=None,
         speed_scale_initial=0.5,
         speed_scale_min=0.2,
@@ -216,6 +225,21 @@ class JoystickCommandSource:
         self.button_policy = int(button_policy)
         self.button_speed_down = int(button_speed_down)
         self.button_speed_up = int(button_speed_up)
+        self.button_zero_calibration = int(button_zero_calibration)
+        self.zero_calibration_hat_index = int(zero_calibration_hat_index)
+        if zero_calibration_hat_direction is None:
+            zero_calibration_hat_direction = [0, -1]
+        self.zero_calibration_hat_direction = (
+            int(zero_calibration_hat_direction[0]),
+            int(zero_calibration_hat_direction[1]),
+        )
+        self.zero_calibration_axis = int(zero_calibration_axis)
+        self.zero_calibration_axis_direction = (
+            1.0 if float(zero_calibration_axis_direction) >= 0.0 else -1.0
+        )
+        self.zero_calibration_axis_threshold = float(
+            np.clip(abs(float(zero_calibration_axis_threshold)), 0.0, 1.0)
+        )
         if emergency_stop_buttons is None:
             emergency_stop_buttons = [0, 1, 2, 3]
         self.emergency_stop_buttons = [int(button_id) for button_id in emergency_stop_buttons]
@@ -230,6 +254,7 @@ class JoystickCommandSource:
 
         self.command = np.zeros(3, dtype=np.float32)
         self.prev_buttons = {}
+        self.prev_hats = {}
 
         try:
             pygame = init_pygame_for_joystick()
@@ -266,9 +291,13 @@ class JoystickCommandSource:
             self.button_policy,
             self.button_speed_down,
             self.button_speed_up,
+            self.button_zero_calibration,
         ]
         for button_id in edge_buttons:
             self.prev_buttons[button_id] = self._button(button_id)
+        for hat_id in range(self.joy.get_numhats()):
+            self.prev_hats[hat_id] = self.joy.get_hat(hat_id)
+        self.prev_zero_axis_active = self._zero_axis_active()
 
         print("Joystick connected:")
         print("  name:", self.joy.get_name())
@@ -281,6 +310,17 @@ class JoystickCommandSource:
         print(f"  policy     button: {self.button_policy}")
         print(f"  speed down button: {self.button_speed_down}")
         print(f"  speed up   button: {self.button_speed_up}")
+        print(f"  zero-cal   button: {self.button_zero_calibration}")
+        print(
+            "  zero-cal   dpad: "
+            f"hat {self.zero_calibration_hat_index} {self.zero_calibration_hat_direction}"
+        )
+        print(
+            "  zero-cal   axis: "
+            f"axis {self.zero_calibration_axis} "
+            f"direction {self.zero_calibration_axis_direction:+.1f} "
+            f"threshold {self.zero_calibration_axis_threshold:.2f}"
+        )
         print(f"  emergency buttons: {self.emergency_stop_buttons}")
         print(f"  speed scale: {self.speed_scale:.2f}")
 
@@ -298,6 +338,30 @@ class JoystickCommandSource:
         now = self._button(button_id)
         prev = self.prev_buttons.get(button_id, False)
         self.prev_buttons[button_id] = now
+        return now and not prev
+
+    def _hat_rising_edge(self, hat_id, direction):
+        if hat_id < 0 or hat_id >= self.joy.get_numhats():
+            return False
+        now = self.joy.get_hat(hat_id)
+        prev = self.prev_hats.get(hat_id, (0, 0))
+        self.prev_hats[hat_id] = now
+        return now == tuple(direction) and prev != tuple(direction)
+
+    def _zero_axis_active(self):
+        axis_id = self.zero_calibration_axis
+        if axis_id < 0 or axis_id >= self.joy.get_numaxes():
+            return False
+        value = self._axis(axis_id)
+        return (
+            self.zero_calibration_axis_direction * value
+            >= self.zero_calibration_axis_threshold
+        )
+
+    def _zero_axis_rising_edge(self):
+        now = self._zero_axis_active()
+        prev = getattr(self, "prev_zero_axis_active", False)
+        self.prev_zero_axis_active = now
         return now and not prev
 
     def _update_speed_scale(self):
@@ -391,6 +455,23 @@ class JoystickCommandSource:
     def get_speed_scale(self):
         return self.speed_scale
 
+    def get_calibration_request(self):
+        self.pygame.event.pump()
+
+        if self._button_rising_edge(self.button_zero_calibration):
+            return "zero_current_pose"
+
+        if self._hat_rising_edge(
+            self.zero_calibration_hat_index,
+            self.zero_calibration_hat_direction,
+        ):
+            return "zero_current_pose"
+
+        if self._zero_axis_rising_edge():
+            return "zero_current_pose"
+
+        return None
+
     def raw_state(self):
         self.pygame.event.pump()
         return {
@@ -449,6 +530,30 @@ class CommandSource:
                     "button_speed_up",
                     defaults["buttons"].get("speed_up", 7),
                 ),
+                button_zero_calibration=kwargs.get(
+                    "button_zero_calibration",
+                    defaults["buttons"].get("zero_calibration", -1),
+                ),
+                zero_calibration_hat_index=kwargs.get(
+                    "zero_calibration_hat_index",
+                    defaults.get("dpad", {}).get("zero_calibration_hat_index", 0),
+                ),
+                zero_calibration_hat_direction=kwargs.get(
+                    "zero_calibration_hat_direction",
+                    defaults.get("dpad", {}).get("zero_calibration_hat_direction", [0, -1]),
+                ),
+                zero_calibration_axis=kwargs.get(
+                    "zero_calibration_axis",
+                    defaults.get("dpad", {}).get("zero_calibration_axis", 1),
+                ),
+                zero_calibration_axis_direction=kwargs.get(
+                    "zero_calibration_axis_direction",
+                    defaults.get("dpad", {}).get("zero_calibration_axis_direction", 1.0),
+                ),
+                zero_calibration_axis_threshold=kwargs.get(
+                    "zero_calibration_axis_threshold",
+                    defaults.get("dpad", {}).get("zero_calibration_axis_threshold", 0.8),
+                ),
                 emergency_stop_buttons=kwargs.get(
                     "emergency_stop_buttons",
                     defaults["buttons"].get("emergency_stop", [0, 1, 2, 3]),
@@ -472,6 +577,11 @@ class CommandSource:
 
     def get_speed_scale(self):
         return self.impl.get_speed_scale()
+
+    def get_calibration_request(self):
+        if hasattr(self.impl, "get_calibration_request"):
+            return self.impl.get_calibration_request()
+        return None
 
     def raw_state(self):
         if hasattr(self.impl, "raw_state"):
@@ -523,6 +633,46 @@ def main():
         "--button-speed-up",
         type=int,
         default=int(defaults["buttons"].get("speed_up", 7)),
+    )
+    parser.add_argument(
+        "--button-zero-calibration",
+        type=int,
+        default=int(defaults["buttons"].get("zero_calibration", -1)),
+    )
+    parser.add_argument(
+        "--zero-calibration-hat-index",
+        type=int,
+        default=int(defaults.get("dpad", {}).get("zero_calibration_hat_index", 0)),
+    )
+    parser.add_argument(
+        "--zero-calibration-hat-direction",
+        type=int,
+        nargs=2,
+        default=[
+            int(v)
+            for v in defaults.get("dpad", {}).get(
+                "zero_calibration_hat_direction",
+                [0, -1],
+            )
+        ],
+    )
+    parser.add_argument(
+        "--zero-calibration-axis",
+        type=int,
+        default=int(defaults.get("dpad", {}).get("zero_calibration_axis", 1)),
+        help="axis used as a software-zero trigger; -1 disables axis trigger",
+    )
+    parser.add_argument(
+        "--zero-calibration-axis-direction",
+        type=float,
+        default=float(defaults.get("dpad", {}).get("zero_calibration_axis_direction", 1.0)),
+        help="axis sign that triggers software zero: +1 or -1",
+    )
+    parser.add_argument(
+        "--zero-calibration-axis-threshold",
+        type=float,
+        default=float(defaults.get("dpad", {}).get("zero_calibration_axis_threshold", 0.8)),
+        help="absolute axis threshold for software-zero trigger",
     )
     parser.add_argument(
         "--button-emergency-stop",
@@ -584,6 +734,12 @@ def main():
             button_policy=args.button_policy,
             button_speed_down=args.button_speed_down,
             button_speed_up=args.button_speed_up,
+            button_zero_calibration=args.button_zero_calibration,
+            zero_calibration_hat_index=args.zero_calibration_hat_index,
+            zero_calibration_hat_direction=args.zero_calibration_hat_direction,
+            zero_calibration_axis=args.zero_calibration_axis,
+            zero_calibration_axis_direction=args.zero_calibration_axis_direction,
+            zero_calibration_axis_threshold=args.zero_calibration_axis_threshold,
             emergency_stop_buttons=args.button_emergency_stop,
             speed_scale_initial=args.speed_scale_initial,
             speed_scale_min=args.speed_scale_min,
@@ -612,11 +768,12 @@ def main():
 
             cmd = source.read()
             mode_req = source.get_mode_request()
+            calib_req = source.get_calibration_request()
             print(
                 f"step={i:04d} "
                 f"vx={cmd[0]: .3f} vy={cmd[1]: .3f} yaw={cmd[2]: .3f} "
                 f"speed_scale={source.get_speed_scale():.2f} "
-                f"mode_request={mode_req}"
+                f"mode_request={mode_req} calibration_request={calib_req}"
             )
             if args.show_raw:
                 raw = source.raw_state()

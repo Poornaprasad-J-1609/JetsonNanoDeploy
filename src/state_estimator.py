@@ -6,7 +6,6 @@ from motor_command_layer import (
     MotorCommandLayer,
     decode_mit_feedback_frame,
     motor_position_to_joint_angle,
-    nearest_equivalent_angle,
 )
 
 
@@ -176,29 +175,14 @@ class MitFeedbackStateEstimator(FakeStateEstimator):
                 arrays.append(pose.copy())
         return arrays
 
-    def infer_initial_pose_reference(self, feedback_items):
-        if not feedback_items or not self.pose_reference_arrays:
-            return None
-        if len(feedback_items) < 4:
-            return None
+    def _poses_differ_on_feedback(self, pose_a, pose_b, feedback_items):
+        for _, index, _ in feedback_items:
+            if abs(float(pose_a[index]) - float(pose_b[index])) > 1e-5:
+                return True
+        return False
 
-        best_pose = None
-        best_score = None
-        for pose in self.pose_reference_arrays:
-            errors = []
-            for joint_name, index, feedback in feedback_items:
-                offset = float(self.motor_layer.joint_offsets[joint_name])
-                direction = float(self.motor_layer.joint_directions[joint_name])
-                q_raw = direction * (float(feedback["position"]) - offset)
-                q_equiv = nearest_equivalent_angle(q_raw, reference=float(pose[index]))
-                errors.append(q_equiv - float(pose[index]))
-            if not errors:
-                continue
-            rms = float(np.sqrt(np.mean(np.square(errors))))
-            if best_score is None or rms < best_score:
-                best_score = rms
-                best_pose = pose
-        return best_pose
+    def infer_initial_pose_reference(self, feedback_items):
+        return None
 
     def update_from_frames(self, frames):
         feedback_items = []
@@ -225,44 +209,17 @@ class MitFeedbackStateEstimator(FakeStateEstimator):
             index = self.joint_index_by_name[joint_name]
             feedback_items.append((joint_name, index, feedback))
 
-        initial_pose_reference = None
-        if feedback_items and not self.last_feedback_by_joint:
-            initial_pose_reference = self.infer_initial_pose_reference(feedback_items)
-
         count = 0
         for joint_name, index, feedback in feedback_items:
             offset = float(self.motor_layer.joint_offsets[joint_name])
             direction = float(self.motor_layer.joint_directions[joint_name])
             raw_position = float(feedback["position"])
-            if joint_name in self.last_feedback_by_joint:
-                branch_offset = float(self.position_branch_offsets.get(joint_name, 0.0))
-                q_raw = direction * (raw_position - offset - branch_offset)
-                q_joint = nearest_equivalent_angle(q_raw, reference=float(self.q_current[index]))
-            elif initial_pose_reference is not None:
-                q_references = [float(initial_pose_reference[index])]
-                q_joint = motor_position_to_joint_angle(
-                    feedback["position"],
-                    offset=offset,
-                    direction=direction,
-                    references=q_references,
-                    pose_snap_tolerance=self.pose_snap_tolerance,
-                )
-                self.position_branch_offsets[joint_name] = (
-                    raw_position - offset - direction * q_joint
-                )
-            else:
-                q_references = [float(self.q_current[index])]
-                q_references.extend(self.pose_references_by_joint.get(joint_name, []))
-                q_joint = motor_position_to_joint_angle(
-                    feedback["position"],
-                    offset=offset,
-                    direction=direction,
-                    references=q_references,
-                    pose_snap_tolerance=self.pose_snap_tolerance,
-                )
-                self.position_branch_offsets[joint_name] = (
-                    raw_position - offset - direction * q_joint
-                )
+            q_joint = motor_position_to_joint_angle(
+                feedback["position"],
+                offset=offset,
+                direction=direction,
+            )
+            self.position_branch_offsets[joint_name] = 0.0
 
             self.q_current[index] = q_joint
             velocity_raw = float(feedback["velocity"])
@@ -301,3 +258,22 @@ class MitFeedbackStateEstimator(FakeStateEstimator):
 
     def has_all_joint_feedback(self):
         return len(self.last_feedback_by_joint) >= len(self.policy_order)
+
+    def apply_software_zero(self, active_joints=None):
+        updated, missing = self.motor_layer.set_software_zero_from_feedback(
+            self.last_feedback_by_joint,
+            active_joints=active_joints,
+        )
+        for joint_name in updated:
+            index = self.joint_index_by_name.get(joint_name)
+            if index is not None:
+                self.q_current[index] = 0.0
+                self.qd_current[index] = 0.0
+            feedback = self.last_feedback_by_joint.get(joint_name)
+            if feedback is not None:
+                feedback["joint_position"] = 0.0
+                feedback["position_branch_offset"] = 0.0
+                feedback["position_unwrapped"] = float(feedback["position"])
+                feedback["velocity"] = 0.0
+                feedback["joint_velocity"] = 0.0
+        return updated, missing

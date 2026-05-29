@@ -20,7 +20,7 @@ try:
 except ImportError as exc:
     raise ImportError("Install PyYAML first: pip3 install pyyaml") from exc
 
-from motor_command_layer import MotorCommandLayer, TWO_PI, float_to_uint
+from motor_command_layer import MotorCommandLayer, float_to_uint
 from robstride_can_interface import CanFrame
 from state_estimator import MitFeedbackStateEstimator
 
@@ -243,7 +243,7 @@ def assert_duplicate_id_feedback_mapping(policy_order, motor_ids, joint_can_bus,
         raise AssertionError("back duplicate-ID feedback mapped to wrong joint/value")
 
 
-def assert_encoder_branch_unwrap(policy_order, motor_ids, joint_can_bus):
+def assert_software_zero_calibration(policy_order, motor_ids, joint_can_bus):
     joint = "FR_thigh_joint" if "FR_thigh_joint" in policy_order else policy_order[0]
     index = policy_order.index(joint)
     bus_name = joint_can_bus.get(joint, "front")
@@ -262,31 +262,20 @@ def assert_encoder_branch_unwrap(policy_order, motor_ids, joint_can_bus):
         motor_layer=layer,
         bus=None,
         imu_sensor=None,
-        pose_references={"stand": np.zeros(len(policy_order), dtype=np.float32)},
-        pose_snap_tolerance=0.35,
     )
 
-    offset = float(layer.joint_offsets[joint])
-    raw_zero_branch = offset + TWO_PI
+    raw_crouch = 0.73
     estimator.update_from_frames([
-        make_feedback_frame(bus_name, motor_id, layer.proto, raw_zero_branch)
+        make_feedback_frame(bus_name, motor_id, layer.proto, raw_crouch)
     ])
+    if abs(float(estimator.q_current[index]) - raw_crouch) > 0.004:
+        raise AssertionError("raw feedback should be used before software zero calibration")
+
+    updated, missing = estimator.apply_software_zero(active_joints=[joint])
+    if missing or joint not in updated:
+        raise AssertionError("software zero calibration did not update the active joint")
     if abs(float(estimator.q_current[index])) > 0.004:
-        raise AssertionError("2*pi encoder branch did not resolve to joint zero")
-
-    q_positive = 0.100
-    estimator.update_from_frames([
-        make_feedback_frame(bus_name, motor_id, layer.proto, raw_zero_branch + q_positive)
-    ])
-    if abs(float(estimator.q_current[index]) - q_positive) > 0.006:
-        raise AssertionError("positive motion on 2*pi encoder branch changed sign")
-
-    q_negative = -0.050
-    estimator.update_from_frames([
-        make_feedback_frame(bus_name, motor_id, layer.proto, raw_zero_branch + q_negative)
-    ])
-    if abs(float(estimator.q_current[index]) - q_negative) > 0.006:
-        raise AssertionError("negative motion on 2*pi encoder branch changed sign")
+        raise AssertionError("software zero calibration did not make current q equal zero")
 
     q_target = np.zeros(len(policy_order), dtype=np.float32)
     q_target[index] = 0.120
@@ -295,9 +284,9 @@ def assert_encoder_branch_unwrap(policy_order, motor_ids, joint_can_bus):
         phase="policy",
         feedback_by_joint=estimator.last_feedback_by_joint,
     )
-    expected_p = raw_zero_branch + float(q_target[index])
+    expected_p = raw_crouch + float(q_target[index])
     if len(commands) != 1 or abs(float(commands[0]["p_des"]) - expected_p) > 0.010:
-        raise AssertionError("MIT command did not stay on the live 2*pi encoder branch")
+        raise AssertionError("MIT command did not remain continuous after software zero")
 
     reverse_layer = MotorCommandLayer(
         policy_order=policy_order,
@@ -313,16 +302,15 @@ def assert_encoder_branch_unwrap(policy_order, motor_ids, joint_can_bus):
         motor_layer=reverse_layer,
         bus=None,
         imu_sensor=None,
-        pose_references={"stand": np.zeros(len(policy_order), dtype=np.float32)},
-        pose_snap_tolerance=0.35,
     )
     reverse_estimator.update_from_frames([
-        make_feedback_frame(bus_name, motor_id, reverse_layer.proto, raw_zero_branch)
+        make_feedback_frame(bus_name, motor_id, reverse_layer.proto, raw_crouch)
     ])
+    reverse_estimator.apply_software_zero(active_joints=[joint])
     reverse_estimator.update_from_frames([
-        make_feedback_frame(bus_name, motor_id, reverse_layer.proto, raw_zero_branch - q_positive)
+        make_feedback_frame(bus_name, motor_id, reverse_layer.proto, raw_crouch - 0.1)
     ])
-    if abs(float(reverse_estimator.q_current[index]) - q_positive) > 0.006:
+    if abs(float(reverse_estimator.q_current[index]) - 0.1) > 0.006:
         raise AssertionError("joint_direction=-1 did not invert encoder feedback consistently")
 
 
@@ -392,7 +380,7 @@ def main():
     )
     assert_shared_bus_read_once(layer)
     assert_duplicate_id_feedback_mapping(policy_order, motor_ids, joint_can_bus, layer)
-    assert_encoder_branch_unwrap(policy_order, motor_ids, joint_can_bus)
+    assert_software_zero_calibration(policy_order, motor_ids, joint_can_bus)
 
     bus_to_joints = {
         bus_name: [name for name in policy_order if joint_can_bus.get(name, "front") == bus_name]
@@ -412,7 +400,7 @@ def main():
     print(f"Stop command routing:      front={stop_counts.get('front', 0)} back={stop_counts.get('back', 0)}")
     print("Shared-port de-duplication: OK")
     print("Duplicate motor IDs on separate CAN buses: feedback mapping OK")
-    print("2*pi encoder branch and joint direction handling: OK")
+    print("Software zero calibration and joint direction handling: OK")
     return 0
 
 

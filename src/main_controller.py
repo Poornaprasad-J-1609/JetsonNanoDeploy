@@ -629,6 +629,65 @@ def initialize_hold_target(estimator, feedback_timeout):
     return q_current.copy()
 
 
+def active_joint_indices(policy_order, active_joints):
+    index_by_joint = {name: index for index, name in enumerate(policy_order)}
+    return [
+        index_by_joint[name]
+        for name in active_joints
+        if name in index_by_joint
+    ]
+
+
+def max_active_error(q_a, q_b, active_indices):
+    if not active_indices:
+        return 0.0
+    q_a = np.asarray(q_a, dtype=np.float32)
+    q_b = np.asarray(q_b, dtype=np.float32)
+    return float(np.max(np.abs(q_a[active_indices] - q_b[active_indices])))
+
+
+def apply_software_zero_calibration(
+    estimator,
+    motor_layer,
+    active_joints,
+    feedback_timeout,
+    buses,
+    mode,
+    label,
+):
+    request_feedback_snapshot(motor_layer=motor_layer, buses=buses, mode=mode)
+    refresh_estimator_feedback(estimator, timeout=feedback_timeout)
+
+    if hasattr(estimator, "apply_software_zero"):
+        try:
+            updated, missing = estimator.apply_software_zero(active_joints=active_joints)
+        except Exception as exc:
+            print(f"\n[ZERO CAL] {label}: failed: {exc}")
+            return False
+    else:
+        updated = {joint_name: 0.0 for joint_name in active_joints}
+        missing = []
+        if hasattr(estimator, "q_current"):
+            estimator.q_current[:] = 0.0
+        if hasattr(estimator, "qd_current"):
+            estimator.qd_current[:] = 0.0
+
+    if missing:
+        print(
+            f"\n[ZERO CAL] {label}: missing feedback for "
+            + ", ".join(missing[:6])
+            + (" ..." if len(missing) > 6 else "")
+        )
+        return False
+
+    q_current, _, _, _, _ = estimator.read()
+    print(
+        f"\n[ZERO CAL] {label}: software zero applied to "
+        f"{len(updated)} active joint(s). No RobStride hardware set-zero frame was sent."
+    )
+    return q_current.copy()
+
+
 def run_startup_to_stand(
     runner,
     safety,
@@ -826,6 +885,10 @@ def run_policy_loop(
     joint_debug,
     base_lin_vel_source,
     motion_assist_cfg,
+    initial_zero_frame,
+    auto_stand_zero,
+    stand_zero_error_rad,
+    stand_zero_settle_steps,
     telemetry=None,
     csv_logger=None,
 ):
@@ -835,6 +898,12 @@ def run_policy_loop(
 
     control_mode = start_control_mode  # options: hold, policy, stand, sit
     has_motion_target = control_mode in ("stand", "sit")
+    zero_frame = str(initial_zero_frame).lower()
+    zero_calibrated = zero_frame == "stand"
+    stand_zero_pending = False
+    stand_zero_settle_count = 0
+    calibration_hold_until_step = -1
+    active_indices = active_joint_indices(runner.policy_order, motor_layer.active_joints)
 
     print("\n" + "#" * 80)
     print("POLICY / POSE PHASE")
@@ -846,6 +915,7 @@ def run_policy_loop(
     print("  button 6    -> reduce speed scale")
     print("  button 7    -> increase speed scale")
     print("  buttons 0-3 -> EMERGENCY STOP")
+    print("  D-pad down / configured zero axis -> software-zero current crouch/default pose")
     print("Joystick axes:")
     print("  left stick Y  -> forward/back vx")
     print("  left stick X  -> left/right vy")
@@ -853,6 +923,8 @@ def run_policy_loop(
     print("start_control_mode:", control_mode)
     print("walk_command_threshold:", walk_command_threshold)
     print("base_lin_vel_source:", base_lin_vel_source)
+    print("zero_frame:", zero_frame)
+    print("auto_stand_zero:", bool(auto_stand_zero))
     print("imu_stabilization:", bool(motion_assist_cfg.get("imu_posture", {}).get("enabled", False)))
     print("gait_assist:", bool(motion_assist_cfg.get("gait_assist", {}).get("enabled", False)))
     if steps is None:
@@ -869,6 +941,54 @@ def run_policy_loop(
             base_ang_vel_b,
             projected_gravity_b,
         ) = estimator.read()
+
+        joystick_emergency_reason = command_source.get_emergency_stop_request()
+        if joystick_emergency_reason is not None:
+            print("\nEMERGENCY STOP:", joystick_emergency_reason)
+            command = command_source.read()
+            publish_safety_fault(
+                telemetry=telemetry,
+                csv_logger=csv_logger,
+                step=step,
+                mode="joystick_estop",
+                command=command,
+                command_source=command_source,
+                commands=[],
+                estimator=estimator,
+                reason=joystick_emergency_reason,
+                action=np.zeros(action_dim, dtype=np.float32),
+                phase="policy",
+            )
+            break
+
+        calibration_request = command_source.get_calibration_request()
+        if calibration_request == "zero_current_pose":
+            if zero_frame == "stand":
+                print("[ZERO CAL] ignored because stand/RL zero is already active.")
+            elif control_mode not in ("hold", "sit"):
+                print("[ZERO CAL] ignored; zero calibration is only allowed from hold/sit.")
+            else:
+                q_zeroed = apply_software_zero_calibration(
+                    estimator=estimator,
+                    motor_layer=motor_layer,
+                    active_joints=motor_layer.active_joints,
+                    feedback_timeout=feedback_timeout,
+                    buses=buses,
+                    mode=mode,
+                    label="crouch/default pose",
+                )
+                if q_zeroed is not False:
+                    q_previous_target = q_zeroed.copy()
+                    q_current = q_zeroed.copy()
+                    qd_current = np.zeros_like(q_current, dtype=np.float32)
+                    zero_frame = "crouch"
+                    zero_calibrated = True
+                    control_mode = "hold"
+                    has_motion_target = True
+                    stand_zero_pending = False
+                    stand_zero_settle_count = 0
+                    calibration_hold_until_step = step + 10
+                    print("[ZERO CAL] zero_frame -> crouch. Press STAND to move to stand and auto-zero for policy.")
 
         reason = encoder_safety_stop_reason(
             safety=safety,
@@ -934,28 +1054,14 @@ def run_policy_loop(
             )
             break
 
-        joystick_emergency_reason = command_source.get_emergency_stop_request()
-        if joystick_emergency_reason is not None:
-            print("\nEMERGENCY STOP:", joystick_emergency_reason)
-            command = command_source.read()
-            publish_safety_fault(
-                telemetry=telemetry,
-                csv_logger=csv_logger,
-                step=step,
-                mode="joystick_estop",
-                command=command,
-                command_source=command_source,
-                commands=[],
-                estimator=estimator,
-                reason=joystick_emergency_reason,
-                action=np.zeros(action_dim, dtype=np.float32),
-                phase="policy",
-            )
-            break
-
         mode_request = command_source.get_mode_request()
         if mode_request is not None:
-            if mode_request in ("stand", "sit"):
+            if mode_request in ("stand", "sit") and zero_frame == "crouch" and not zero_calibrated:
+                print("\n[ZERO CAL] ignored pose command: press D-pad down first to zero the crouch/default pose.")
+                mode_request = None
+            if mode_request is None:
+                pass
+            elif mode_request in ("stand", "sit"):
                 request_feedback_snapshot(
                     motor_layer=motor_layer,
                     buses=buses,
@@ -1002,18 +1108,29 @@ def run_policy_loop(
                     )
                     break
 
-            control_mode = mode_request
-            if control_mode in ("stand", "sit"):
-                has_motion_target = True
-            print(f"\n[MODE CHANGE] control_mode -> {control_mode}")
+            if mode_request is not None:
+                control_mode = mode_request
+                if control_mode in ("stand", "sit"):
+                    has_motion_target = True
+                if control_mode == "stand" and zero_frame == "crouch":
+                    stand_zero_pending = bool(auto_stand_zero)
+                    stand_zero_settle_count = 0
+                    print("[ZERO CAL] stand target uses stand_pose_when_sit_zero; stand will auto-zero when settled.")
+                print(f"\n[MODE CHANGE] control_mode -> {control_mode}")
 
         command = command_source.read()
+        if step < calibration_hold_until_step:
+            command = np.zeros(3, dtype=np.float32)
         policy_base_lin_vel_b = select_policy_base_lin_vel(
             base_lin_vel_source,
             base_lin_vel_b,
             command,
         )
         walk_requested = joystick_walk_requested(command, walk_command_threshold)
+        if zero_frame != "stand" and walk_requested:
+            walk_requested = False
+            if step % max(1, log_every) == 0:
+                print("[ZERO CAL] walking blocked until STAND auto-zero completes.")
         if control_mode == "sit":
             active_control_mode = "sit"
         elif walk_requested:
@@ -1040,7 +1157,10 @@ def run_policy_loop(
             action = np.zeros(action_dim, dtype=np.float32)
 
         elif active_control_mode == "stand":
-            q_policy_target = runner.q_stand.copy()
+            if zero_frame == "crouch":
+                q_policy_target = runner.q_stand_when_sit_zero.copy()
+            else:
+                q_policy_target = runner.q_stand.copy()
             q_policy_target = apply_motion_assists(
                 q_target=q_policy_target,
                 command=command,
@@ -1059,7 +1179,10 @@ def run_policy_loop(
             action = np.zeros(action_dim, dtype=np.float32)
 
         elif active_control_mode == "sit":
-            q_policy_target = runner.q_crouch.copy()
+            if zero_frame == "crouch":
+                q_policy_target = np.zeros(len(runner.policy_order), dtype=np.float32)
+            else:
+                q_policy_target = runner.q_sit_when_stand_zero.copy()
             q_safe_target = safety.safety_filter(q_policy_target, q_previous_target)
             commands = motor_layer.build_mit_commands(
                 q_safe_target,
@@ -1128,6 +1251,47 @@ def run_policy_loop(
                 phase="policy",
             )
             break
+
+        if active_control_mode == "stand" and stand_zero_pending:
+            q_feedback = getattr(estimator, "q_current", q_safe_target)
+            command_error = max_active_error(q_safe_target, q_policy_target, active_indices)
+            feedback_error = max_active_error(q_feedback, q_policy_target, active_indices)
+            if (
+                command_error <= float(stand_zero_error_rad)
+                and feedback_error <= float(stand_zero_error_rad)
+            ):
+                stand_zero_settle_count += 1
+            else:
+                stand_zero_settle_count = 0
+
+            if stand_zero_settle_count >= int(stand_zero_settle_steps):
+                q_zeroed = apply_software_zero_calibration(
+                    estimator=estimator,
+                    motor_layer=motor_layer,
+                    active_joints=motor_layer.active_joints,
+                    feedback_timeout=feedback_timeout,
+                    buses=buses,
+                    mode=mode,
+                    label="stand pose",
+                )
+                if q_zeroed is not False:
+                    zero_frame = "stand"
+                    stand_zero_pending = False
+                    stand_zero_settle_count = 0
+                    q_safe_target = runner.q_stand.copy()
+                    q_previous_target = q_safe_target.copy()
+                    zero_calibrated = True
+                    previous_action = np.zeros(action_dim, dtype=np.float32)
+                    commands = motor_layer.build_mit_commands(
+                        q_safe_target,
+                        phase="startup",
+                        feedback_by_joint=getattr(estimator, "last_feedback_by_joint", None),
+                    )
+                    if mode == "signal":
+                        motor_layer.send_harmless_frames(buses, commands)
+                    elif mode == "mit-signal":
+                        motor_layer.send_signal_commands(buses, commands)
+                    print("[ZERO CAL] zero_frame -> stand. Policy walking is now enabled in RL zero coordinates.")
 
         if step % log_every == 0:
             telemetry_record = compact_telemetry_record(
@@ -1250,6 +1414,46 @@ def main():
         default=int(joystick_defaults["buttons"].get("speed_up", 7)),
     )
     parser.add_argument(
+        "--button-zero-calibration",
+        type=int,
+        default=int(joystick_defaults["buttons"].get("zero_calibration", -1)),
+    )
+    parser.add_argument(
+        "--zero-calibration-hat-index",
+        type=int,
+        default=int(joystick_defaults.get("dpad", {}).get("zero_calibration_hat_index", 0)),
+    )
+    parser.add_argument(
+        "--zero-calibration-hat-direction",
+        type=int,
+        nargs=2,
+        default=[
+            int(v)
+            for v in joystick_defaults.get("dpad", {}).get(
+                "zero_calibration_hat_direction",
+                [0, -1],
+            )
+        ],
+    )
+    parser.add_argument(
+        "--zero-calibration-axis",
+        type=int,
+        default=int(joystick_defaults.get("dpad", {}).get("zero_calibration_axis", 1)),
+        help="axis used as a software-zero trigger; -1 disables axis trigger",
+    )
+    parser.add_argument(
+        "--zero-calibration-axis-direction",
+        type=float,
+        default=float(joystick_defaults.get("dpad", {}).get("zero_calibration_axis_direction", 1.0)),
+        help="axis sign that triggers software zero: +1 or -1",
+    )
+    parser.add_argument(
+        "--zero-calibration-axis-threshold",
+        type=float,
+        default=float(joystick_defaults.get("dpad", {}).get("zero_calibration_axis_threshold", 0.8)),
+        help="absolute axis threshold for software-zero trigger",
+    )
+    parser.add_argument(
         "--button-emergency-stop",
         type=int,
         nargs="+",
@@ -1283,6 +1487,20 @@ def main():
     parser.add_argument("--show-hex", action="store_true")
     parser.add_argument("--start-control-mode", choices=["hold", "stand", "sit", "policy"], default="hold")
     parser.add_argument("--startup-action", choices=["hold", "stand"], default="hold")
+    parser.add_argument(
+        "--initial-zero-frame",
+        choices=["stand", "crouch"],
+        default="crouch",
+        help="coordinate frame before joystick zero calibration; policy walking requires stand",
+    )
+    parser.add_argument(
+        "--auto-stand-zero",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="after standing from crouch-zero frame, make current stand pose software zero",
+    )
+    parser.add_argument("--stand-zero-error-rad", type=float, default=0.08)
+    parser.add_argument("--stand-zero-settle-steps", type=int, default=15)
     parser.add_argument(
         "--walk-command-threshold",
         type=float,
@@ -1446,6 +1664,12 @@ def main():
             button_policy=args.button_policy,
             button_speed_down=args.button_speed_down,
             button_speed_up=args.button_speed_up,
+            button_zero_calibration=args.button_zero_calibration,
+            zero_calibration_hat_index=args.zero_calibration_hat_index,
+            zero_calibration_hat_direction=args.zero_calibration_hat_direction,
+            zero_calibration_axis=args.zero_calibration_axis,
+            zero_calibration_axis_direction=args.zero_calibration_axis_direction,
+            zero_calibration_axis_threshold=args.zero_calibration_axis_threshold,
             emergency_stop_buttons=args.button_emergency_stop,
             speed_scale_initial=args.speed_scale_initial,
             speed_scale_min=args.speed_scale_min,
@@ -1618,21 +1842,11 @@ def main():
                     mode=args.mode,
                 )
                 if reason is not None:
-                    print("\nEMERGENCY STOP:", reason)
-                    publish_safety_fault(
-                        telemetry=telemetry,
-                        csv_logger=csv_logger,
-                        step=0,
-                        mode="encoder_fault",
-                        command=command_source.read(),
-                        command_source=command_source,
-                        commands=[],
-                        estimator=estimator,
-                        reason=reason,
-                        action=None,
-                        phase="startup",
+                    print("\nWARNING:", reason)
+                    print(
+                        "Startup is continuing so you can press the joystick D-pad "
+                        "software-zero calibration before commanding sit, stand, or walk."
                     )
-                    return 1
             print("Sending motor enable frames...")
             motor_layer.send_raw_commands(buses, motor_layer.build_enable_commands())
             print("Motor enable frames sent.")
@@ -1677,6 +1891,10 @@ def main():
             joint_debug=args.joint_debug,
             base_lin_vel_source=args.base_lin_vel_source,
             motion_assist_cfg=motion_assist_cfg,
+            initial_zero_frame=args.initial_zero_frame,
+            auto_stand_zero=args.auto_stand_zero,
+            stand_zero_error_rad=args.stand_zero_error_rad,
+            stand_zero_settle_steps=max(1, args.stand_zero_settle_steps),
             telemetry=telemetry,
             csv_logger=csv_logger,
         )

@@ -138,6 +138,15 @@ class PolicyRunner:
         self.q_default = self.pose_to_array(self.pose_cfg["default_pose"])
         self.q_stand = self.pose_to_array(self.pose_cfg["stand_pose"])
         self.q_crouch = self.pose_to_array(self.pose_cfg["crouch_pose"])
+        self.q_sit_when_stand_zero = self.pose_to_array(
+            self.pose_cfg.get("sit_pose_when_stand_zero", self.pose_cfg["crouch_pose"])
+        )
+        if "stand_pose_when_sit_zero" in self.pose_cfg:
+            self.q_stand_when_sit_zero = self.pose_to_array(
+                self.pose_cfg["stand_pose_when_sit_zero"]
+            )
+        else:
+            self.q_stand_when_sit_zero = -self.q_sit_when_stand_zero
 
         self.observation_layout = self.joint_cfg["observation_layout"]
         self.policy_path = resolve_policy_path(self.root, policy_path=policy_path)

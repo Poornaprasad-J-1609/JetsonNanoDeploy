@@ -252,6 +252,8 @@ def main():
     failures += check_pose("default_pose", runner.q_default, runner, limits)
     failures += check_pose("stand_pose", runner.q_stand, runner, limits)
     failures += check_pose("crouch_pose", runner.q_crouch, runner, limits)
+    failures += check_pose("sit_pose_when_stand_zero", runner.q_sit_when_stand_zero, runner, limits)
+    failures += check_pose("stand_pose_when_sit_zero", runner.q_stand_when_sit_zero, runner, limits)
     print_control_limits()
 
     print("\nRate limits:")

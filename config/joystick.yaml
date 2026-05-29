@@ -56,3 +56,22 @@ buttons:
   # Runtime speed scale buttons.
   speed_down: 6
   speed_up: 7
+
+  # Optional physical button for software zero calibration. -1 disables it.
+  zero_calibration: -1
+
+dpad:
+  # D-pad/hat direction that saves the current crouch/default pose as software
+  # zero. This is software-only; it does not send a RobStride hardware set-zero.
+  # Default is D-pad down on Logitech-style controllers.
+  zero_calibration_hat_index: 0
+  zero_calibration_hat_direction: [0, -1]
+
+  # Some controllers expose the D-pad as joystick axes instead of hats. Your
+  # pygame event log showed axis 1 reaching +1/-1, so axis 1 +1 is enabled as a
+  # software-zero trigger. Set zero_calibration_axis: -1 to disable it, or flip
+  # zero_calibration_axis_direction to -1.0 if your chosen D-pad direction is the
+  # opposite sign.
+  zero_calibration_axis: 1
+  zero_calibration_axis_direction: 1.0
+  zero_calibration_axis_threshold: 0.8

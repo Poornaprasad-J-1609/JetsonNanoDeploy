@@ -17,9 +17,10 @@ encoder:
   # This is ignored for fake-feedback dry runs.
   require_feedback_for_motion: true
 
-  # Absolute sanity limit for measured joint angle after offset, direction, and
-  # 2*pi branch correction. A raw encoder branch near 6.283 rad is normalized
-  # before this check; genuinely abnormal joint coordinates still stop motion.
+  # Absolute sanity limit for measured joint angle after software zero offset
+  # and direction correction. No 2*pi filtering is applied; if a motor reports
+  # a shifted raw angle, press the joystick D-pad software-zero calibration
+  # while the robot is in the known crouch/default pose before commanding motion.
   max_abs_position_rad: 3.5
 
   # Also stop if measured q is outside config/joint_limits.yaml by this margin.

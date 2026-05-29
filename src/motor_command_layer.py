@@ -10,7 +10,6 @@ except ImportError as exc:
 
 
 ROOT = Path(__file__).resolve().parents[1]
-TWO_PI = 2.0 * np.pi
 
 
 def load_yaml(path):
@@ -30,25 +29,6 @@ def uint_to_float(x, x_min, x_max, bits):
     return float(x_min + span * x / ((1 << bits) - 1))
 
 
-def wrap_to_pi(angle):
-    """Wrap a revolute angle to [-pi, pi)."""
-    return float((float(angle) + np.pi) % TWO_PI - np.pi)
-
-
-def nearest_equivalent_angle(angle, reference=None, period=TWO_PI):
-    """
-    Return angle + k*period nearest to reference.
-
-    RobStride feedback can report a joint zero as either 0 or about 2*pi after
-    power cycling. The physical joint limits are inside one revolution, so the
-    controller works in the equivalent angle nearest the current/reference pose.
-    """
-    angle = float(angle)
-    if reference is None or not np.isfinite(reference):
-        return wrap_to_pi(angle)
-    return float(angle + period * round((float(reference) - angle) / period))
-
-
 def motor_position_to_joint_angle(
     position,
     offset=0.0,
@@ -57,39 +37,8 @@ def motor_position_to_joint_angle(
     references=None,
     pose_snap_tolerance=0.0,
 ):
-    """Convert raw motor position feedback into deployed joint coordinates."""
-    q_raw = float(direction) * (float(position) - float(offset))
-    candidate_references = []
-
-    if references is not None:
-        for value in references:
-            if value is not None and np.isfinite(value):
-                candidate_references.append(float(value))
-    if reference is not None and np.isfinite(reference):
-        candidate_references.insert(0, float(reference))
-
-    if not candidate_references:
-        return wrap_to_pi(q_raw)
-
-    snap_tolerance = max(0.0, float(pose_snap_tolerance))
-    if snap_tolerance > 0.0:
-        # References are ordered by trust. Prefer the first plausible pose
-        # reference instead of picking a slightly closer crouch value for a
-        # stand-position joint whose raw encoder branch is near 2*pi.
-        for ref in candidate_references:
-            q_ref = nearest_equivalent_angle(q_raw, reference=ref)
-            if abs(q_ref - ref) <= snap_tolerance:
-                return float(ref)
-
-    candidates = [
-        nearest_equivalent_angle(q_raw, reference=ref)
-        for ref in candidate_references
-    ]
-    q_best = float(min(
-        candidates,
-        key=lambda q: min(abs(q - ref) for ref in candidate_references),
-    ))
-    return q_best
+    """Convert raw motor feedback to deployed joint coordinates without 2*pi wrapping."""
+    return float(direction) * (float(position) - float(offset))
 
 
 def motor_command_position_near_feedback(
@@ -101,19 +50,12 @@ def motor_command_position_near_feedback(
     p_min=None,
     p_max=None,
 ):
-    """
-    Convert desired joint angle to a raw MIT position on the encoder's branch.
-
-    Example: if q_des is 0 but the motor currently reports +6.28 rad for the
-    same physical zero, send +6.28 rather than 0.0 so the motor does not try to
-    rotate one full revolution.
-    """
+    """Convert desired joint angle to raw MIT motor position."""
     direction = float(direction)
     p_base = float(offset) + direction * float(q_des)
     if feedback_position is None or not np.isfinite(feedback_position):
         return p_base
 
-    period = TWO_PI
     if p_min is None:
         p_min = -np.inf
     if p_max is None:
@@ -129,13 +71,7 @@ def motor_command_position_near_feedback(
         if p_min <= p_branch <= p_max:
             return float(p_branch)
 
-    k_min = int(np.ceil((p_min - p_base) / period)) if np.isfinite(p_min) else -3
-    k_max = int(np.floor((p_max - p_base) / period)) if np.isfinite(p_max) else 3
-    if k_min > k_max:
-        return p_base
-
-    candidates = [p_base + k * period for k in range(k_min, k_max + 1)]
-    return float(min(candidates, key=lambda p: abs(p - float(feedback_position))))
+    return p_base
 
 
 def signed_offset_to_uint(x, x_min, x_max):
@@ -371,6 +307,37 @@ class MotorCommandLayer:
         q_des = float(direction) * (float(p_des) - float(offset))
         q_des = self.apply_hard_joint_limit(joint_name, q_des)
         return float(offset) + float(direction) * q_des, q_des
+
+    def set_software_zero_from_feedback(self, feedback_by_joint, active_joints=None):
+        """
+        Make the current measured motor position read as q=0 in software.
+
+        This updates only this process' joint_offsets. It does not send a
+        RobStride set-zero frame, so MIT control can keep holding the same raw
+        motor position without a torque drop or one-turn jump.
+        """
+        if feedback_by_joint is None:
+            feedback_by_joint = {}
+        if active_joints is None:
+            active_joints = self.active_joints
+
+        updated = {}
+        missing = []
+        old_offsets = dict(self.joint_offsets)
+        for joint_name in active_joints:
+            feedback = feedback_by_joint.get(joint_name)
+            if feedback is None or "position" not in feedback:
+                missing.append(joint_name)
+                continue
+            self.joint_offsets[joint_name] = float(feedback["position"])
+            updated[joint_name] = self.joint_offsets[joint_name]
+        try:
+            self.reload_joint_limits(force=True)
+        except Exception:
+            self.joint_offsets = old_offsets
+            self.reload_joint_limits(force=True)
+            raise
+        return updated, missing
 
     def apply_mit_parameter_limits(self, p_des, v_des, kp, kd, tau_ff):
         self.reload_control_limits()

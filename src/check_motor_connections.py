@@ -20,14 +20,13 @@ from motor_command_layer import (
     MotorCommandLayer,
     decode_mit_feedback_frame,
     motor_position_to_joint_angle,
-    nearest_equivalent_angle,
 )
 from robstride_can_interface import ATUsbCan
 
 
 ROOT = Path(__file__).resolve().parents[1]
 TELEMETRY_PORT_DEFAULT = 57543
-POSE_SNAP_TOLERANCE_RAD = 0.35
+POSE_SNAP_TOLERANCE_RAD = 0.0
 
 
 class KeyboardReader:
@@ -151,52 +150,7 @@ def infer_initial_pose_reference(
     branch_offsets,
     stale_seconds,
 ):
-    now = time.monotonic()
-    items = []
-    for joint_name in joints:
-        if joint_name in branch_offsets:
-            continue
-        feedback = feedback_for_joint(
-            joint_name,
-            motor_ids,
-            joint_can_bus,
-            feedback_by_bus_motor_id,
-            feedback_by_motor_id,
-        )
-        if feedback is None:
-            continue
-        if now - feedback["timestamp"] > stale_seconds:
-            continue
-        if int(feedback.get("fault_bits", 0)) != 0:
-            continue
-        if joint_name not in poses.get("default_pose", {}):
-            continue
-        items.append((joint_name, feedback))
-
-    # With too few joints, pose classification is ambiguous for thigh joints.
-    # Let the ordered per-joint references handle one-leg/two-joint checks.
-    if len(items) < 4:
-        return None
-
-    best_pose = None
-    best_score = None
-    for _, pose in poses.items():
-        errors = []
-        for joint_name, feedback in items:
-            if joint_name not in pose:
-                continue
-            offset = float(layer.joint_offsets.get(joint_name, 0.0))
-            direction = float(layer.joint_directions.get(joint_name, 1.0))
-            q_raw = direction * (float(feedback["position"]) - offset)
-            q_equiv = nearest_equivalent_angle(q_raw, reference=float(pose[joint_name]))
-            errors.append(q_equiv - float(pose[joint_name]))
-        if not errors:
-            continue
-        score = float((sum(err * err for err in errors) / len(errors)) ** 0.5)
-        if best_score is None or score < best_score:
-            best_score = score
-            best_pose = pose
-    return best_pose
+    return None
 
 
 def resolve_feedback_joint_positions(
@@ -213,18 +167,6 @@ def resolve_feedback_joint_positions(
     stale_seconds,
 ):
     now = time.monotonic()
-    initial_pose = infer_initial_pose_reference(
-        joints=joints,
-        motor_ids=motor_ids,
-        joint_can_bus=joint_can_bus,
-        layer=layer,
-        poses=poses,
-        feedback_by_bus_motor_id=feedback_by_bus_motor_id,
-        feedback_by_motor_id=feedback_by_motor_id,
-        branch_offsets=branch_offsets,
-        stale_seconds=stale_seconds,
-    )
-
     for joint_name in joints:
         feedback = feedback_for_joint(
             joint_name,
@@ -243,23 +185,12 @@ def resolve_feedback_joint_positions(
         raw_position = float(feedback["position"])
         offset = float(layer.joint_offsets.get(joint_name, 0.0))
         direction = float(layer.joint_directions.get(joint_name, 1.0))
-        if joint_name in branch_offsets:
-            q_raw = direction * (raw_position - offset - float(branch_offsets[joint_name]))
-            q_reference = float(joint_positions.get(joint_name, 0.0))
-            q_joint = nearest_equivalent_angle(q_raw, reference=q_reference)
-        else:
-            references = [float(joint_positions.get(joint_name, 0.0))]
-            if initial_pose is not None and joint_name in initial_pose:
-                references.insert(0, float(initial_pose[joint_name]))
-            references.extend(pose_references.get(joint_name, []))
-            q_joint = motor_position_to_joint_angle(
-                raw_position,
-                offset=offset,
-                direction=direction,
-                references=references,
-                pose_snap_tolerance=POSE_SNAP_TOLERANCE_RAD,
-            )
-            branch_offsets[joint_name] = raw_position - offset - direction * q_joint
+        q_joint = motor_position_to_joint_angle(
+            raw_position,
+            offset=offset,
+            direction=direction,
+        )
+        branch_offsets[joint_name] = 0.0
 
         joint_positions[joint_name] = q_joint
         velocity_raw = float(feedback["velocity"])
