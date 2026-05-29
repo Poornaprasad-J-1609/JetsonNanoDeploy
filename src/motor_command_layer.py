@@ -450,12 +450,20 @@ class MotorCommandLayer:
             return buses.read_available_frames(timeout=timeout)
 
         frames = []
+        unique_buses = []
         seen_bus_ids = set()
         for bus_name, bus in buses.items():
             if id(bus) in seen_bus_ids:
                 continue
             seen_bus_ids.add(id(bus))
-            bus_frames = bus.read_available_frames(timeout=timeout)
+            unique_buses.append((bus_name, bus))
+
+        per_bus_timeout = float(timeout)
+        if unique_buses and per_bus_timeout > 0.0:
+            per_bus_timeout /= float(len(unique_buses))
+
+        for bus_name, bus in unique_buses:
+            bus_frames = bus.read_available_frames(timeout=per_bus_timeout)
             for frame in bus_frames:
                 frame.bus_name = bus_name
             frames.extend(bus_frames)

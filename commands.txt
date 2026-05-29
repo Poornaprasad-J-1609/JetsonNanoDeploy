@@ -110,12 +110,13 @@ Main controller joystick workflow:
 
 Put the robot manually in its stand/default pose, then run:
 
-`/usr/bin/python3 src/check_motor_connections.py \
-  --port-front /dev/ttyUSB1 \
-  --port-back /dev/ttyUSB0 \
+/usr/bin/python3 src/check_motor_connections.py \
+  --port-front "$FRONT_CAN" \
+  --port-back "$BACK_CAN" \
   --all \
   --rate 20 \
-  --print-every 1.0 \`
+  --print-every 1.0 \
+  --gui-only
   
 
 Keyboard while this command is running:
@@ -196,7 +197,8 @@ After launch: press button 5 to stand. D-pad zero is optional.
   --speed-scale-initial 0.05 \
   --speed-scale-min 0.05 \
   --speed-scale-max 0.05 \
-  --feedback-timeout 0.05 \
+  --feedback-timeout 0.03 \
+  --pose-sync-error-rad 0.12 \
   --log-every 5 \
   --joint-debug \
   --gui
@@ -232,7 +234,8 @@ move the joystick sticks. D-pad zero is optional.
   --speed-scale-min 0.05 \
   --speed-scale-max 0.40 \
   --speed-scale-step 0.05 \
-  --feedback-timeout 0.05 \
+  --feedback-timeout 0.03 \
+  --pose-sync-error-rad 0.12 \
   --log-every 5 \
   --joint-debug \
   --gui
@@ -265,7 +268,8 @@ move the joystick sticks. D-pad zero is optional.
   --speed-scale-min 0.05 \
   --speed-scale-max 0.40 \
   --speed-scale-step 0.05 \
-  --feedback-timeout 0.05 \
+  --feedback-timeout 0.03 \
+  --pose-sync-error-rad 0.12 \
   --log-every 5 \
   --joint-debug \
   --gui

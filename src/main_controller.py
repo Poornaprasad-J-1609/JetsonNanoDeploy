@@ -796,6 +796,7 @@ def run_startup_to_stand(
 
     safety_faulted = False
     for step in range(steps):
+        cycle_start = time.monotonic()
         if hasattr(estimator, "imu_stale") and estimator.imu_stale():
             reason = "IMU data missing or stale during startup"
             print("\nEMERGENCY STOP:", reason)
@@ -854,7 +855,11 @@ def run_startup_to_stand(
         elif mode == "mit-signal":
             motor_layer.send_signal_commands(buses, commands)
 
-        refresh_estimator_feedback(estimator, timeout=feedback_timeout)
+        active_feedback_timeout = min(
+            float(feedback_timeout),
+            max(0.002, 0.35 * float(dt)),
+        )
+        refresh_estimator_feedback(estimator, timeout=active_feedback_timeout)
         reason = encoder_safety_stop_reason(
             safety=safety,
             estimator=estimator,
@@ -911,7 +916,8 @@ def run_startup_to_stand(
         q_previous_target = q_safe.copy()
         if telemetry is not None:
             telemetry.send(step, "stand", [0.0, 0.0, 0.0], dummy_command_source, commands, safety_ok=True)
-        time.sleep(dt)
+        cycle_elapsed = time.monotonic() - cycle_start
+        time.sleep(max(0.0, dt - cycle_elapsed))
 
     if safety_faulted:
         print("\nStartup phase stopped by safety fault.")
@@ -944,6 +950,7 @@ def run_policy_loop(
     auto_stand_zero,
     stand_zero_error_rad,
     stand_zero_settle_steps,
+    pose_sync_error_rad,
     telemetry=None,
     csv_logger=None,
 ):
@@ -981,6 +988,7 @@ def run_policy_loop(
     print("zero_frame:", zero_frame)
     print("zero_calibrated:", bool(zero_calibrated))
     print("auto_stand_zero:", bool(auto_stand_zero))
+    print("pose_sync_error_rad:", float(pose_sync_error_rad))
     print("imu_stabilization:", bool(motion_assist_cfg.get("imu_posture", {}).get("enabled", False)))
     print("gait_assist:", bool(motion_assist_cfg.get("gait_assist", {}).get("enabled", False)))
     if steps is None:
@@ -990,6 +998,7 @@ def run_policy_loop(
 
     step = 0
     while steps is None or step < steps:
+        cycle_start = time.monotonic()
         (
             q_current,
             qd_current,
@@ -1313,7 +1322,11 @@ def run_policy_loop(
         elif mode == "mit-signal":
             motor_layer.send_signal_commands(buses, commands)
 
-        refresh_estimator_feedback(estimator, timeout=feedback_timeout)
+        active_feedback_timeout = min(
+            float(feedback_timeout),
+            max(0.002, 0.35 * float(dt)),
+        )
+        refresh_estimator_feedback(estimator, timeout=active_feedback_timeout)
         reason = encoder_safety_stop_reason(
             safety=safety,
             estimator=estimator,
@@ -1336,6 +1349,23 @@ def run_policy_loop(
                 phase="policy",
             )
             break
+
+        advance_target = True
+        if (
+            active_control_mode in ("stand", "sit")
+            and encoder_feedback_required(mode, estimator)
+            and float(pose_sync_error_rad) > 0.0
+        ):
+            q_feedback = getattr(estimator, "q_current", None)
+            if q_feedback is not None:
+                sync_error = max_active_error(q_feedback, q_safe_target, active_indices)
+                if sync_error > float(pose_sync_error_rad):
+                    advance_target = False
+                    if step % max(1, log_every) == 0:
+                        print(
+                            f"[SYNC] holding pose target: max joint lag "
+                            f"{sync_error:.3f} rad > {float(pose_sync_error_rad):.3f} rad"
+                        )
 
         if active_control_mode == "stand" and stand_zero_pending:
             q_feedback = getattr(estimator, "q_current", q_safe_target)
@@ -1406,7 +1436,8 @@ def run_policy_loop(
         else:
             previous_action = np.zeros(action_dim, dtype=np.float32)
 
-        q_previous_target = q_safe_target.copy()
+        if advance_target:
+            q_previous_target = q_safe_target.copy()
 
         if telemetry is not None and step % 2 == 0:
             telemetry.send(
@@ -1420,7 +1451,8 @@ def run_policy_loop(
             )
 
         step += 1
-        time.sleep(dt)
+        cycle_elapsed = time.monotonic() - cycle_start
+        time.sleep(max(0.0, dt - cycle_elapsed))
 
     print("\nPolicy / pose phase completed.")
 
@@ -1592,6 +1624,12 @@ def main():
     )
     parser.add_argument("--stand-zero-error-rad", type=float, default=0.08)
     parser.add_argument("--stand-zero-settle-steps", type=int, default=15)
+    parser.add_argument(
+        "--pose-sync-error-rad",
+        type=float,
+        default=0.12,
+        help="during sit/stand, hold the next target step until live feedback is within this max active-joint error; 0 disables",
+    )
     parser.add_argument(
         "--walk-command-threshold",
         type=float,
@@ -2008,6 +2046,7 @@ def main():
             auto_stand_zero=args.auto_stand_zero,
             stand_zero_error_rad=args.stand_zero_error_rad,
             stand_zero_settle_steps=max(1, args.stand_zero_settle_steps),
+            pose_sync_error_rad=max(0.0, args.pose_sync_error_rad),
             telemetry=telemetry,
             csv_logger=csv_logger,
         )

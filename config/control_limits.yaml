@@ -37,9 +37,12 @@ mit_parameters:
   v_min: -30.0
   v_max: 30.0
   kp_min: 0.0
-  kp_max: 30.0
+  # Startup sit/stand gains in config/mit_motor_control.yaml need headroom above
+  # policy gains. Policy gains remain low because their configured values are
+  # already below this cap.
+  kp_max: 100.0
   kd_min: 0.0
-  kd_max: 2.0
+  kd_max: 5.0
   tau_ff_min: -1.0
   tau_ff_max: 1.0
 
