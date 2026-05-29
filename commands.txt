@@ -108,12 +108,12 @@ Main controller joystick workflow:
 
 Put the robot manually in its stand/default pose, then run:
 
-/usr/bin/python3 src/check_motor_connections.py \
+`/usr/bin/python3 src/check_motor_connections.py \
   --port-front /dev/ttyUSB1 \
   --port-back /dev/ttyUSB0 \
   --all \
   --rate 20 \
-  --print-every 1.0 \
+  --print-every 1.0 \`
   
 
 Keyboard while this command is running:

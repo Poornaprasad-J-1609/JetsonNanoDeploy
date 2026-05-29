@@ -334,6 +334,23 @@ def command_torque_stats(commands):
     return float(np.abs(tau).mean()), float(np.abs(tau).max())
 
 
+def command_bus_counts(commands):
+    counts = {}
+    for cmd in commands:
+        bus_name = str(cmd.get("bus_name", "front"))
+        counts[bus_name] = counts.get(bus_name, 0) + 1
+    return counts
+
+
+def format_bus_counts(counts):
+    if not counts:
+        return "none"
+    return " ".join(
+        f"{bus_name}:{counts[bus_name]:02d}"
+        for bus_name in sorted(counts)
+    )
+
+
 def feedback_torque_stats(estimator):
     feedback_by_joint = getattr(estimator, "last_feedback_by_joint", {})
     if not feedback_by_joint:
@@ -355,6 +372,7 @@ def estimator_imu_status(estimator):
 def compact_telemetry_record(step, mode, command, command_source, commands, estimator, action=None, phase="policy"):
     command = np.asarray(command, dtype=np.float32)
     tau_cmd_mean, tau_cmd_max = command_torque_stats(commands)
+    bus_counts = command_bus_counts(commands)
     tau_fb = feedback_torque_stats(estimator)
     action_abs_max = 0.0 if action is None else float(np.max(np.abs(action)))
 
@@ -372,6 +390,7 @@ def compact_telemetry_record(step, mode, command, command_source, commands, esti
         "tau_cmd": tau_cmd_mean,
         "tau_cmd_max": tau_cmd_max,
         "cmds": int(len(commands)),
+        "bus_counts": format_bus_counts(bus_counts),
         "tau_fb": None,
         "tau_fb_max": None,
         "fault_reason": "",
@@ -395,7 +414,8 @@ def compact_telemetry_line(record):
         f"act_max={float(record['act_max']): .3f} "
         f"tau_cmd={float(record['tau_cmd']): .3f} "
         f"tau_cmd_max={float(record['tau_cmd_max']): .3f} "
-        f"cmds={int(record['cmds']):02d}"
+        f"cmds={int(record['cmds']):02d} "
+        f"bus={record.get('bus_counts', 'none')}"
     )
 
     if record["tau_fb"] is None:
@@ -439,6 +459,7 @@ class CsvRunLogger:
         "tau_cmd",
         "tau_cmd_max",
         "cmds",
+        "bus_counts",
         "tau_fb",
         "tau_fb_max",
         "fault_reason",
@@ -534,13 +555,31 @@ def print_joint_debug(commands, estimator):
         if joint_name in feedback_by_joint:
             tau_fb = float(feedback_by_joint[joint_name]["torque"])
 
+        q_err = None if q_fb is None else float(cmd["q_des"] - q_fb)
+        target_motion = abs(float(cmd["q_requested"])) > 0.02 or abs(float(cmd["q_des"])) > 0.02
+        status = "no-feedback" if joint_name not in feedback_by_joint else "tracking"
+        if not target_motion:
+            status = "target-zero" if status != "no-feedback" else "target-zero/no-feedback"
+        elif q_err is not None:
+            if abs(q_err) <= 0.06:
+                status = "tracking"
+            elif qd_fb is not None and abs(qd_fb) < 0.02:
+                status = "slow/stuck"
+            else:
+                status = "lagging"
+        if abs(float(cmd["q_requested"]) - float(cmd["q_des"])) > 1e-5:
+            status += "/clipped"
+
         line = (
             f"  joint={joint_name:16s} "
+            f"id=0x{int(cmd['motor_id']):02X} "
+            f"bus={cmd.get('bus_name', 'front'):5s} "
+            f"status={status:20s} "
             f"q_req={cmd['q_requested']:+.3f} "
             f"q_des={cmd['q_des']:+.3f}"
         )
         if q_fb is not None:
-            line += f" q_fb={q_fb:+.3f} q_err={cmd['q_des'] - q_fb:+.3f}"
+            line += f" q_fb={q_fb:+.3f} q_err={q_err:+.3f}"
         if qd_fb is not None:
             line += f" qd_fb={qd_fb:+.3f}"
         if tau_fb is not None:
