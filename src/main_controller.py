@@ -549,10 +549,21 @@ def print_joint_debug(commands, estimator):
 
 
 def request_feedback_snapshot(motor_layer, buses, mode):
+    """Poll encoder feedback with RobStride management frames.
+
+    RobStride comm_type_stop is also used by the simple encoder reader as a
+    poll frame, but it can briefly drop MIT torque. Use this only before active
+    control starts, never during sit/stand/walk transitions.
+    """
     if mode == "mit-signal" and buses is not None:
         motor_layer.send_raw_commands(buses, motor_layer.build_feedback_poll_commands())
         time.sleep(0.002)
         motor_layer.send_raw_commands(buses, motor_layer.build_enable_commands())
+
+
+def count_active_feedback(estimator, active_joints):
+    feedback = getattr(estimator, "last_feedback_by_joint", {}) or {}
+    return sum(1 for joint_name in active_joints if joint_name in feedback)
 
 
 def encoder_feedback_required(mode, estimator):
@@ -655,7 +666,8 @@ def apply_software_zero_calibration(
     mode,
     label,
 ):
-    request_feedback_snapshot(motor_layer=motor_layer, buses=buses, mode=mode)
+    # Do not send stop/poll frames here. During live control those frames can
+    # drop torque and cause exactly the sit/stand jerk we are avoiding.
     refresh_estimator_feedback(estimator, timeout=feedback_timeout)
 
     if hasattr(estimator, "apply_software_zero"):
@@ -1062,11 +1074,6 @@ def run_policy_loop(
             if mode_request is None:
                 pass
             elif mode_request in ("stand", "sit"):
-                request_feedback_snapshot(
-                    motor_layer=motor_layer,
-                    buses=buses,
-                    mode=mode,
-                )
                 feedback_count = refresh_estimator_feedback(
                     estimator,
                     timeout=feedback_timeout,
@@ -1084,6 +1091,13 @@ def run_policy_loop(
                         f"\n[FEEDBACK] pose transition starts from "
                         f"{feedback_count} measured motor angle(s)"
                     )
+                else:
+                    cached_count = count_active_feedback(estimator, motor_layer.active_joints)
+                    if cached_count > 0:
+                        print(
+                            f"\n[FEEDBACK] pose transition uses "
+                            f"{cached_count} cached live motor angle(s)"
+                        )
                 reason = encoder_safety_stop_reason(
                     safety=safety,
                     estimator=estimator,
@@ -1116,6 +1130,9 @@ def run_policy_loop(
                     stand_zero_pending = bool(auto_stand_zero)
                     stand_zero_settle_count = 0
                     print("[ZERO CAL] stand target uses stand_pose_when_sit_zero; stand will auto-zero when settled.")
+                elif control_mode == "sit":
+                    stand_zero_pending = False
+                    stand_zero_settle_count = 0
                 print(f"\n[MODE CHANGE] control_mode -> {control_mode}")
 
         command = command_source.read()
