@@ -30,6 +30,11 @@ communication:
   # Manual gait scripts use a short gap between RobStride frames.
   # Keep this conservative for real hardware; lower only after bus tests.
   frame_gap_s: 0.0015
+  # With separate front/back USB-CAN adapters, send each bus' MIT command batch
+  # from its own thread so all 12 joints receive each control tick as closely
+  # together as the adapters allow. If both buses use the same serial port, the
+  # code automatically falls back to one writer.
+  parallel_bus_send: true
 
 gains:
   startup:
