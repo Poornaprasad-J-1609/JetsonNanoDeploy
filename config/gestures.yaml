@@ -100,7 +100,26 @@ gestures:
         pose_when_crouch_zero:
           FR_thigh_joint: -2.4
           FR_calf_joint: 1.35
-
+      - duration_s: 0.5
+        hold_s: 1.0
+        pose_when_crouch_zero:
+          FR_thigh_joint: -2.4
+          FR_calf_joint: 0.32
+      - duration_s: 0.5
+        hold_s: 0.5
+        pose_when_crouch_zero:
+          FR_thigh_joint: -2.4
+          FR_calf_joint: 1.35
+      - duration_s: 0.5
+        hold_s: 1.0
+        pose_when_crouch_zero:
+          FR_thigh_joint: -2.4
+          FR_calf_joint: 0.32
+      - duration_s: 0.5
+        hold_s: 0.5
+        pose_when_crouch_zero:
+          FR_thigh_joint: -2.4
+          FR_calf_joint: 1.35
   # Button 1: namaste.
   namaste:
     allowed_zero_frames: ["crouch"]
