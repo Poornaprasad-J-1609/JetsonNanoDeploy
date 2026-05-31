@@ -163,9 +163,8 @@ class JoystickCommandSource:
     Buttons:
       button 4       -> stop walking and sit/crouch
       button 5       -> stand
-      buttons 0-3    -> emergency stop
-      button 6       -> reduce joystick speed scale
-      button 7       -> increase joystick speed scale
+      button 3       -> emergency stop when config/joystick.yaml remaps 0-2
+      button 6/7     -> speed scale only when enabled; normally used by gestures
     """
 
     def __init__(
@@ -260,6 +259,7 @@ class JoystickCommandSource:
         self.command = np.zeros(3, dtype=np.float32)
         self.prev_buttons = {}
         self.prev_hats = {}
+        self.prev_gesture_buttons = {}
 
         try:
             pygame = init_pygame_for_joystick()
@@ -506,6 +506,19 @@ class JoystickCommandSource:
 
         return None
 
+    def get_gesture_request(self, button_map):
+        """Return gesture name for the first rising-edge press in button_map, or None."""
+        if not button_map:
+            return None
+        self.pygame.event.pump()
+        for btn_id, gesture_name in button_map.items():
+            now = self._button(btn_id)
+            prev = self.prev_gesture_buttons.get(btn_id, False)
+            self.prev_gesture_buttons[btn_id] = now
+            if now and not prev:
+                return gesture_name
+        return None
+
     def raw_state(self):
         self.pygame.event.pump()
         return {
@@ -623,6 +636,11 @@ class CommandSource:
     def get_calibration_request(self):
         if hasattr(self.impl, "get_calibration_request"):
             return self.impl.get_calibration_request()
+        return None
+
+    def get_gesture_request(self, button_map):
+        if hasattr(self.impl, "get_gesture_request"):
+            return self.impl.get_gesture_request(button_map)
         return None
 
     def raw_state(self):

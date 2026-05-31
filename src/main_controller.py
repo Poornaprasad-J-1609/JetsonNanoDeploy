@@ -23,6 +23,7 @@ from joystick_interface import CommandSource, load_joystick_defaults, load_speed
 from imu_interface import create_imu_sensor, load_imu_config
 from robstride_can_interface import ATUsbCan
 from motor_command_layer import MotorCommandLayer, print_mit_commands
+from gesture_controller import GestureLibrary, KeyboardGestureReader
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -1038,6 +1039,8 @@ def run_policy_loop(
     policy_command_yaw_max,
     policy_action_clip,
     policy_action_smoothing,
+    gesture_library=None,
+    keyboard_gesture_reader=None,
     telemetry=None,
     csv_logger=None,
 ):
@@ -1058,6 +1061,8 @@ def run_policy_loop(
     stand_zero_settle_count = 0
     calibration_hold_until_step = -1
     active_indices = active_joint_indices(runner.policy_order, motor_layer.active_joints)
+    gesture_state = None
+    gesture_completed = False
 
     print("\n" + "#" * 80)
     print("POLICY / POSE PHASE")
@@ -1066,9 +1071,10 @@ def run_policy_loop(
     print("Joystick buttons:")
     print("  button 4    -> STOP walking and SIT/CROUCH pose")
     print("  button 5    -> STAND pose")
-    print("  button 6    -> reduce speed scale")
-    print("  button 7    -> increase speed scale")
-    print("  buttons 0-3 -> EMERGENCY STOP")
+    print("  button 3    -> EMERGENCY STOP")
+    print("  buttons 0-2 -> YAML gesture slots, enabled only after stand-zero")
+    print("  button 6    -> gesture: hi")
+    print("  button 7    -> gesture: namaste")
     print("  D-pad down / configured zero axis -> software-zero current crouch/default pose")
     print("Joystick axes:")
     print("  left stick Y  -> forward/back vx")
@@ -1097,6 +1103,11 @@ def run_policy_loop(
         print("[ZERO CAL] initial stand target will auto-zero when settled.")
     print("imu_stabilization:", bool(motion_assist_cfg.get("imu_posture", {}).get("enabled", False)))
     print("gait_assist:", bool(motion_assist_cfg.get("gait_assist", {}).get("enabled", False)))
+    if gesture_library is not None and gesture_library.enabled:
+        if gesture_library.joystick_enabled:
+            print("gesture_buttons:", gesture_library.button_hint())
+        elif gesture_library.keyboard_enabled:
+            print("gesture_keys:", gesture_library.key_hint())
     if steps is None:
         print("policy_steps: unlimited, running until emergency stop or Ctrl+C")
     else:
@@ -1343,6 +1354,10 @@ def run_policy_loop(
                     break
 
             if mode_request is not None:
+                if gesture_state is not None:
+                    print(f"\n[GESTURE] {gesture_state.name} cancelled by {mode_request} request.")
+                    gesture_state = None
+                    gesture_completed = False
                 control_mode = mode_request
                 if control_mode in ("stand", "sit"):
                     has_motion_target = True
@@ -1354,6 +1369,95 @@ def run_policy_loop(
                     stand_zero_pending = False
                     stand_zero_settle_count = 0
                 print(f"\n[MODE CHANGE] control_mode -> {control_mode}")
+
+        gesture_request = None
+        if gesture_library is not None and gesture_library.enabled:
+            if gesture_library.joystick_enabled:
+                gesture_request = command_source.get_gesture_request(gesture_library.button_map)
+            elif gesture_library.keyboard_enabled and keyboard_gesture_reader is not None:
+                key = keyboard_gesture_reader.read_key()
+                gesture_request = gesture_library.gesture_for_key(key)
+        if gesture_request is not None:
+            if gesture_state is not None:
+                print(f"[GESTURE] ignored {gesture_request}; {gesture_state.name} is already running.")
+            elif not gesture_library.has_gesture(gesture_request):
+                print(f"[GESTURE] ignored unknown gesture: {gesture_request}")
+            elif control_mode not in ("hold", "stand"):
+                print(f"[GESTURE] ignored {gesture_request}; gestures are allowed only after STAND, from hold/stand.")
+            elif control_mode == "stand" and stand_zero_pending:
+                print(f"[GESTURE] ignored {gesture_request}; wait for stand auto-zero to finish.")
+            elif not zero_calibrated:
+                print(f"[GESTURE] ignored {gesture_request}; zero calibration is required first.")
+            elif zero_frame != "stand":
+                print(f"[GESTURE] ignored {gesture_request}; press STAND first and wait for zero_frame -> stand.")
+            elif not gesture_library.allowed_in_zero_frame(gesture_request, zero_frame):
+                print(f"[GESTURE] ignored {gesture_request}; not allowed in zero_frame={zero_frame}.")
+            else:
+                try:
+                    if encoder_feedback_required(mode, estimator):
+                        n_active = len(motor_layer.active_joints)
+                        if count_fresh_active_feedback(
+                            estimator,
+                            motor_layer.active_joints,
+                            getattr(safety, "max_feedback_age_s", 0.25),
+                        ) < n_active:
+                            request_feedback_snapshot(motor_layer, buses, mode)
+                        feedback_count = refresh_estimator_feedback(
+                            estimator,
+                            timeout=feedback_timeout,
+                        )
+                        (
+                            q_current,
+                            qd_current,
+                            base_lin_vel_b,
+                            base_ang_vel_b,
+                            projected_gravity_b,
+                        ) = estimator.read()
+                        q_previous_target = q_current.copy()
+                        if feedback_count > 0:
+                            print(
+                                f"\n[FEEDBACK] gesture {gesture_request} starts from "
+                                f"{feedback_count} measured motor angle(s)"
+                            )
+                        reason = encoder_safety_stop_reason(
+                            safety=safety,
+                            estimator=estimator,
+                            active_joints=motor_layer.active_joints,
+                            mode=mode,
+                            require_feedback=True,
+                        )
+                        if reason is not None:
+                            print("\nEMERGENCY STOP:", reason)
+                            fault_command = command_source.read()
+                            publish_safety_fault(
+                                telemetry=telemetry,
+                                csv_logger=csv_logger,
+                                step=step,
+                                mode="encoder_fault",
+                                command=fault_command,
+                                command_source=command_source,
+                                commands=[],
+                                estimator=estimator,
+                                reason=reason,
+                                action=np.zeros(action_dim, dtype=np.float32),
+                                phase="startup",
+                            )
+                            break
+
+                    gesture_state = gesture_library.build_state(
+                        name=gesture_request,
+                        zero_frame=zero_frame,
+                        q_start=q_previous_target,
+                        now=step * dt,
+                    )
+                    gesture_completed = False
+                    control_mode = "hold"
+                    has_motion_target = True
+                    stand_zero_pending = False
+                    stand_zero_settle_count = 0
+                    print(f"\n[GESTURE] started -> {gesture_state.name}")
+                except Exception as exc:
+                    print(f"[GESTURE] failed to start {gesture_request}: {exc}")
 
         command = command_source.read()
         if step < calibration_hold_until_step:
@@ -1375,7 +1479,9 @@ def run_policy_loop(
             walk_requested = False
             if step % max(1, log_every) == 0:
                 print("[ZERO CAL] walking blocked until STAND auto-zero completes.")
-        if control_mode == "sit":
+        if gesture_state is not None:
+            active_control_mode = f"gesture:{gesture_state.name}"
+        elif control_mode == "sit":
             active_control_mode = "sit"
         elif walk_requested:
             active_control_mode = "policy"
@@ -1387,7 +1493,17 @@ def run_policy_loop(
         if walk_requested:
             has_motion_target = True
 
-        if active_control_mode == "hold":
+        if str(active_control_mode).startswith("gesture:"):
+            q_policy_target, gesture_completed = gesture_state.target_at(step * dt)
+            q_safe_target = safety.safety_filter(q_policy_target, q_previous_target)
+            commands = motor_layer.build_mit_commands(
+                q_safe_target,
+                phase="startup",
+                feedback_by_joint=getattr(estimator, "last_feedback_by_joint", None),
+            )
+            action = np.zeros(action_dim, dtype=np.float32)
+
+        elif active_control_mode == "hold":
             q_safe_target = q_previous_target.copy()
             commands = (
                 motor_layer.build_mit_commands(
@@ -1512,7 +1628,7 @@ def run_policy_loop(
 
         advance_target = True
         if (
-            active_control_mode in ("stand", "sit")
+            (active_control_mode in ("stand", "sit") or str(active_control_mode).startswith("gesture:"))
             and encoder_feedback_required(mode, estimator)
             and float(pose_sync_error_rad) > 0.0
         ):
@@ -1599,6 +1715,16 @@ def run_policy_loop(
 
         if advance_target:
             q_previous_target = q_safe_target.copy()
+
+        if (
+            str(active_control_mode).startswith("gesture:")
+            and gesture_completed
+            and advance_target
+        ):
+            print(f"\n[GESTURE] completed -> {gesture_state.name}")
+            gesture_state = None
+            gesture_completed = False
+            control_mode = "hold"
 
         if telemetry is not None and step % 2 == 0:
             telemetry.send(
@@ -1894,6 +2020,23 @@ def main():
         default=float(policy_deploy_defaults.get("action_smoothing", 0.0)),
         help="blend current policy action with previous sent action; 0 disables, larger is smoother/slower",
     )
+    parser.add_argument(
+        "--gestures",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="enable/disable YAML gesture playback",
+    )
+    parser.add_argument(
+        "--gesture-config",
+        default=str(ROOT / "config" / "gestures.yaml"),
+        help="YAML file containing joystick/keyboard gesture mappings and joint-angle waypoints",
+    )
+    parser.add_argument(
+        "--keyboard-gestures",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="enable/disable keyboard number-key gesture triggers",
+    )
 
     parser.add_argument(
         "--fake-start",
@@ -2079,6 +2222,7 @@ def main():
     telemetry = None
     gui_proc = None
     csv_logger = None
+    keyboard_gesture_reader = None
     startup_zero_calibrated = False
 
     try:
@@ -2089,6 +2233,23 @@ def main():
         )
         if csv_logger.enabled:
             print("\nCSV log:", csv_logger.path)
+
+        gesture_library = GestureLibrary(
+            policy_order=runner.policy_order,
+            path=args.gesture_config,
+            enabled=args.gestures,
+        )
+        keyboard_gesture_reader = KeyboardGestureReader(
+            enabled=bool(args.keyboard_gestures and gesture_library.enabled and gesture_library.keyboard_enabled)
+        )
+        if gesture_library.enabled:
+            print("\nGesture config:", gesture_library.path)
+            if gesture_library.joystick_enabled:
+                print("Gesture joystick buttons:", gesture_library.button_hint())
+            elif gesture_library.keyboard_enabled:
+                print("Gesture keyboard keys:", gesture_library.key_hint())
+                if args.keyboard_gestures and not keyboard_gesture_reader.active:
+                    print("Gesture keyboard reader inactive: terminal is not interactive.")
 
         imu_sensor = create_imu_sensor(
             source=args.imu_source,
@@ -2281,6 +2442,8 @@ def main():
             policy_command_yaw_max=args.policy_command_yaw_max,
             policy_action_clip=args.policy_action_clip,
             policy_action_smoothing=args.policy_action_smoothing,
+            gesture_library=gesture_library,
+            keyboard_gesture_reader=keyboard_gesture_reader,
             telemetry=telemetry,
             csv_logger=csv_logger,
         )
@@ -2289,6 +2452,8 @@ def main():
         print("\nKeyboard interrupt: stopping controller.")
 
     finally:
+        if keyboard_gesture_reader is not None:
+            keyboard_gesture_reader.close()
         command_source.close()
         if imu_sensor is not None:
             imu_sensor.close()

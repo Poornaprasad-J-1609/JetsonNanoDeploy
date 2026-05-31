@@ -1,0 +1,142 @@
+enabled: true
+
+# Joystick gesture mapping.
+#
+# Important:
+# - Button 4 remains sit/crouch.
+# - Button 5 remains stand.
+# - Button 3 remains emergency stop.
+# - Buttons 6/7 no longer change speed; they trigger hi/namaste.
+# - Buttons 0/1/2 are free user-defined gesture slots.
+joystick:
+  enabled: true
+  mapping:
+    0: gesture_0
+    1: gesture_1
+    2: gesture_2
+    6: hi
+    7: namaste
+
+# Optional terminal keyboard shortcuts. Joystick mapping above is the normal
+# path on the robot.
+keyboard:
+  enabled: true
+  mapping:
+    "0": gesture_0
+    "1": gesture_1
+    "2": gesture_2
+    "6": hi
+    "7": namaste
+
+defaults:
+  # Gesture targets are absolute joint angles in the active software-zero frame
+  # unless a waypoint sets relative: true.
+  relative: false
+  duration_s: 1.0
+  hold_s: 0.25
+  return_to_start: true
+
+  # Gimmicks are allowed only after the robot reaches stand and the controller
+  # auto-zeros stand as the RL/default zero frame.
+  allowed_zero_frames: ["stand"]
+
+gestures:
+  # User-defined slots for joystick buttons 0, 1, and 2.
+  # Fill pose_when_stand_zero with the joint angles you want. Empty poses are
+  # valid and hold the current pose, so these slots are safe until you edit them.
+  gesture_0:
+    allowed_zero_frames: ["stand"]
+    return_to_start: true
+    waypoints:
+      - duration_s: 1.0
+        hold_s: 0.5
+        pose_when_stand_zero: {}
+
+  gesture_1:
+    allowed_zero_frames: ["stand"]
+    return_to_start: true
+    waypoints:
+      - duration_s: 1.0
+        hold_s: 0.5
+        pose_when_stand_zero: {}
+
+  gesture_2:
+    allowed_zero_frames: ["stand"]
+    return_to_start: true
+    waypoints:
+      - duration_s: 1.0
+        hold_s: 0.5
+        pose_when_stand_zero: {}
+
+  # Button 6: hi.
+  # These are your current draft angles, repaired into valid YAML. The hard
+  # joint limits still clip anything outside config/joint_limits.yaml.
+  hi:
+    allowed_zero_frames: ["stand"]
+    return_to_start: true
+    waypoints:
+      - duration_s: 1.0
+        hold_s: 0.5
+        pose_when_stand_zero:
+          FL_thigh_joint: -2.3
+          FL_calf_joint: 1.35
+      - duration_s: 1.0
+        hold_s: 0.8
+        pose_when_stand_zero:
+          FL_thigh_joint: -2.3
+          FL_calf_joint: 0.08
+      - duration_s: 1.0
+        hold_s: 0.8
+        pose_when_stand_zero:
+          FL_thigh_joint: -2.3
+          FL_calf_joint: 1.35
+
+  # Button 7: namaste.
+  namaste:
+    allowed_zero_frames: ["stand"]
+    return_to_start: true
+    waypoints:
+      - duration_s: 2.0
+        hold_s: 1.0
+        pose_when_stand_zero:
+          FR_hip_joint: 0.75
+          FL_hip_joint: -0.75
+      - duration_s: 1.0
+        hold_s: 0.8
+        pose_when_stand_zero:
+          FR_thigh_joint: -1.40
+          FR_hip_joint: 0.75
+          FL_thigh_joint: 1.40
+          FL_hip_joint: -0.75
+
+  # Extra named examples you can map to buttons 0/1/2 later if you want.
+  salute:
+    allowed_zero_frames: ["stand"]
+    return_to_start: true
+    waypoints:
+      - duration_s: 1.0
+        hold_s: 0.5
+        pose_when_stand_zero:
+          FR_thigh_joint: -1.40
+
+  dance:
+    allowed_zero_frames: ["stand"]
+    return_to_start: true
+    waypoints:
+      - duration_s: 0.7
+        hold_s: 0.1
+        pose_when_stand_zero: {}
+      - duration_s: 0.7
+        hold_s: 0.1
+        pose_when_stand_zero: {}
+      - duration_s: 0.7
+        hold_s: 0.1
+        pose_when_stand_zero: {}
+
+  extra_pose:
+    allowed_zero_frames: ["stand"]
+    return_to_start: true
+    waypoints:
+      - duration_s: 1.0
+        hold_s: 0.5
+        pose_when_stand_zero: {}

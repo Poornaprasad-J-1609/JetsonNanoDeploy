@@ -24,7 +24,7 @@ mit_protocol:
   tau_max: 12.0
 
 startup:
-  standup_seconds: 5.0
+  standup_seconds: 3.0
 
 communication:
   # Manual gait scripts use a short gap between RobStride frames.

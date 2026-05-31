@@ -49,12 +49,14 @@ buttons:
   # Button 4 stops walking policy and moves to crouch/sit pose.
   sit: 4
 
-  # Any of these buttons immediately exits the controller loop.
-  emergency_stop: [0, 1, 2, 3]
+  # Buttons 0-2 are remapped to user-defined gestures; only button 3 remains
+  # the joystick emergency stop. Ctrl+C is also always available.
+  emergency_stop: [3]
 
-  # Runtime speed scale buttons.
-  speed_down: 6
-  speed_up: 7
+  # Speed scale buttons disabled; buttons 6-7 are remapped to hi/namaste
+  # gestures in config/gestures.yaml.
+  speed_down: -1
+  speed_up: -1
 
   # Optional physical button for software zero calibration. -1 disables it.
   zero_calibration: -1
@@ -65,9 +67,9 @@ dpad:
   # Default is D-pad down on Logitech-style controllers.
   zero_calibration_hat_index: 0
   zero_calibration_hat_direction: [0, -1]
-  # When true, any D-pad direction sets software zero. This is more robust on
-  # gamepads that report the physical D-pad differently between X/D modes.
-  zero_calibration_hat_any: true
+  # Use only the configured D-pad direction for zeroing. This avoids accidental
+  # recalibration from other D-pad directions.
+  zero_calibration_hat_any: false
 
   # Keep this disabled during walking: axis 1 is also the forward/back stick on
   # the F710, so using it as zero-calibration can accidentally recalibrate while
