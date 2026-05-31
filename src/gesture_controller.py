@@ -119,6 +119,7 @@ class GestureLibrary:
             int(key): str(value)
             for key, value in (joystick_cfg.get("mapping", {}) or {}).items()
         }
+        self.axis_map = self._load_axis_map(joystick_cfg.get("axis_mapping", []) or [])
 
     def key_hint(self):
         if not self.enabled or not self.keyboard_enabled or not self.key_map:
@@ -136,6 +137,14 @@ class GestureLibrary:
             for btn, name in sorted(self.button_map.items())
         )
 
+    def axis_hint(self):
+        if not self.enabled or not self.joystick_enabled or not self.axis_map:
+            return "disabled"
+        return ", ".join(
+            f"axis{item['axis']}:{item['direction']:+.0f}@{item['threshold']:.2f}={item['gesture']}"
+            for item in self.axis_map
+        )
+
     def gesture_for_key(self, key):
         if key is None or not self.enabled or not self.keyboard_enabled:
             return None
@@ -145,6 +154,25 @@ class GestureLibrary:
         if button is None or not self.enabled or not self.joystick_enabled:
             return None
         return self.button_map.get(int(button))
+
+    @staticmethod
+    def _load_axis_map(axis_cfg):
+        axis_map = []
+        for item in axis_cfg:
+            if not isinstance(item, dict):
+                continue
+            if "axis" not in item or "gesture" not in item:
+                continue
+            axis = int(item["axis"])
+            direction = 1.0 if float(item.get("direction", 1.0)) >= 0.0 else -1.0
+            threshold = float(np.clip(abs(float(item.get("threshold", 0.8))), 0.0, 1.0))
+            axis_map.append({
+                "axis": axis,
+                "direction": direction,
+                "threshold": threshold,
+                "gesture": str(item["gesture"]),
+            })
+        return axis_map
 
     def has_gesture(self, name):
         return str(name) in self.gestures

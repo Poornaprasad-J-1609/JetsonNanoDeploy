@@ -1073,8 +1073,8 @@ def run_policy_loop(
     print("  button 5    -> STAND pose")
     print("  button 3    -> EMERGENCY STOP")
     print("  button 0    -> YAML gesture slot, enabled only from crouch-zero hold")
-    print("  button 6    -> gesture: hi")
-    print("  button 7    -> gesture: namaste")
+    print("  button 1    -> gesture: namaste")
+    print("  button 2    -> gesture: hi")
     print("  D-pad down / configured zero axis -> software-zero current crouch/default pose")
     print("Joystick axes:")
     print("  left stick Y  -> forward/back vx")
@@ -1106,6 +1106,7 @@ def run_policy_loop(
     if gesture_library is not None and gesture_library.enabled:
         if gesture_library.joystick_enabled:
             print("gesture_buttons:", gesture_library.button_hint())
+            print("gesture_axes:", gesture_library.axis_hint())
         elif gesture_library.keyboard_enabled:
             print("gesture_keys:", gesture_library.key_hint())
     if steps is None:
@@ -1375,7 +1376,10 @@ def run_policy_loop(
         gesture_request = None
         if gesture_library is not None and gesture_library.enabled:
             if gesture_library.joystick_enabled:
-                gesture_request = command_source.get_gesture_request(gesture_library.button_map)
+                gesture_request = command_source.get_gesture_request(
+                    gesture_library.button_map,
+                    axis_map=gesture_library.axis_map,
+                )
             elif gesture_library.keyboard_enabled and keyboard_gesture_reader is not None:
                 key = keyboard_gesture_reader.read_key()
                 gesture_request = gesture_library.gesture_for_key(key)
@@ -2248,6 +2252,7 @@ def main():
             print("\nGesture config:", gesture_library.path)
             if gesture_library.joystick_enabled:
                 print("Gesture joystick buttons:", gesture_library.button_hint())
+                print("Gesture joystick axes:", gesture_library.axis_hint())
             elif gesture_library.keyboard_enabled:
                 print("Gesture keyboard keys:", gesture_library.key_hint())
                 if args.keyboard_gestures and not keyboard_gesture_reader.active:

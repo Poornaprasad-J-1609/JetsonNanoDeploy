@@ -62,7 +62,7 @@ Main controller joystick workflow:
 3. Press button 5 to stand. When stand settles, the controller auto-applies
    software zero again, so stand becomes q=0 for the RL policy.
 4. Button 4 returns to sit/crouch. Button 3 emergency-stops. From crouch-zero
-   hold, button 6 runs hi, button 7 runs namaste, and button 0 runs the user
+   hold, button 1 runs namaste, button 2 runs hi, and button 0 runs the user
    gesture slot.
 
 
@@ -178,8 +178,9 @@ Joystick walking is disabled by the huge walk threshold and zero velocity limits
 After launch:
 1. Put robot in manual crouch/default pose.
 2. D-pad down software-zeros crouch/default. Startup auto-zero also tries this.
-3. From crouch-zero hold, use button 6 for hi, button 7 for namaste, and
-   button 0 for the user gesture slot.
+3. From crouch-zero hold, use button 1 for namaste, button 2 for hi, and
+   button 0 for the user gesture slot. If the Logitech reports trigger-style
+   controls as axes, axis 2 also triggers hi and axis 5 also triggers namaste.
 4. Button 5 stands. When stand settles, the controller auto-zeros stand.
 5. Button 4 returns to sit/crouch. D-pad down again makes crouch q=0 for more
    gimmicks. Button 3 emergency-stops.
@@ -229,8 +230,8 @@ After launch:
 ------------------------------------------------
 
 This sends real MIT commands. First full robot tests should be suspended/secured.
-Buttons 6/7 are currently mapped to hi/namaste gestures, so runtime speed
-buttons are disabled. Emergency stop is joystick button 3. Ctrl+C also stops.
+Runtime speed buttons are disabled while testing gimmicks. Emergency stop is
+joystick button 3. Ctrl+C also stops.
 After launch: press button 5 to stand, wait for "zero_frame -> stand", then
 move the joystick sticks. D-pad zero is optional.
 

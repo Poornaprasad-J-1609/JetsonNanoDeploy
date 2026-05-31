@@ -260,6 +260,7 @@ class JoystickCommandSource:
         self.prev_buttons = {}
         self.prev_hats = {}
         self.prev_gesture_buttons = {}
+        self.prev_gesture_axes = {}
 
         try:
             pygame = init_pygame_for_joystick()
@@ -506,17 +507,29 @@ class JoystickCommandSource:
 
         return None
 
-    def get_gesture_request(self, button_map):
-        """Return gesture name for the first rising-edge press in button_map, or None."""
-        if not button_map:
-            return None
+    def get_gesture_request(self, button_map, axis_map=None):
+        """Return gesture name for the first rising-edge button/axis trigger."""
         self.pygame.event.pump()
-        for btn_id, gesture_name in button_map.items():
+        for btn_id, gesture_name in (button_map or {}).items():
             now = self._button(btn_id)
             prev = self.prev_gesture_buttons.get(btn_id, False)
             self.prev_gesture_buttons[btn_id] = now
             if now and not prev:
                 return gesture_name
+
+        for item in axis_map or []:
+            axis_id = int(item.get("axis", -1))
+            direction = 1.0 if float(item.get("direction", 1.0)) >= 0.0 else -1.0
+            threshold = float(np.clip(abs(float(item.get("threshold", 0.8))), 0.0, 1.0))
+            gesture_name = item.get("gesture")
+            if gesture_name is None:
+                continue
+            now = direction * self._axis(axis_id) >= threshold
+            key = (axis_id, direction, str(gesture_name))
+            prev = self.prev_gesture_axes.get(key, False)
+            self.prev_gesture_axes[key] = now
+            if now and not prev:
+                return str(gesture_name)
         return None
 
     def raw_state(self):
@@ -638,9 +651,9 @@ class CommandSource:
             return self.impl.get_calibration_request()
         return None
 
-    def get_gesture_request(self, button_map):
+    def get_gesture_request(self, button_map, axis_map=None):
         if hasattr(self.impl, "get_gesture_request"):
-            return self.impl.get_gesture_request(button_map)
+            return self.impl.get_gesture_request(button_map, axis_map=axis_map)
         return None
 
     def raw_state(self):
