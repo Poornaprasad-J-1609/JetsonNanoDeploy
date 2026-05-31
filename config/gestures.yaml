@@ -7,13 +7,11 @@ enabled: true
 # - Button 5 remains stand.
 # - Button 3 remains emergency stop.
 # - Buttons 6/7 no longer change speed; they trigger hi/namaste.
-# - Buttons 0/1/2 are free user-defined gesture slots.
+# - Button 0 is the user-defined gesture slot.
 joystick:
   enabled: true
   mapping:
     0: gesture_0
-    1: gesture_1
-    2: gesture_2
     6: hi
     7: namaste
 
@@ -23,8 +21,6 @@ keyboard:
   enabled: true
   mapping:
     "0": gesture_0
-    "1": gesture_1
-    "2": gesture_2
     "6": hi
     "7": namaste
 
@@ -36,107 +32,106 @@ defaults:
   hold_s: 0.25
   return_to_start: true
 
-  # Gimmicks are allowed only after the robot reaches stand and the controller
-  # auto-zeros stand as the RL/default zero frame.
-  allowed_zero_frames: ["stand"]
+  # Gimmicks are allowed only in the manually-zeroed crouch/default hold frame.
+  allowed_zero_frames: ["crouch"]
 
 gestures:
-  # User-defined slots for joystick buttons 0, 1, and 2.
-  # Fill pose_when_stand_zero with the joint angles you want. Empty poses are
+  # User-defined slot for joystick button 0.
+  # Fill pose_when_crouch_zero with the joint angles you want. Empty poses are
   # valid and hold the current pose, so these slots are safe until you edit them.
   gesture_0:
-    allowed_zero_frames: ["stand"]
+    allowed_zero_frames: ["crouch"]
     return_to_start: true
     waypoints:
       - duration_s: 1.0
         hold_s: 0.5
-        pose_when_stand_zero: {}
+        pose_when_crouch_zero: 
+         FR_thigh_joint: -1.85
+         FR_calf_joint: 1.48
 
+  # Kept as named templates, but they are not mapped to joystick buttons.
   gesture_1:
-    allowed_zero_frames: ["stand"]
+    allowed_zero_frames: ["crouch"]
     return_to_start: true
     waypoints:
       - duration_s: 1.0
         hold_s: 0.5
-        pose_when_stand_zero: {}
+        pose_when_crouch_zero: {}
 
   gesture_2:
-    allowed_zero_frames: ["stand"]
+    allowed_zero_frames: ["crouch"]
     return_to_start: true
     waypoints:
       - duration_s: 1.0
         hold_s: 0.5
-        pose_when_stand_zero: {}
+        pose_when_crouch_zero: {}
 
   # Button 6: hi.
   # These are your current draft angles, repaired into valid YAML. The hard
   # joint limits still clip anything outside config/joint_limits.yaml.
   hi:
-    allowed_zero_frames: ["stand"]
+    allowed_zero_frames: ["crouch"]
     return_to_start: true
     waypoints:
       - duration_s: 1.0
         hold_s: 0.5
-        pose_when_stand_zero:
-          FL_thigh_joint: -2.3
-          FL_calf_joint: 1.35
+        pose_when_crouch_zero:
+          FL_thigh_joint: -2.4
+          FL_calf_joint: 2.0
       - duration_s: 1.0
         hold_s: 0.8
-        pose_when_stand_zero:
-          FL_thigh_joint: -2.3
-          FL_calf_joint: 0.08
+        pose_when_crouch_zero:
+          FL_thigh_joint: -2.4
+          FL_calf_joint: 0.32
       - duration_s: 1.0
         hold_s: 0.8
-        pose_when_stand_zero:
-          FL_thigh_joint: -2.3
-          FL_calf_joint: 1.35
+        pose_when_crouch_zero:
+          FL_thigh_joint: -2.4
+          FL_calf_joint: 1.92
 
   # Button 7: namaste.
   namaste:
-    allowed_zero_frames: ["stand"]
+    allowed_zero_frames: ["crouch"]
     return_to_start: true
     waypoints:
       - duration_s: 2.0
         hold_s: 1.0
-        pose_when_stand_zero:
-          FR_hip_joint: 0.75
-          FL_hip_joint: -0.75
-      - duration_s: 1.0
-        hold_s: 0.8
-        pose_when_stand_zero:
-          FR_thigh_joint: -1.40
-          FR_hip_joint: 0.75
-          FL_thigh_joint: 1.40
-          FL_hip_joint: -0.75
-
-  # Extra named examples you can map to buttons 0/1/2 later if you want.
+        pose_when_crouch_zero:
+          FR_hip_joint: 0.60
+          FL_hip_joint: -0.60
+          FR_thigh_joint: -2.4
+          FL_thigh_joint: 2.4
+          FR_calf_joint: 0.9
+          FL_calf_joint: -0.9
+      
+  # Extra named examples kept unbound for later.
   salute:
-    allowed_zero_frames: ["stand"]
+    allowed_zero_frames: ["crouch"]
     return_to_start: true
     waypoints:
       - duration_s: 1.0
         hold_s: 0.5
-        pose_when_stand_zero:
+        pose_when_crouch_zero:
           FR_thigh_joint: -1.40
 
   dance:
-    allowed_zero_frames: ["stand"]
+    allowed_zero_frames: ["crouch"]
     return_to_start: true
     waypoints:
       - duration_s: 0.7
         hold_s: 0.1
-        pose_when_stand_zero: {}
+        pose_when_crouch_zero: {}
       - duration_s: 0.7
         hold_s: 0.1
-        pose_when_stand_zero: {}
+        pose_when_crouch_zero: {}
       - duration_s: 0.7
         hold_s: 0.1
-        pose_when_stand_zero: {}
+        pose_when_crouch_zero: {}
 
   extra_pose:
-    allowed_zero_frames: ["stand"]
+    allowed_zero_frames: ["crouch"]
     return_to_start: true
     waypoints:
       - duration_s: 1.0
         hold_s: 0.5
-        pose_when_stand_zero: {}
+        pose_when_crouch_zero: {}

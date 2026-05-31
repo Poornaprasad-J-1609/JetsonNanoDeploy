@@ -1072,7 +1072,7 @@ def run_policy_loop(
     print("  button 4    -> STOP walking and SIT/CROUCH pose")
     print("  button 5    -> STAND pose")
     print("  button 3    -> EMERGENCY STOP")
-    print("  buttons 0-2 -> YAML gesture slots, enabled only after stand-zero")
+    print("  button 0    -> YAML gesture slot, enabled only from crouch-zero hold")
     print("  button 6    -> gesture: hi")
     print("  button 7    -> gesture: namaste")
     print("  D-pad down / configured zero axis -> software-zero current crouch/default pose")
@@ -1174,15 +1174,17 @@ def run_policy_loop(
                         "returned fresh feedback. Check CAN wiring/IDs on the "
                         "missing motors or raise --feedback-timeout."
                     )
-                q_zeroed = apply_software_zero_calibration(
-                    estimator=estimator,
-                    motor_layer=motor_layer,
-                    active_joints=motor_layer.active_joints,
-                    feedback_timeout=feedback_timeout,
-                    buses=buses,
-                    mode=mode,
-                    label="crouch/default pose",
-                )
+                    q_zeroed = False
+                else:
+                    q_zeroed = apply_software_zero_calibration(
+                        estimator=estimator,
+                        motor_layer=motor_layer,
+                        active_joints=motor_layer.active_joints,
+                        feedback_timeout=feedback_timeout,
+                        buses=buses,
+                        mode=mode,
+                        label="crouch/default pose",
+                    )
                 if q_zeroed is not False:
                     q_previous_target = q_zeroed.copy()
                     q_current = q_zeroed.copy()
@@ -1382,14 +1384,14 @@ def run_policy_loop(
                 print(f"[GESTURE] ignored {gesture_request}; {gesture_state.name} is already running.")
             elif not gesture_library.has_gesture(gesture_request):
                 print(f"[GESTURE] ignored unknown gesture: {gesture_request}")
-            elif control_mode not in ("hold", "stand"):
-                print(f"[GESTURE] ignored {gesture_request}; gestures are allowed only after STAND, from hold/stand.")
+            elif control_mode not in ("hold", "sit"):
+                print(f"[GESTURE] ignored {gesture_request}; gestures are allowed only from crouch-zero hold/sit.")
             elif control_mode == "stand" and stand_zero_pending:
                 print(f"[GESTURE] ignored {gesture_request}; wait for stand auto-zero to finish.")
             elif not zero_calibrated:
                 print(f"[GESTURE] ignored {gesture_request}; zero calibration is required first.")
-            elif zero_frame != "stand":
-                print(f"[GESTURE] ignored {gesture_request}; press STAND first and wait for zero_frame -> stand.")
+            elif zero_frame != "crouch":
+                print(f"[GESTURE] ignored {gesture_request}; press SIT/CROUCH and D-pad zero before gimmicks.")
             elif not gesture_library.allowed_in_zero_frame(gesture_request, zero_frame):
                 print(f"[GESTURE] ignored {gesture_request}; not allowed in zero_frame={zero_frame}.")
             else:

@@ -61,8 +61,9 @@ Main controller joystick workflow:
    be used to recalibrate manually before standing.
 3. Press button 5 to stand. When stand settles, the controller auto-applies
    software zero again, so stand becomes q=0 for the RL policy.
-4. Button 4 returns to sit/crouch. Button 3 emergency-stops. After stand-zero,
-   buttons 6/7 run hi/namaste and buttons 0/1/2 run user gesture slots.
+4. Button 4 returns to sit/crouch. Button 3 emergency-stops. From crouch-zero
+   hold, button 6 runs hi, button 7 runs namaste, and button 0 runs the user
+   gesture slot.
 
 
 3. IMU check without GUI
@@ -169,18 +170,19 @@ q = quit
   --gui
 
 
-9. Sit/stand and gimmick test, no walking
------------------------------------------
+9. Sit/stand and crouch-zero gimmick test, no walking
+-----------------------------------------------------
 
 This sends real MIT commands. Keep the robot suspended/secured.
 Joystick walking is disabled by the huge walk threshold and zero velocity limits.
 After launch:
 1. Put robot in manual crouch/default pose.
 2. D-pad down software-zeros crouch/default. Startup auto-zero also tries this.
-3. Press button 5 to stand.
-4. Wait for "zero_frame -> stand".
-5. Use button 6 for hi, button 7 for namaste, buttons 0/1/2 for user gestures.
-6. Button 4 returns to sit/crouch. Button 3 emergency-stops.
+3. From crouch-zero hold, use button 6 for hi, button 7 for namaste, and
+   button 0 for the user gesture slot.
+4. Button 5 stands. When stand settles, the controller auto-zeros stand.
+5. Button 4 returns to sit/crouch. D-pad down again makes crouch q=0 for more
+   gimmicks. Button 3 emergency-stops.
 
 /usr/bin/python3 src/main_controller.py \
   --mode mit-signal \
