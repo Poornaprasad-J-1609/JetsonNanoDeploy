@@ -56,7 +56,7 @@ gestures:
     return_to_start: true
     waypoints:
       - duration_s: 1.0
-        hold_s: 0.5
+        hold_s: 10.0
         pose_when_crouch_zero: 
          FR_thigh_joint: -1.85
          FR_calf_joint: 1.15
@@ -85,29 +85,29 @@ gestures:
     allowed_zero_frames: ["crouch"]
     return_to_start: true
     waypoints:
-      - duration_s: 1.0
+      - duration_s: 0.5
+        hold_s: 1.0
+        pose_when_crouch_zero:
+          FR_thigh_joint: -2.4
+          FR_calf_joint: 1.35
+      - duration_s: 0.5
+        hold_s: 1.0
+        pose_when_crouch_zero:
+          FR_thigh_joint: -2.4
+          FR_calf_joint: 0.32
+      - duration_s: 0.5
         hold_s: 0.5
         pose_when_crouch_zero:
-          FL_thigh_joint: -2.4
-          FL_calf_joint: 1.35
-      - duration_s: 1.0
-        hold_s: 0.8
-        pose_when_crouch_zero:
-          FL_thigh_joint: -2.4
-          FL_calf_joint: 0.32
-      - duration_s: 1.0
-        hold_s: 0.8
-        pose_when_crouch_zero:
-          FL_thigh_joint: -2.4
-          FL_calf_joint: 1.35
+          FR_thigh_joint: -2.4
+          FR_calf_joint: 1.35
 
   # Button 1: namaste.
   namaste:
     allowed_zero_frames: ["crouch"]
     return_to_start: true
     waypoints:
-      - duration_s: 2.0
-        hold_s: 1.0
+      - duration_s: 1.0
+        hold_s: 5.0
         pose_when_crouch_zero:
           FR_hip_joint: 0.60
           FL_hip_joint: -0.60
