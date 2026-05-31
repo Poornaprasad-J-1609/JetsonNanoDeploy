@@ -219,8 +219,8 @@ After launch:
   --speed-scale-initial 0.05 \
   --speed-scale-min 0.05 \
   --speed-scale-max 0.05 \
-  --feedback-timeout 0.03 \
-  --pose-sync-error-rad 0.12 \
+  --feedback-timeout 0.05 \
+  --pose-sync-error-rad 0.25 \
   --log-every 5 \
   --joint-debug \
   --gui
