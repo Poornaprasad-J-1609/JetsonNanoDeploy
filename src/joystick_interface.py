@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 from pathlib import Path
 import argparse
+from collections import deque
+import select
+import sys
+import termios
 import time
+import tty
 import numpy as np
 
 try:
@@ -151,6 +156,98 @@ class FixedCommandSource:
 
     def close(self):
         pass
+
+
+class KeyboardCommandSource:
+    """
+    Non-blocking terminal keyboard command source.
+
+    Keys:
+      w -> stand
+      s -> sit/crouch
+      f -> software-zero current crouch/default pose and hold
+      x -> emergency stop
+      b/n/h -> gestures from config/gestures.yaml keyboard mapping
+    """
+
+    def __init__(self):
+        self.command = np.zeros(3, dtype=np.float32)
+        self.command_limits = load_command_limits()
+        self.key_queue = deque()
+        self.fd = None
+        self.old_settings = None
+        self.active = False
+
+        if sys.stdin.isatty():
+            self.fd = sys.stdin.fileno()
+            self.old_settings = termios.tcgetattr(self.fd)
+            tty.setcbreak(self.fd)
+            self.active = True
+
+        print("Terminal keyboard command source:")
+        print("  w -> stand")
+        print("  s -> sit/crouch")
+        print("  f -> software-zero current crouch/default pose and hold")
+        print("  x -> emergency stop")
+        print("  b -> gesture_0")
+        print("  n -> namaste")
+        print("  h -> hi")
+        if not self.active:
+            print("  WARNING: stdin is not an interactive terminal; keyboard input is inactive.")
+
+    def _poll_keys(self):
+        if not self.active:
+            return
+        while True:
+            readable, _, _ = select.select([sys.stdin], [], [], 0.0)
+            if not readable:
+                break
+            key = sys.stdin.read(1)
+            if key == "\x03":
+                raise KeyboardInterrupt
+            self.key_queue.append(key.lower())
+
+    def _pop_matching_key(self, mapping):
+        self._poll_keys()
+        mapping = mapping or {}
+        for index, key in enumerate(self.key_queue):
+            if key in mapping:
+                del self.key_queue[index]
+                return mapping[key]
+        return None
+
+    def read(self):
+        self._poll_keys()
+        self.command_limits = load_command_limits()
+        self.command = clip_command(self.command, self.command_limits)
+        return self.command.copy()
+
+    def get_mode_request(self):
+        return self._pop_matching_key({"w": "stand", "s": "sit"})
+
+    def get_emergency_stop_request(self):
+        reason = self._pop_matching_key({"x": "terminal keyboard emergency stop key x"})
+        return reason
+
+    def get_speed_scale(self):
+        return 1.0
+
+    def get_calibration_request(self):
+        return self._pop_matching_key({"f": "zero_current_pose"})
+
+    def get_gesture_request(self, button_map=None, axis_map=None, key_map=None):
+        fallback = {"b": "gesture_0", "n": "namaste", "h": "hi"}
+        mapping = key_map or fallback
+        return self._pop_matching_key(mapping)
+
+    def raw_state(self):
+        self._poll_keys()
+        return {"pending_keys": list(self.key_queue)}
+
+    def close(self):
+        if self.active and self.old_settings is not None and self.fd is not None:
+            termios.tcsetattr(self.fd, termios.TCSADRAIN, self.old_settings)
+        self.active = False
 
 
 class JoystickCommandSource:
@@ -507,7 +604,7 @@ class JoystickCommandSource:
 
         return None
 
-    def get_gesture_request(self, button_map, axis_map=None):
+    def get_gesture_request(self, button_map=None, axis_map=None, key_map=None):
         """Return gesture name for the first rising-edge button/axis trigger."""
         self.pygame.event.pump()
         for btn_id, gesture_name in (button_map or {}).items():
@@ -554,6 +651,8 @@ class CommandSource:
                 vy=kwargs.get("vy", 0.0),
                 yaw=kwargs.get("yaw", 0.0),
             )
+        elif source == "keyboard":
+            self.impl = KeyboardCommandSource()
         elif source == "joystick":
             defaults = load_joystick_defaults()
             speed_defaults = load_speed_scale_defaults()
@@ -651,9 +750,13 @@ class CommandSource:
             return self.impl.get_calibration_request()
         return None
 
-    def get_gesture_request(self, button_map, axis_map=None):
+    def get_gesture_request(self, button_map=None, axis_map=None, key_map=None):
         if hasattr(self.impl, "get_gesture_request"):
-            return self.impl.get_gesture_request(button_map, axis_map=axis_map)
+            return self.impl.get_gesture_request(
+                button_map,
+                axis_map=axis_map,
+                key_map=key_map,
+            )
         return None
 
     def raw_state(self):
@@ -670,7 +773,7 @@ def main():
     speed_defaults = load_speed_scale_defaults()
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--source", choices=["fixed", "joystick"], default="fixed")
+    parser.add_argument("--source", choices=["fixed", "joystick", "keyboard"], default="fixed")
 
     parser.add_argument("--vx", type=float, default=0.0)
     parser.add_argument("--vy", type=float, default=0.0)

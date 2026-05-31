@@ -177,20 +177,19 @@ This sends real MIT commands. Keep the robot suspended/secured.
 Joystick walking is disabled by the huge walk threshold and zero velocity limits.
 After launch:
 1. Put robot in manual crouch/default pose.
-2. D-pad down software-zeros crouch/default. Startup auto-zero also tries this.
-3. From crouch-zero hold, use button 1 for namaste, button 2 for hi, and
-   button 0 for the user gesture slot. If the Logitech reports trigger-style
-   controls as axes, axis 2 also triggers hi and axis 5 also triggers namaste.
-4. Button 5 stands. When stand settles, the controller auto-zeros stand.
-5. Button 4 returns to sit/crouch. D-pad down again makes crouch q=0 for more
-   gimmicks. Button 3 emergency-stops.
+2. Press f to software-zero crouch/default and hold. Startup auto-zero also
+   tries this once at launch.
+3. From crouch-zero hold, press b for gesture_0, n for namaste, and h for hi.
+4. Press w to stand. When stand settles, the controller auto-zeros stand.
+5. Press s to sit/crouch. When sit settles, the controller auto-zeros crouch
+   again so b/n/h gimmicks are enabled. Press x for emergency stop.
 
 /usr/bin/python3 src/main_controller.py \
   --mode mit-signal \
   --port-front "$FRONT_CAN" \
   --port-back "$BACK_CAN" \
   --feedback-source mit \
-  --command-source joystick \
+  --command-source keyboard \
   --imu-source xsens \
   --imu-port "$IMU_PORT" \
   --imu-stabilization \
@@ -201,6 +200,7 @@ After launch:
   --initial-zero-frame crouch \
   --auto-zero-on-startup \
   --auto-stand-zero \
+  --auto-sit-zero \
   --zero-calibration-hat-index 0 \
   --zero-calibration-hat-direction 0 -1 \
   --no-zero-calibration-hat-any \

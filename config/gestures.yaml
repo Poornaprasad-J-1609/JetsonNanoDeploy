@@ -32,9 +32,9 @@ joystick:
 keyboard:
   enabled: true
   mapping:
-    "0": gesture_0
-    "1": namaste
-    "2": hi
+    b: gesture_0
+    n: namaste
+    h: hi
 
 defaults:
   # Gesture targets are absolute joint angles in the active software-zero frame

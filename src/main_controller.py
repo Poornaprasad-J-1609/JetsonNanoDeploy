@@ -757,7 +757,7 @@ def initialize_hold_target(estimator, feedback_timeout):
     print("\n" + "#" * 80)
     print("STARTUP PHASE: HOLD current pose")
     print("#" * 80)
-    print("No sit, stand, or walking command is sent until joystick input.")
+    print("No sit, stand, or walking command is sent until controller input.")
     return q_current.copy()
 
 
@@ -1030,6 +1030,7 @@ def run_policy_loop(
     initial_zero_frame,
     initial_zero_calibrated,
     auto_stand_zero,
+    auto_sit_zero,
     stand_zero_error_rad,
     stand_zero_settle_steps,
     pose_sync_error_rad,
@@ -1059,6 +1060,10 @@ def run_policy_loop(
         auto_stand_zero and control_mode == "stand" and zero_frame == "crouch"
     )
     stand_zero_settle_count = 0
+    sit_zero_pending = bool(
+        auto_sit_zero and control_mode == "sit" and zero_frame == "stand"
+    )
+    sit_zero_settle_count = 0
     calibration_hold_until_step = -1
     active_indices = active_joint_indices(runner.policy_order, motor_layer.active_joints)
     gesture_state = None
@@ -1080,6 +1085,10 @@ def run_policy_loop(
     print("  left stick Y  -> forward/back vx")
     print("  left stick X  -> left/right vy")
     print("  right stick X -> turn/yaw")
+    print("Terminal keys:")
+    print("  w -> STAND, s -> SIT/CROUCH, x -> EMERGENCY STOP")
+    print("  f -> software-zero current crouch/default pose and hold")
+    print("  b -> gesture_0, n -> namaste, h -> hi")
     print("start_control_mode:", control_mode)
     print("walk_command_threshold:", walk_command_threshold)
     print("base_lin_vel_source:", base_lin_vel_source)
@@ -1088,6 +1097,7 @@ def run_policy_loop(
     if has_motion_target and control_mode == "hold" and zero_frame == "crouch":
         print("[ZERO CAL] MIT hold is active at q=0 for the crouch/default pose.")
     print("auto_stand_zero:", bool(auto_stand_zero))
+    print("auto_sit_zero:", bool(auto_sit_zero))
     print("pose_sync_error_rad:", float(pose_sync_error_rad))
     print("policy_command_gain:", float(policy_command_gain))
     print(
@@ -1101,13 +1111,15 @@ def run_policy_loop(
     print("policy_action_smoothing:", float(policy_action_smoothing), "(0 disables)")
     if stand_zero_pending:
         print("[ZERO CAL] initial stand target will auto-zero when settled.")
+    if sit_zero_pending:
+        print("[ZERO CAL] initial sit/crouch target will auto-zero when settled.")
     print("imu_stabilization:", bool(motion_assist_cfg.get("imu_posture", {}).get("enabled", False)))
     print("gait_assist:", bool(motion_assist_cfg.get("gait_assist", {}).get("enabled", False)))
     if gesture_library is not None and gesture_library.enabled:
         if gesture_library.joystick_enabled:
             print("gesture_buttons:", gesture_library.button_hint())
             print("gesture_axes:", gesture_library.axis_hint())
-        elif gesture_library.keyboard_enabled:
+        if gesture_library.keyboard_enabled:
             print("gesture_keys:", gesture_library.key_hint())
     if steps is None:
         print("policy_steps: unlimited, running until emergency stop or Ctrl+C")
@@ -1196,6 +1208,8 @@ def run_policy_loop(
                     has_motion_target = True
                     stand_zero_pending = False
                     stand_zero_settle_count = 0
+                    sit_zero_pending = False
+                    sit_zero_settle_count = 0
                     calibration_hold_until_step = step + 10
                     print("[ZERO CAL] zero_frame -> crouch. MIT hold is now active at q=0 for this pose.")
                     print("[ZERO CAL] Press STAND to move to stand and auto-zero for policy.")
@@ -1367,20 +1381,31 @@ def run_policy_loop(
                 if control_mode == "stand" and zero_frame == "crouch":
                     stand_zero_pending = bool(auto_stand_zero)
                     stand_zero_settle_count = 0
+                    sit_zero_pending = False
+                    sit_zero_settle_count = 0
                     print("[ZERO CAL] stand target uses stand_pose_when_sit_zero; stand will auto-zero when settled.")
                 elif control_mode == "sit":
                     stand_zero_pending = False
                     stand_zero_settle_count = 0
+                    sit_zero_pending = bool(auto_sit_zero and zero_frame == "stand")
+                    sit_zero_settle_count = 0
+                    if sit_zero_pending:
+                        print("[ZERO CAL] sit target uses sit_pose_when_stand_zero; crouch will auto-zero when settled.")
                 print(f"\n[MODE CHANGE] control_mode -> {control_mode}")
 
         gesture_request = None
         if gesture_library is not None and gesture_library.enabled:
-            if gesture_library.joystick_enabled:
+            if hasattr(command_source, "get_gesture_request"):
                 gesture_request = command_source.get_gesture_request(
                     gesture_library.button_map,
                     axis_map=gesture_library.axis_map,
+                    key_map=gesture_library.key_map,
                 )
-            elif gesture_library.keyboard_enabled and keyboard_gesture_reader is not None:
+            if (
+                gesture_request is None
+                and gesture_library.keyboard_enabled
+                and keyboard_gesture_reader is not None
+            ):
                 key = keyboard_gesture_reader.read_key()
                 gesture_request = gesture_library.gesture_for_key(key)
         if gesture_request is not None:
@@ -1461,6 +1486,8 @@ def run_policy_loop(
                     has_motion_target = True
                     stand_zero_pending = False
                     stand_zero_settle_count = 0
+                    sit_zero_pending = False
+                    sit_zero_settle_count = 0
                     print(f"\n[GESTURE] started -> {gesture_state.name}")
                 except Exception as exc:
                     print(f"[GESTURE] failed to start {gesture_request}: {exc}")
@@ -1690,6 +1717,47 @@ def run_policy_loop(
                         motor_layer.send_signal_commands(buses, commands)
                     print("[ZERO CAL] zero_frame -> stand. Policy walking is now enabled in RL zero coordinates.")
 
+        if active_control_mode == "sit" and sit_zero_pending:
+            q_feedback = getattr(estimator, "q_current", q_safe_target)
+            command_error = max_active_error(q_safe_target, q_policy_target, active_indices)
+            feedback_error = max_active_error(q_feedback, q_policy_target, active_indices)
+            if (
+                command_error <= float(stand_zero_error_rad)
+                and feedback_error <= float(stand_zero_error_rad)
+            ):
+                sit_zero_settle_count += 1
+            else:
+                sit_zero_settle_count = 0
+
+            if sit_zero_settle_count >= int(stand_zero_settle_steps):
+                q_zeroed = apply_software_zero_calibration(
+                    estimator=estimator,
+                    motor_layer=motor_layer,
+                    active_joints=motor_layer.active_joints,
+                    feedback_timeout=feedback_timeout,
+                    buses=buses,
+                    mode=mode,
+                    label="crouch/sit pose",
+                )
+                if q_zeroed is not False:
+                    zero_frame = "crouch"
+                    sit_zero_pending = False
+                    sit_zero_settle_count = 0
+                    q_safe_target = np.zeros(len(runner.policy_order), dtype=np.float32)
+                    q_previous_target = q_safe_target.copy()
+                    zero_calibrated = True
+                    previous_action = np.zeros(action_dim, dtype=np.float32)
+                    commands = motor_layer.build_mit_commands(
+                        q_safe_target,
+                        phase="startup",
+                        feedback_by_joint=getattr(estimator, "last_feedback_by_joint", None),
+                    )
+                    if mode == "signal":
+                        motor_layer.send_harmless_frames(buses, commands)
+                    elif mode == "mit-signal":
+                        motor_layer.send_signal_commands(buses, commands)
+                    print("[ZERO CAL] zero_frame -> crouch. Gimmicks are now enabled from crouch-zero hold.")
+
         if step % log_every == 0:
             telemetry_record = compact_telemetry_record(
                 step=step,
@@ -1787,7 +1855,7 @@ def main():
         help="activation to use when loading non-TorchScript actor checkpoints",
     )
 
-    parser.add_argument("--command-source", choices=["fixed", "joystick"], default="joystick")
+    parser.add_argument("--command-source", choices=["fixed", "joystick", "keyboard"], default="joystick")
 
     parser.add_argument("--vx", type=float, default=0.0)
     parser.add_argument("--vy", type=float, default=0.0)
@@ -1921,6 +1989,12 @@ def main():
         action=argparse.BooleanOptionalAction,
         default=True,
         help="after standing from crouch-zero frame, make current stand pose software zero",
+    )
+    parser.add_argument(
+        "--auto-sit-zero",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="after sitting from stand-zero frame, make current crouch/sit pose software zero",
     )
     parser.add_argument(
         "--auto-zero-on-startup",
@@ -2246,16 +2320,25 @@ def main():
             enabled=args.gestures,
         )
         keyboard_gesture_reader = KeyboardGestureReader(
-            enabled=bool(args.keyboard_gestures and gesture_library.enabled and gesture_library.keyboard_enabled)
+            enabled=bool(
+                args.command_source != "keyboard"
+                and args.keyboard_gestures
+                and gesture_library.enabled
+                and gesture_library.keyboard_enabled
+            )
         )
         if gesture_library.enabled:
             print("\nGesture config:", gesture_library.path)
             if gesture_library.joystick_enabled:
                 print("Gesture joystick buttons:", gesture_library.button_hint())
                 print("Gesture joystick axes:", gesture_library.axis_hint())
-            elif gesture_library.keyboard_enabled:
+            if gesture_library.keyboard_enabled:
                 print("Gesture keyboard keys:", gesture_library.key_hint())
-                if args.keyboard_gestures and not keyboard_gesture_reader.active:
+                if (
+                    args.command_source != "keyboard"
+                    and args.keyboard_gestures
+                    and not keyboard_gesture_reader.active
+                ):
                     print("Gesture keyboard reader inactive: terminal is not interactive.")
 
         imu_sensor = create_imu_sensor(
@@ -2440,6 +2523,7 @@ def main():
             initial_zero_frame=args.initial_zero_frame,
             initial_zero_calibrated=startup_zero_calibrated,
             auto_stand_zero=args.auto_stand_zero,
+            auto_sit_zero=args.auto_sit_zero,
             stand_zero_error_rad=args.stand_zero_error_rad,
             stand_zero_settle_steps=max(1, args.stand_zero_settle_steps),
             pose_sync_error_rad=max(0.0, args.pose_sync_error_rad),
