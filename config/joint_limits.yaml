@@ -8,7 +8,7 @@
 # These values are target slew limits, not hard joint angles. Hard angle limits
 # below are still always applied before MIT packets are sent.
 #
-# Fast sit/stand/gimmick testing defaults:
+# Fast sit/stand/keyboard-control testing defaults:
 #   hip   0.040 rad/step = 2.00 rad/s
 #   thigh 0.060 rad/step = 3.00 rad/s
 #   calf  0.070 rad/step = 3.50 rad/s

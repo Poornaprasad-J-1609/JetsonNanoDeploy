@@ -160,17 +160,36 @@ class FixedCommandSource:
 
 class KeyboardCommandSource:
     """
-    Non-blocking terminal keyboard command source.
+    Non-blocking terminal keyboard drive source.
 
     Keys:
-      w -> stand
-      s -> sit/crouch
-      f -> software-zero current crouch/default pose and hold
+      w/a/s/d -> movement command while the key repeats
+      c -> sit/crouch
+      space -> stand
+      h -> hold current position
       x -> emergency stop
-      b/n/h -> gestures from config/gestures.yaml keyboard mapping
     """
 
-    def __init__(self):
+    def __init__(
+        self,
+        max_vx=0.15,
+        max_vy=0.10,
+        max_yaw=0.30,
+        speed_scale_initial=0.5,
+        speed_scale_min=0.2,
+        speed_scale_max=1.0,
+        command_timeout_s=0.35,
+    ):
+        self.max_vx = float(max_vx)
+        self.max_vy = float(max_vy)
+        self.max_yaw = float(max_yaw)
+        self.speed_scale_min = float(max(0.0, speed_scale_min))
+        self.speed_scale_max = float(max(self.speed_scale_min, speed_scale_max))
+        self.speed_scale = float(
+            np.clip(speed_scale_initial, self.speed_scale_min, self.speed_scale_max)
+        )
+        self.command_timeout_s = float(max(0.05, command_timeout_s))
+        self.command_deadline = -1.0
         self.command = np.zeros(3, dtype=np.float32)
         self.command_limits = load_command_limits()
         self.key_queue = deque()
@@ -185,13 +204,15 @@ class KeyboardCommandSource:
             self.active = True
 
         print("Terminal keyboard command source:")
-        print("  w -> stand")
-        print("  s -> sit/crouch")
-        print("  f -> software-zero current crouch/default pose and hold")
+        print("  w -> forward")
+        print("  s -> backward")
+        print("  a -> left")
+        print("  d -> right")
+        print("  c -> crouch/sit")
+        print("  space -> stand")
+        print("  h -> hold current position")
         print("  x -> emergency stop")
-        print("  b -> gesture_0")
-        print("  n -> namaste")
-        print("  h -> hi")
+        print(f"  speed scale: {self.speed_scale:.2f}")
         if not self.active:
             print("  WARNING: stdin is not an interactive terminal; keyboard input is inactive.")
 
@@ -207,42 +228,76 @@ class KeyboardCommandSource:
                 raise KeyboardInterrupt
             self.key_queue.append(key.lower())
 
+    def _process_movement_keys(self):
+        self._poll_keys()
+        if not self.key_queue:
+            return
+
+        now = time.monotonic()
+        kept = deque()
+        while self.key_queue:
+            key = self.key_queue.popleft()
+            consumed = True
+            if key == "w":
+                self.command = np.array([self.max_vx, 0.0, 0.0], dtype=np.float32)
+                self.command_deadline = now + self.command_timeout_s
+            elif key == "s":
+                self.command = np.array([-self.max_vx, 0.0, 0.0], dtype=np.float32)
+                self.command_deadline = now + self.command_timeout_s
+            elif key == "a":
+                self.command = np.array([0.0, self.max_vy, 0.0], dtype=np.float32)
+                self.command_deadline = now + self.command_timeout_s
+            elif key == "d":
+                self.command = np.array([0.0, -self.max_vy, 0.0], dtype=np.float32)
+                self.command_deadline = now + self.command_timeout_s
+            else:
+                consumed = False
+
+            if not consumed:
+                kept.append(key)
+        self.key_queue = kept
+
+    def _clear_motion_command(self):
+        self.command = np.zeros(3, dtype=np.float32)
+        self.command_deadline = -1.0
+
     def _pop_matching_key(self, mapping):
         self._poll_keys()
         mapping = mapping or {}
         for index, key in enumerate(self.key_queue):
             if key in mapping:
                 del self.key_queue[index]
+                if mapping[key] in ("stand", "sit", "hold"):
+                    self._clear_motion_command()
                 return mapping[key]
         return None
 
     def read(self):
-        self._poll_keys()
+        self._process_movement_keys()
+        if time.monotonic() > self.command_deadline:
+            self.command = np.zeros(3, dtype=np.float32)
         self.command_limits = load_command_limits()
-        self.command = clip_command(self.command, self.command_limits)
-        return self.command.copy()
+        return clip_command(self.command * self.speed_scale, self.command_limits)
 
     def get_mode_request(self):
-        return self._pop_matching_key({"w": "stand", "s": "sit"})
+        return self._pop_matching_key({" ": "stand", "c": "sit", "h": "hold"})
 
     def get_emergency_stop_request(self):
         reason = self._pop_matching_key({"x": "terminal keyboard emergency stop key x"})
         return reason
 
     def get_speed_scale(self):
-        return 1.0
+        return self.speed_scale
 
     def get_calibration_request(self):
-        return self._pop_matching_key({"f": "zero_current_pose"})
-
-    def get_gesture_request(self, button_map=None, axis_map=None, key_map=None):
-        fallback = {"b": "gesture_0", "n": "namaste", "h": "hi"}
-        mapping = key_map or fallback
-        return self._pop_matching_key(mapping)
+        return None
 
     def raw_state(self):
         self._poll_keys()
-        return {"pending_keys": list(self.key_queue)}
+        return {
+            "pending_keys": list(self.key_queue),
+            "command": [float(x) for x in self.command],
+        }
 
     def close(self):
         if self.active and self.old_settings is not None and self.fd is not None:
@@ -261,7 +316,7 @@ class JoystickCommandSource:
       button 4       -> stop walking and sit/crouch
       button 5       -> stand
       button 3       -> emergency stop when config/joystick.yaml remaps 0-2
-      button 6/7     -> speed scale only when enabled; normally used by gestures
+      button 6/7     -> optional speed scale
     """
 
     def __init__(
@@ -356,8 +411,6 @@ class JoystickCommandSource:
         self.command = np.zeros(3, dtype=np.float32)
         self.prev_buttons = {}
         self.prev_hats = {}
-        self.prev_gesture_buttons = {}
-        self.prev_gesture_axes = {}
 
         try:
             pygame = init_pygame_for_joystick()
@@ -604,31 +657,6 @@ class JoystickCommandSource:
 
         return None
 
-    def get_gesture_request(self, button_map=None, axis_map=None, key_map=None):
-        """Return gesture name for the first rising-edge button/axis trigger."""
-        self.pygame.event.pump()
-        for btn_id, gesture_name in (button_map or {}).items():
-            now = self._button(btn_id)
-            prev = self.prev_gesture_buttons.get(btn_id, False)
-            self.prev_gesture_buttons[btn_id] = now
-            if now and not prev:
-                return gesture_name
-
-        for item in axis_map or []:
-            axis_id = int(item.get("axis", -1))
-            direction = 1.0 if float(item.get("direction", 1.0)) >= 0.0 else -1.0
-            threshold = float(np.clip(abs(float(item.get("threshold", 0.8))), 0.0, 1.0))
-            gesture_name = item.get("gesture")
-            if gesture_name is None:
-                continue
-            now = direction * self._axis(axis_id) >= threshold
-            key = (axis_id, direction, str(gesture_name))
-            prev = self.prev_gesture_axes.get(key, False)
-            self.prev_gesture_axes[key] = now
-            if now and not prev:
-                return str(gesture_name)
-        return None
-
     def raw_state(self):
         self.pygame.event.pump()
         return {
@@ -652,7 +680,17 @@ class CommandSource:
                 yaw=kwargs.get("yaw", 0.0),
             )
         elif source == "keyboard":
-            self.impl = KeyboardCommandSource()
+            defaults = load_joystick_defaults()
+            speed_defaults = load_speed_scale_defaults()
+            self.impl = KeyboardCommandSource(
+                max_vx=kwargs.get("max_vx", defaults["speed_limits"]["max_vx"]),
+                max_vy=kwargs.get("max_vy", defaults["speed_limits"]["max_vy"]),
+                max_yaw=kwargs.get("max_yaw", defaults["speed_limits"]["max_yaw"]),
+                speed_scale_initial=kwargs.get("speed_scale_initial", speed_defaults["initial"]),
+                speed_scale_min=kwargs.get("speed_scale_min", speed_defaults["min"]),
+                speed_scale_max=kwargs.get("speed_scale_max", speed_defaults["max"]),
+                command_timeout_s=kwargs.get("keyboard_command_timeout", 0.35),
+            )
         elif source == "joystick":
             defaults = load_joystick_defaults()
             speed_defaults = load_speed_scale_defaults()
@@ -748,15 +786,6 @@ class CommandSource:
     def get_calibration_request(self):
         if hasattr(self.impl, "get_calibration_request"):
             return self.impl.get_calibration_request()
-        return None
-
-    def get_gesture_request(self, button_map=None, axis_map=None, key_map=None):
-        if hasattr(self.impl, "get_gesture_request"):
-            return self.impl.get_gesture_request(
-                button_map,
-                axis_map=axis_map,
-                key_map=key_map,
-            )
         return None
 
     def raw_state(self):

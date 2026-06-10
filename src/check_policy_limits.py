@@ -12,6 +12,7 @@ except ImportError as exc:
 from policy_runner import PolicyRunner
 from safety_monitor import SafetyMonitor
 from motor_command_layer import MotorCommandLayer
+from imu_interface import projected_gravity_absolute_xsens
 from joystick_interface import (
     clip_command,
     load_command_limits,
@@ -55,6 +56,61 @@ def array_limits_by_joint(runner, limits):
         dtype=np.float32,
     )
     return q_min, q_max, dq_max
+
+
+def check_observation_layout(runner):
+    failures = []
+    expected_lengths = {
+        "base_lin_vel": 3,
+        "base_ang_vel": 3,
+        "projected_gravity": 3,
+        "command": 3,
+        "joint_pos_relative": len(runner.policy_order),
+        "joint_vel": len(runner.policy_order),
+        "previous_action": len(runner.policy_order),
+    }
+    used = []
+
+    print("\nObservation layout:")
+    for field_name, expected_len in expected_lengths.items():
+        if field_name not in runner.observation_layout:
+            failures.append(f"missing observation field: {field_name}")
+            print(f"  {field_name:20s} MISSING")
+            continue
+        try:
+            indices = runner.observation_layout[field_name]
+            indices = list(range(indices[0], indices[1] + 1)) if len(indices) == 2 else list(indices)
+        except Exception as exc:
+            failures.append(f"{field_name}: invalid layout: {exc}")
+            print(f"  {field_name:20s} INVALID {exc}")
+            continue
+        if len(indices) != expected_len:
+            failures.append(
+                f"{field_name}: layout has {len(indices)} slots, expected {expected_len}"
+            )
+        if any(index < 0 or index >= runner.observation_dim for index in indices):
+            failures.append(f"{field_name}: index outside observation dim {runner.observation_dim}")
+        used.extend(indices)
+        print(f"  {field_name:20s} indices={indices[0]}..{indices[-1]} count={len(indices)}")
+
+    duplicates = sorted({index for index in used if used.count(index) > 1})
+    if duplicates:
+        failures.append(f"duplicate observation indices: {duplicates}")
+    missing = [index for index in range(runner.observation_dim) if index not in used]
+    if missing:
+        failures.append(f"unused observation indices: {missing}")
+    return failures
+
+
+def check_imu_upright_frame():
+    upright = projected_gravity_absolute_xsens(
+        np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+    )["projected_gravity"]
+    print("\nIMU frame sanity:")
+    print(f"  identity quaternion projected_gravity={upright}")
+    if not np.allclose(upright, np.array([0.0, 0.0, -1.0], dtype=np.float32), atol=1e-5):
+        return ["Xsens upright projected_gravity is not [0, 0, -1]"]
+    return []
 
 
 def within_limits(q, q_min, q_max, eps=EPS):
@@ -249,6 +305,8 @@ def main():
     print("Control dt:", runner.control_dt)
 
     failures = []
+    failures += check_observation_layout(runner)
+    failures += check_imu_upright_frame()
     failures += check_pose("default_pose", runner.q_default, runner, limits)
     failures += check_pose("stand_pose", runner.q_stand, runner, limits)
     failures += check_pose("crouch_pose", runner.q_crouch, runner, limits)

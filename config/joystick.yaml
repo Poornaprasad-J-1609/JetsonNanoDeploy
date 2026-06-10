@@ -49,14 +49,12 @@ buttons:
   # Button 4 stops walking policy and moves to crouch/sit pose.
   sit: 4
 
-  # Buttons 0-2 are remapped to user-defined gestures; only button 3 remains
-  # the joystick emergency stop. Ctrl+C is also always available.
-  emergency_stop: [3]
+  # Buttons 0-3 emergency-stop. Ctrl+C is also always available.
+  emergency_stop: [0, 1, 2, 3]
 
-  # Speed scale buttons disabled; buttons 6-7 are remapped to hi/namaste
-  # gestures in config/gestures.yaml.
-  speed_down: -1
-  speed_up: -1
+  # Optional joystick speed scale buttons.
+  speed_down: 6
+  speed_up: 7
 
   # Optional physical button for software zero calibration. -1 disables it.
   zero_calibration: -1
