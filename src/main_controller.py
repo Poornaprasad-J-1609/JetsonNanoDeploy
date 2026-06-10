@@ -741,6 +741,14 @@ def acquire_hold_target_from_feedback(
     fresh_names = set()
     stale_or_missing = list(active_joints)
     while time.monotonic() < deadline:
+        if mode == "mit-signal" and buses is not None:
+            keepalive_commands = motor_layer.build_mit_commands(
+                q_previous_target,
+                phase="startup",
+                feedback_by_joint=getattr(estimator, "last_feedback_by_joint", None),
+            )
+            motor_layer.send_signal_commands(buses, keepalive_commands)
+
         remaining = max(0.0, deadline - time.monotonic())
         refresh_estimator_feedback(
             estimator,
@@ -1137,6 +1145,7 @@ def run_policy_loop(
     policy_action_clip,
     policy_action_smoothing,
     hold_capture_seconds,
+    hold_command_repeats,
     telemetry=None,
     csv_logger=None,
 ):
@@ -1199,6 +1208,7 @@ def run_policy_loop(
     print("policy_action_clip:", float(policy_action_clip), "(0 disables)")
     print("policy_action_smoothing:", float(policy_action_smoothing), "(0 disables)")
     print("hold_capture_seconds:", float(hold_capture_seconds))
+    print("hold_command_repeats:", int(hold_command_repeats))
     if stand_zero_pending:
         print("[ZERO CAL] initial stand target will auto-zero when settled.")
     if sit_zero_pending:
@@ -1631,10 +1641,16 @@ def run_policy_loop(
         else:
             raise RuntimeError(f"Unknown control_mode: {active_control_mode}")
 
-        if mode == "signal":
-            motor_layer.send_harmless_frames(buses, commands)
-        elif mode == "mit-signal":
-            motor_layer.send_signal_commands(buses, commands)
+        send_repeats = (
+            max(1, int(hold_command_repeats))
+            if active_control_mode == "hold"
+            else 1
+        )
+        for _ in range(send_repeats):
+            if mode == "signal":
+                motor_layer.send_harmless_frames(buses, commands)
+            elif mode == "mit-signal":
+                motor_layer.send_signal_commands(buses, commands)
 
         active_feedback_timeout = min(
             float(feedback_timeout),
@@ -2045,6 +2061,24 @@ def main():
         help="seconds to gather fresh encoder feedback when h/HOLD is requested",
     )
     parser.add_argument(
+        "--hold-command-repeats",
+        type=int,
+        default=2,
+        help="number of repeated MIT command batches to send each hold cycle",
+    )
+    parser.add_argument(
+        "--enable-retries",
+        type=int,
+        default=3,
+        help="number of motor enable command rounds before control starts",
+    )
+    parser.add_argument(
+        "--enable-retry-delay",
+        type=float,
+        default=0.05,
+        help="seconds between repeated motor enable command rounds",
+    )
+    parser.add_argument(
         "--imu-source",
         choices=["auto", "fake", "none", "xsens", "serial-json", "serial-csv"],
         default="auto",
@@ -2449,7 +2483,11 @@ def main():
                         "software-zero can calibrate before commanding sit, stand, or walk."
                     )
             print("Sending motor enable frames...")
-            motor_layer.send_raw_commands(buses, motor_layer.build_enable_commands())
+            enable_commands = motor_layer.build_enable_commands()
+            for retry_index in range(max(1, int(args.enable_retries))):
+                motor_layer.send_raw_commands(buses, enable_commands)
+                if retry_index + 1 < max(1, int(args.enable_retries)):
+                    time.sleep(max(0.0, float(args.enable_retry_delay)))
             print("Motor enable frames sent.")
 
         if args.startup_action == "stand":
@@ -2506,6 +2544,7 @@ def main():
             policy_action_clip=args.policy_action_clip,
             policy_action_smoothing=args.policy_action_smoothing,
             hold_capture_seconds=max(0.02, args.hold_capture_seconds),
+            hold_command_repeats=max(1, args.hold_command_repeats),
             telemetry=telemetry,
             csv_logger=csv_logger,
         )

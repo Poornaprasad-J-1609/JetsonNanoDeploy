@@ -207,10 +207,16 @@ class MitFeedbackStateEstimator(FakeStateEstimator):
                 continue
 
             index = self.joint_index_by_name[joint_name]
-            feedback_items.append((joint_name, index, feedback))
+            feedback_items.append((
+                joint_name,
+                index,
+                feedback,
+                float(getattr(frame, "timestamp", time.monotonic())),
+                bus_name,
+            ))
 
         count = 0
-        for joint_name, index, feedback in feedback_items:
+        for joint_name, index, feedback, timestamp, bus_name in feedback_items:
             offset = float(self.motor_layer.joint_offsets[joint_name])
             direction = float(self.motor_layer.joint_directions[joint_name])
             raw_position = float(feedback["position"])
@@ -226,7 +232,8 @@ class MitFeedbackStateEstimator(FakeStateEstimator):
             torque_raw = float(feedback["torque"])
             self.qd_current[index] = direction * velocity_raw
             feedback = dict(feedback)
-            feedback["timestamp"] = float(getattr(frame, "timestamp", time.monotonic()))
+            feedback["timestamp"] = timestamp
+            feedback["bus_name"] = bus_name
             feedback["position_raw"] = float(feedback["position"])
             feedback["velocity_raw"] = velocity_raw
             feedback["torque_raw"] = torque_raw

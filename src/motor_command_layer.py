@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import time
 import numpy as np
@@ -496,14 +497,7 @@ class MotorCommandLayer:
         Motors do not have to be connected for the serial adapter to transmit.
         If motors ARE connected and powered, these packets can move them.
         """
-        sent = []
-        for cmd in commands:
-            bus = self._resolve_bus(buses, cmd.get("bus_name", "front"))
-            pkt = bus.send_raw(cmd["can_id"], cmd["data"])
-            sent.append(pkt)
-            if self.frame_gap_s > 0.0:
-                time.sleep(self.frame_gap_s)
-        return sent
+        return self._send_raw_like_commands(buses, commands)
 
     def build_enable_commands(self):
         commands = []
@@ -581,13 +575,62 @@ class MotorCommandLayer:
         return commands
 
     def send_raw_commands(self, buses, commands):
-        sent = []
-        for cmd in commands:
+        return self._send_raw_like_commands(buses, commands)
+
+    def _send_raw_like_commands(self, buses, commands):
+        commands = list(commands)
+        if not commands:
+            return []
+
+        if not isinstance(buses, dict):
+            sent = []
+            for cmd in commands:
+                pkt = buses.send_raw(cmd["can_id"], cmd["data"])
+                sent.append(pkt)
+                if self.frame_gap_s > 0.0:
+                    time.sleep(self.frame_gap_s)
+            return sent
+
+        grouped = {}
+        group_order = []
+        for index, cmd in enumerate(commands):
             bus = self._resolve_bus(buses, cmd.get("bus_name", "front"))
-            pkt = bus.send_raw(cmd["can_id"], cmd["data"])
-            sent.append(pkt)
-            if self.frame_gap_s > 0.0:
-                time.sleep(self.frame_gap_s)
+            key = id(bus)
+            if key not in grouped:
+                grouped[key] = {
+                    "bus": bus,
+                    "items": [],
+                }
+                group_order.append(key)
+            grouped[key]["items"].append((index, cmd))
+
+        if len(group_order) == 1:
+            bus = grouped[group_order[0]]["bus"]
+            sent = [None] * len(commands)
+            for index, cmd in grouped[group_order[0]]["items"]:
+                sent[index] = bus.send_raw(cmd["can_id"], cmd["data"])
+                if self.frame_gap_s > 0.0:
+                    time.sleep(self.frame_gap_s)
+            return sent
+
+        sent = [None] * len(commands)
+
+        def send_group(group):
+            bus = group["bus"]
+            results = []
+            for index, cmd in group["items"]:
+                pkt = bus.send_raw(cmd["can_id"], cmd["data"])
+                results.append((index, pkt))
+                if self.frame_gap_s > 0.0:
+                    time.sleep(self.frame_gap_s)
+            return results
+
+        with ThreadPoolExecutor(max_workers=len(group_order)) as executor:
+            futures = [executor.submit(send_group, grouped[key]) for key in group_order]
+            for future in futures:
+                for index, pkt in future.result():
+                    sent[index] = pkt
+
         return sent
 
 

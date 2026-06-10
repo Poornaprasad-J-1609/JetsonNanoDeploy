@@ -226,8 +226,11 @@ x = emergency stop.
   --speed-scale-min 0.05 \
   --speed-scale-max 0.05 \
   --keyboard-command-timeout 0.35 \
+  --enable-retries 3 \
+  --enable-retry-delay 0.05 \
   --feedback-timeout 0.05 \
   --hold-capture-seconds 0.50 \
+  --hold-command-repeats 2 \
   --pose-sync-error-rad 0.25 \
   --log-every 5 \
   --joint-debug \
@@ -276,8 +279,11 @@ first tests. For simulation-match policy input, see section 12.
   --policy-command-yaw-max 0.0 \
   --policy-action-clip 2.0 \
   --policy-action-smoothing 0.25 \
+  --enable-retries 3 \
+  --enable-retry-delay 0.05 \
   --feedback-timeout 0.05 \
   --hold-capture-seconds 0.50 \
+  --hold-command-repeats 2 \
   --pose-sync-error-rad 0.25 \
   --log-every 5 \
   --joint-debug \
@@ -325,8 +331,11 @@ first tests. For simulation-match policy input, see section 12.
   --policy-command-yaw-max 0.0 \
   --policy-action-clip 2.0 \
   --policy-action-smoothing 0.25 \
+  --enable-retries 3 \
+  --enable-retry-delay 0.05 \
   --feedback-timeout 0.05 \
   --hold-capture-seconds 0.50 \
+  --hold-command-repeats 2 \
   --pose-sync-error-rad 0.25 \
   --log-every 5 \
   --joint-debug \
