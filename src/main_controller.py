@@ -21,8 +21,16 @@ from safety_monitor import SafetyMonitor
 from state_estimator import FakeStateEstimator, MitFeedbackStateEstimator
 from joystick_interface import CommandSource, load_joystick_defaults, load_speed_scale_defaults
 from imu_interface import create_imu_sensor, load_imu_config
-from robstride_can_interface import ATUsbCan
 from motor_command_layer import MotorCommandLayer, print_mit_commands
+from can_topology import (
+    add_can_topology_args,
+    close_can_buses,
+    open_can_buses,
+    ports_for_active_joints,
+    resolve_joint_can_bus,
+    resolve_port_by_bus,
+    topology_lines,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -1718,12 +1726,7 @@ def main():
         help="print=no serial, signal=harmless empty CAN frames, mit-signal=sends MIT packets, motors=blocked",
     )
 
-    parser.add_argument("--port", default="/dev/ttyUSB0",
-                        help="fallback USB-CAN port used when --port-front / --port-back are not given")
-    parser.add_argument("--port-front", default=None,
-                        help="USB-CAN port for front legs (FL/FR, 6 motors); overrides --port")
-    parser.add_argument("--port-back", default=None,
-                        help="USB-CAN port for back legs (BL/BR, 6 motors); overrides --port")
+    add_can_topology_args(parser, default_port="/dev/ttyUSB0", default_can_count=2)
     parser.add_argument("--baud", type=int, default=921600)
     parser.add_argument(
         "--active-joints",
@@ -2034,8 +2037,11 @@ def main():
     args.policy_action_clip = max(0.0, float(args.policy_action_clip))
     args.policy_action_smoothing = float(np.clip(args.policy_action_smoothing, 0.0, 0.98))
 
-    port_front = args.port_front if args.port_front is not None else args.port
-    port_back  = args.port_back  if args.port_back  is not None else args.port
+    try:
+        port_by_bus = resolve_port_by_bus(args)
+    except ValueError as exc:
+        print("ERROR:", exc)
+        return 1
 
     if args.mode == "motors":
         print("ERROR: --mode motors is intentionally blocked for now.")
@@ -2044,15 +2050,6 @@ def main():
 
     active_imu_source = imu_source_name(args.imu_source, imu_defaults)
     active_imu_port = args.imu_port if args.imu_port is not None else imu_defaults.get("port")
-    if (
-        args.mode in ("signal", "mit-signal")
-        and active_imu_source in ("xsens", "xsens_binary", "mtdata2", "serial_json", "serial_csv")
-        and active_imu_port in {port_front, port_back}
-    ):
-        print("ERROR: IMU port", active_imu_port, "conflicts with a CAN bus port.")
-        print("CAN ports in use:", sorted({port_front, port_back}))
-        print("Use a separate device, e.g. --imu-port /dev/ttyUSB2")
-        return 1
 
     runner = PolicyRunner(
         policy_path=args.policy_path,
@@ -2066,7 +2063,7 @@ def main():
 
     safety = SafetyMonitor(runner.policy_order)
     motor_ids = load_motor_ids()
-    joint_can_bus = load_joint_can_bus()
+    joint_can_bus = resolve_joint_can_bus(runner.policy_order, args.can_count)
     active_joints = args.active_joints if args.active_joints is not None else load_active_joints()
     motor_layer = MotorCommandLayer(
         runner.policy_order,
@@ -2074,6 +2071,22 @@ def main():
         active_joints=active_joints,
         joint_can_bus=joint_can_bus,
     )
+    active_port_by_bus = ports_for_active_joints(
+        port_by_bus,
+        joint_can_bus,
+        motor_layer.active_joints,
+    )
+    if not active_port_by_bus:
+        active_port_by_bus = port_by_bus
+    if (
+        args.mode in ("signal", "mit-signal")
+        and active_imu_source in ("xsens", "xsens_binary", "mtdata2", "serial_json", "serial_csv")
+        and active_imu_port in set(active_port_by_bus.values())
+    ):
+        print("ERROR: IMU port", active_imu_port, "conflicts with an active CAN bus port.")
+        print("Active CAN ports in use:", sorted(set(active_port_by_bus.values())))
+        print("Use a separate device, e.g. --imu-port /dev/ttyUSB2")
+        return 1
 
     mit_cfg = load_yaml(ROOT / "config" / "mit_motor_control.yaml")
     standup_seconds = (
@@ -2152,8 +2165,8 @@ def main():
     print("Policy format:", runner.policy_format)
     print("Policy obs/actions:", runner.observation_dim, runner.action_dim)
     print("Control dt:", runner.control_dt)
-    print("Port front (FL/FR):", port_front)
-    print("Port back  (BL/BR):", port_back)
+    for line in topology_lines(args.can_count, port_by_bus):
+        print(line)
     print("Baud:", args.baud)
     print("Feedback source:", feedback_source)
     print("IMU source:", active_imu_source)
@@ -2211,19 +2224,20 @@ def main():
                 print("Use only with the robot secured or suspended for first tests.")
 
             print("\nOpening USB-CAN serial ports...")
-            bus_front = ATUsbCan(port=port_front, baud=args.baud).open()
-            print(f"USB-CAN front ({port_front}) opened.")
             try:
-                if port_back != port_front:
-                    bus_back = ATUsbCan(port=port_back, baud=args.baud).open()
-                    print(f"USB-CAN back ({port_back}) opened.")
-                else:
-                    bus_back = bus_front
-                    print(f"USB-CAN back shares front port ({port_front}).")
+                buses = open_can_buses(active_port_by_bus, baud=args.baud)
             except Exception:
-                bus_front.close()
                 raise
-            buses = {"front": bus_front, "back": bus_back}
+            for bus_name, port in active_port_by_bus.items():
+                shared = [
+                    other_name
+                    for other_name, other_bus in buses.items()
+                    if other_name != bus_name and other_bus is buses[bus_name]
+                ]
+                if shared:
+                    print(f"USB-CAN {bus_name} shares {port}.")
+                else:
+                    print(f"USB-CAN {bus_name} ({port}) opened.")
 
         if feedback_source == "mit":
             if args.mode != "mit-signal" or buses is None:
@@ -2397,11 +2411,7 @@ def main():
                     print("Motor stop frames sent.")
                 except Exception as exc:
                     print("\nWARNING: failed to send motor stop frames:", exc)
-            closed_ids = set()
-            for b in buses.values():
-                if id(b) not in closed_ids:
-                    b.close()
-                    closed_ids.add(id(b))
+            close_can_buses(buses)
             print("\nUSB-CAN closed.")
         if telemetry is not None:
             telemetry.close()

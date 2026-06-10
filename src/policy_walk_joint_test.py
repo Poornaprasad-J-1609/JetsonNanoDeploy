@@ -22,9 +22,17 @@ from imu_interface import create_imu_sensor, load_imu_config
 from joystick_interface import CommandSource, load_joystick_defaults, load_speed_scale_defaults
 from motor_command_layer import MotorCommandLayer, print_mit_commands
 from policy_runner import PolicyRunner
-from robstride_can_interface import ATUsbCan
 from safety_monitor import SafetyMonitor
 from state_estimator import FakeStateEstimator, MitFeedbackStateEstimator
+from can_topology import (
+    add_can_topology_args,
+    close_can_buses,
+    open_can_buses,
+    ports_for_active_joints,
+    resolve_joint_can_bus,
+    resolve_port_by_bus,
+    topology_lines,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -215,12 +223,7 @@ def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=["print", "mit-signal"], default="mit-signal")
-    parser.add_argument("--port", default="/dev/ttyUSB1",
-                        help="fallback USB-CAN port used when --port-front / --port-back are not given")
-    parser.add_argument("--port-front", default=None,
-                        help="USB-CAN port for front legs (FL/FR); overrides --port")
-    parser.add_argument("--port-back", default=None,
-                        help="USB-CAN port for back legs (BL/BR); overrides --port")
+    add_can_topology_args(parser, default_port="/dev/ttyUSB1", default_can_count=2)
     parser.add_argument("--baud", type=int, default=921600)
     parser.add_argument(
         "--joints",
@@ -326,28 +329,22 @@ def main():
     args.log_every = max(1, args.log_every)
     steps = None if args.policy_steps <= 0 else args.policy_steps
 
-    port_front = args.port_front if args.port_front is not None else args.port
-    port_back  = args.port_back  if args.port_back  is not None else args.port
+    try:
+        port_by_bus = resolve_port_by_bus(args)
+    except ValueError as exc:
+        print("ERROR:", exc)
+        return 1
 
     active_imu_source = args.imu_source
     if active_imu_source == "auto":
         active_imu_source = imu_defaults.get("source", "fake")
     active_imu_source = str(active_imu_source).replace("-", "_").lower()
     active_imu_port = args.imu_port if args.imu_port is not None else imu_defaults.get("port")
-    if (
-        args.mode == "mit-signal"
-        and active_imu_source in ("xsens", "xsens_binary", "mtdata2", "serial_json", "serial_csv")
-        and active_imu_port in {port_front, port_back}
-    ):
-        print("ERROR: IMU port", active_imu_port, "conflicts with a CAN bus port.")
-        print("CAN ports in use:", sorted({port_front, port_back}))
-        print("Use a separate device, e.g. --imu-port /dev/ttyUSB2")
-        return 1
 
     runner = PolicyRunner(policy_path=args.policy_path, policy_activation=args.policy_activation)
     safety = SafetyMonitor(runner.policy_order)
     motor_ids = load_motor_ids()
-    joint_can_bus = load_joint_can_bus()
+    joint_can_bus = resolve_joint_can_bus(runner.policy_order, args.can_count)
     test_joints = list(args.joints or runner.policy_order)
     send_joints = runner.policy_order if args.send_all_policy_joints else test_joints
 
@@ -361,6 +358,22 @@ def main():
         active_joints=send_joints,
         joint_can_bus=joint_can_bus,
     )
+    active_port_by_bus = ports_for_active_joints(
+        port_by_bus,
+        joint_can_bus,
+        motor_layer.active_joints,
+    )
+    if not active_port_by_bus:
+        active_port_by_bus = port_by_bus
+    if (
+        args.mode == "mit-signal"
+        and active_imu_source in ("xsens", "xsens_binary", "mtdata2", "serial_json", "serial_csv")
+        and active_imu_port in set(active_port_by_bus.values())
+    ):
+        print("ERROR: IMU port", active_imu_port, "conflicts with an active CAN bus port.")
+        print("Active CAN ports in use:", sorted(set(active_port_by_bus.values())))
+        print("Use a separate device, e.g. --imu-port /dev/ttyUSB2")
+        return 1
     command_source = make_command_source(args)
     q_fake_start = fake_start_pose_array(runner, args.fake_start)
 
@@ -370,8 +383,8 @@ def main():
 
     print("==== PURE POLICY PARTIAL-HARDWARE TEST ====")
     print("Mode:", args.mode)
-    print("Port front (FL/FR):", port_front)
-    print("Port back  (BL/BR):", port_back)
+    for line in topology_lines(args.can_count, port_by_bus):
+        print(line)
     print("Policy:", runner.policy_path)
     print("Policy obs/actions:", runner.observation_dim, runner.action_dim)
     print("Control dt:", runner.control_dt)
@@ -411,19 +424,9 @@ def main():
 
         if args.mode == "mit-signal":
             print("Opening USB-CAN ports...")
-            bus_front = ATUsbCan(port=port_front, baud=args.baud).open()
-            print(f"USB-CAN front ({port_front}) opened.")
-            try:
-                if port_back != port_front:
-                    bus_back = ATUsbCan(port=port_back, baud=args.baud).open()
-                    print(f"USB-CAN back ({port_back}) opened.")
-                else:
-                    bus_back = bus_front
-                    print(f"USB-CAN back shares front port ({port_front}).")
-            except Exception:
-                bus_front.close()
-                raise
-            buses = {"front": bus_front, "back": bus_back}
+            buses = open_can_buses(active_port_by_bus, baud=args.baud)
+            for bus_name, port in active_port_by_bus.items():
+                print(f"USB-CAN {bus_name} ({port}) opened.")
 
             estimator = MitFeedbackStateEstimator(
                 q_initial=q_fake_start,
@@ -583,11 +586,7 @@ def main():
                 print("Stop frames sent.")
             except Exception as exc:
                 print("WARNING: failed to send stop frames:", exc)
-            closed_ids = set()
-            for b in buses.values():
-                if id(b) not in closed_ids:
-                    b.close()
-                    closed_ids.add(id(b))
+            close_can_buses(buses)
             print("USB-CAN closed.")
 
     print("Policy walk joint test finished.")

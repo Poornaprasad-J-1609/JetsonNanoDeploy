@@ -5,13 +5,36 @@ Run all commands from this folder:
 
 cd /path/to/GRALLATOR_DEPLOY
 
-For a migrated system, change only these three device variables after checking
-which /dev/ttyUSB* belongs to each device:
+For a migrated system, change these device variables after checking which
+/dev/ttyUSB* belongs to each device:
 
+export CAN0=/dev/ttyUSB0
 export FRONT_CAN=/dev/ttyUSB0
 export BACK_CAN=/dev/ttyUSB1
+export FR_CAN=/dev/ttyUSB0
+export FL_CAN=/dev/ttyUSB1
+export BR_CAN=/dev/ttyUSB2
+export BL_CAN=/dev/ttyUSB3
 export IMU_PORT=/dev/ttyUSB2
 export PYTHONPATH="$PWD/src"
+
+For 4-CAN plus real IMU, use a fifth serial device for IMU, for example
+export IMU_PORT=/dev/ttyUSB4. The controller will stop at startup if the IMU
+port matches any CAN port.
+
+CAN topology options:
+
+1 CAN, all 12 motors on one adapter:
+  --can-count 1 --can-ports "$CAN0"
+
+2 CAN, front legs on one adapter and back legs on one adapter:
+  --can-count 2 --can-ports "$FRONT_CAN" "$BACK_CAN"
+
+4 CAN, one adapter per leg. The port order is FR FL BR BL:
+  --can-count 4 --can-ports "$FR_CAN" "$FL_CAN" "$BR_CAN" "$BL_CAN"
+
+The examples below use the 2-CAN front/back topology. Replace only the
+--can-count/--can-ports lines when your wiring is 1-CAN or 4-CAN.
 
 If the GUI does not open from a desktop terminal, check:
 
@@ -33,7 +56,9 @@ sudo apt-get install -y python3-tk
 
 ls -l /dev/ttyUSB* /dev/input/js* /dev/input/event* 2>/dev/null
 
-/usr/bin/python3 src/check_can_routing.py
+/usr/bin/python3 src/check_can_routing.py --can-count 1
+/usr/bin/python3 src/check_can_routing.py --can-count 2
+/usr/bin/python3 src/check_can_routing.py --can-count 4
 
 
 2. Joystick connection test
@@ -97,8 +122,8 @@ Main controller workflow:
 ------------------------------------------------
 
 /usr/bin/python3 src/check_motor_connections.py \
-  --port-front "$FRONT_CAN" \
-  --port-back "$BACK_CAN" \
+  --can-count 2 \
+  --can-ports "$FRONT_CAN" "$BACK_CAN" \
   --all \
   --rate 20 \
   --print-every 1.0 \
@@ -111,8 +136,8 @@ Main controller workflow:
 Put the robot manually in its stand/default pose, then run:
 
 /usr/bin/python3 src/check_motor_connections.py \
-  --port-front "$FRONT_CAN" \
-  --port-back "$BACK_CAN" \
+  --can-count 2 \
+  --can-ports "$FRONT_CAN" "$BACK_CAN" \
   --all \
   --rate 20 \
   --print-every 1.0 \
@@ -133,8 +158,8 @@ Step 2: manually put the robot in crouch/sit pose and press c.
 Step 3: press q to quit.
 
 /usr/bin/python3 src/check_motor_connections.py \
-  --port-front "$FRONT_CAN" \
-  --port-back "$BACK_CAN" \
+  --can-count 2 \
+  --can-ports "$FRONT_CAN" "$BACK_CAN" \
   --all \
   --rate 20 \
   --print-every 1.0 \
@@ -178,8 +203,8 @@ x = emergency stop.
 
 /usr/bin/python3 src/main_controller.py \
   --mode mit-signal \
-  --port-front "$FRONT_CAN" \
-  --port-back "$BACK_CAN" \
+  --can-count 2 \
+  --can-ports "$FRONT_CAN" "$BACK_CAN" \
   --feedback-source mit \
   --command-source keyboard \
   --imu-source fake \
@@ -220,8 +245,8 @@ first tests. For simulation-match policy input, see section 12.
 
 /usr/bin/python3 src/main_controller.py \
   --mode mit-signal \
-  --port-front "$FRONT_CAN" \
-  --port-back "$BACK_CAN" \
+  --can-count 2 \
+  --can-ports "$FRONT_CAN" "$BACK_CAN" \
   --feedback-source mit \
   --command-source keyboard \
   --imu-source xsens \
@@ -269,8 +294,8 @@ first tests. For simulation-match policy input, see section 12.
 
 /usr/bin/python3 src/main_controller.py \
   --mode mit-signal \
-  --port-front "$FRONT_CAN" \
-  --port-back "$BACK_CAN" \
+  --can-count 2 \
+  --can-ports "$FRONT_CAN" "$BACK_CAN" \
   --feedback-source mit \
   --command-source keyboard \
   --imu-source fake \
@@ -337,4 +362,6 @@ commands because the current terminal control request uses only W/A/S/D.
 /usr/bin/python3 src/check_policy_limits.py \
   --base-lin-vel-source zero
 
-/usr/bin/python3 src/check_can_routing.py
+/usr/bin/python3 src/check_can_routing.py --can-count 1
+/usr/bin/python3 src/check_can_routing.py --can-count 2
+/usr/bin/python3 src/check_can_routing.py --can-count 4

@@ -4,7 +4,7 @@ Hardware-free CAN routing checker for GRALLATOR deployment.
 
 This validates that:
   - every policy joint has a motor ID and explicit CAN bus assignment,
-  - all command builders keep the correct front/back bus_name,
+  - all command builders keep the correct one/two/four-CAN bus_name,
   - send paths actually route packets to the selected bus object,
   - MIT feedback frames are mapped by (bus, motor_id), so duplicate IDs on
     separate CAN networks can still be decoded correctly.
@@ -23,10 +23,10 @@ except ImportError as exc:
 from motor_command_layer import MotorCommandLayer, float_to_uint
 from robstride_can_interface import CanFrame
 from state_estimator import MitFeedbackStateEstimator
+from can_topology import bus_names_for_count, resolve_joint_can_bus
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VALID_BUS_NAMES = {"front", "back"}
 
 
 class FakeCanBus:
@@ -94,9 +94,7 @@ def make_feedback_frame(bus_name, motor_id, proto, q_motor, velocity=0.0, torque
     return frame
 
 
-def validate_motor_config(policy_order, motor_cfg):
-    motor_ids = motor_cfg["motor_ids"]
-    joint_can_bus = motor_cfg.get("joint_can_bus", {})
+def validate_motor_config(policy_order, motor_ids, joint_can_bus, valid_bus_names):
     errors = []
 
     for joint_name in policy_order:
@@ -104,10 +102,10 @@ def validate_motor_config(policy_order, motor_cfg):
             errors.append(f"missing motor_id for {joint_name}")
         if joint_name not in joint_can_bus:
             errors.append(f"missing joint_can_bus for {joint_name}")
-        elif joint_can_bus[joint_name] not in VALID_BUS_NAMES:
+        elif joint_can_bus[joint_name] not in valid_bus_names:
             errors.append(
                 f"{joint_name} has invalid CAN bus '{joint_can_bus[joint_name]}'; "
-                f"expected one of {sorted(VALID_BUS_NAMES)}"
+                f"expected one of {sorted(valid_bus_names)}"
             )
 
     seen_bus_motor = {}
@@ -129,14 +127,22 @@ def validate_motor_config(policy_order, motor_cfg):
 
 
 def expected_counts_by_bus(commands):
-    counts = {"front": 0, "back": 0}
+    counts = {}
     for cmd in commands:
         counts[cmd.get("bus_name", "front")] = counts.get(cmd.get("bus_name", "front"), 0) + 1
     return counts
 
 
-def assert_raw_routing(layer, commands, label, expected_comm_type=None):
-    buses = {"front": FakeCanBus("front"), "back": FakeCanBus("back")}
+def format_counts(counts, bus_names):
+    return " ".join(f"{bus_name}={int(counts.get(bus_name, 0))}" for bus_name in bus_names)
+
+
+def make_fake_buses(bus_names):
+    return {bus_name: FakeCanBus(bus_name) for bus_name in bus_names}
+
+
+def assert_raw_routing(layer, commands, label, bus_names, expected_comm_type=None):
+    buses = make_fake_buses(bus_names)
     expected = expected_counts_by_bus(commands)
     sent = layer.send_raw_commands(buses, commands)
 
@@ -161,8 +167,8 @@ def assert_raw_routing(layer, commands, label, expected_comm_type=None):
     return expected
 
 
-def assert_mit_routing(layer, commands):
-    buses = {"front": FakeCanBus("front"), "back": FakeCanBus("back")}
+def assert_mit_routing(layer, commands, bus_names):
+    buses = make_fake_buses(bus_names)
     expected = expected_counts_by_bus(commands)
     sent = layer.send_signal_commands(buses, commands)
 
@@ -177,8 +183,8 @@ def assert_mit_routing(layer, commands):
     return expected
 
 
-def assert_signal_routing(layer, commands):
-    buses = {"front": FakeCanBus("front"), "back": FakeCanBus("back")}
+def assert_signal_routing(layer, commands, bus_names):
+    buses = make_fake_buses(bus_names)
     expected = expected_counts_by_bus(commands)
     layer.send_harmless_frames(buses, commands)
 
@@ -188,25 +194,36 @@ def assert_signal_routing(layer, commands):
             raise AssertionError(f"signal frames: {bus_name} got {actual} packets, expected {count}")
 
 
-def assert_shared_bus_read_once(layer):
+def assert_shared_bus_read_once(layer, bus_names):
     shared = FakeCanBus("shared")
-    shared.frames.append(make_feedback_frame("front", 0x01, layer.proto, q_motor=0.0))
-    frames = MotorCommandLayer.read_all_frames({"front": shared, "back": shared}, timeout=0.0)
+    first_bus = bus_names[0]
+    shared.frames.append(make_feedback_frame(first_bus, 0x01, layer.proto, q_motor=0.0))
+    buses = {bus_name: shared for bus_name in bus_names}
+    frames = MotorCommandLayer.read_all_frames(buses, timeout=0.0)
 
     if shared.read_count != 1:
         raise AssertionError(f"shared physical CAN adapter was read {shared.read_count} times")
     if len(frames) != 1:
         raise AssertionError(f"shared physical CAN adapter returned {len(frames)} frames, expected 1")
-    if getattr(frames[0], "bus_name", None) != "front":
+    if getattr(frames[0], "bus_name", None) != first_bus:
         raise AssertionError("shared bus frame should keep the first logical bus tag")
 
 
 def assert_duplicate_id_feedback_mapping(policy_order, motor_ids, joint_can_bus, layer):
-    front_joint = next(name for name in policy_order if joint_can_bus.get(name) == "front")
-    back_joint = next(name for name in policy_order if joint_can_bus.get(name) == "back")
+    bus_to_joints = {}
+    for name in policy_order:
+        bus_to_joints.setdefault(joint_can_bus.get(name, "front"), []).append(name)
+
+    populated_buses = [bus_name for bus_name, names in bus_to_joints.items() if names]
+    if len(populated_buses) < 2:
+        return False
+
+    bus_a, bus_b = populated_buses[:2]
+    joint_a = bus_to_joints[bus_a][0]
+    joint_b = bus_to_joints[bus_b][0]
 
     duplicate_motor_ids = dict(motor_ids)
-    duplicate_motor_ids[back_joint] = int(duplicate_motor_ids[front_joint])
+    duplicate_motor_ids[joint_b] = int(duplicate_motor_ids[joint_a])
     duplicate_layer = MotorCommandLayer(
         policy_order=policy_order,
         motor_ids=duplicate_motor_ids,
@@ -222,25 +239,26 @@ def assert_duplicate_id_feedback_mapping(policy_order, motor_ids, joint_can_bus,
         imu_sensor=None,
     )
 
-    q_front = 0.123
-    q_back = -0.234
-    front_offset = float(duplicate_layer.joint_offsets[front_joint])
-    back_offset = float(duplicate_layer.joint_offsets[back_joint])
-    motor_id = int(duplicate_motor_ids[front_joint])
+    q_a = 0.123
+    q_b = -0.234
+    offset_a = float(duplicate_layer.joint_offsets[joint_a])
+    offset_b = float(duplicate_layer.joint_offsets[joint_b])
+    motor_id = int(duplicate_motor_ids[joint_a])
     frames = [
-        make_feedback_frame("front", motor_id, duplicate_layer.proto, q_front + front_offset),
-        make_feedback_frame("back", motor_id, duplicate_layer.proto, q_back + back_offset),
+        make_feedback_frame(bus_a, motor_id, duplicate_layer.proto, q_a + offset_a),
+        make_feedback_frame(bus_b, motor_id, duplicate_layer.proto, q_b + offset_b),
     ]
     count = estimator.update_from_frames(frames)
     if count != 2:
         raise AssertionError(f"duplicate ID feedback test decoded {count} frames, expected 2")
 
-    front_index = policy_order.index(front_joint)
-    back_index = policy_order.index(back_joint)
-    if abs(float(estimator.q_current[front_index]) - q_front) > 0.003:
-        raise AssertionError("front duplicate-ID feedback mapped to wrong joint/value")
-    if abs(float(estimator.q_current[back_index]) - q_back) > 0.003:
-        raise AssertionError("back duplicate-ID feedback mapped to wrong joint/value")
+    index_a = policy_order.index(joint_a)
+    index_b = policy_order.index(joint_b)
+    if abs(float(estimator.q_current[index_a]) - q_a) > 0.003:
+        raise AssertionError("first-bus duplicate-ID feedback mapped to wrong joint/value")
+    if abs(float(estimator.q_current[index_b]) - q_b) > 0.003:
+        raise AssertionError("second-bus duplicate-ID feedback mapped to wrong joint/value")
+    return True
 
 
 def assert_software_zero_calibration(policy_order, motor_ids, joint_can_bus):
@@ -325,7 +343,14 @@ def q_midpoint_from_limits(layer, policy_order):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Dry two-CAN routing check; no serial ports are opened.")
+    parser = argparse.ArgumentParser(description="Dry CAN routing check; no serial ports are opened.")
+    parser.add_argument(
+        "--can-count",
+        type=int,
+        choices=[1, 2, 4],
+        default=2,
+        help="1=all joints on one bus, 2=front/back, 4=FR/FL/BR/BL",
+    )
     parser.add_argument(
         "--active-joints",
         nargs="*",
@@ -337,8 +362,9 @@ def main():
     policy_order = load_policy_order()
     motor_cfg = load_motor_config()
     motor_ids = motor_cfg["motor_ids"]
-    joint_can_bus = motor_cfg.get("joint_can_bus", {})
-    validate_motor_config(policy_order, motor_cfg)
+    joint_can_bus = resolve_joint_can_bus(policy_order, args.can_count)
+    bus_names = bus_names_for_count(args.can_count)
+    validate_motor_config(policy_order, motor_ids, joint_can_bus, set(bus_names))
 
     active_joints = args.active_joints if args.active_joints is not None else policy_order
     layer = MotorCommandLayer(
@@ -350,41 +376,50 @@ def main():
 
     q_target = q_midpoint_from_limits(layer, policy_order)
     mit_commands = layer.build_mit_commands(q_target, phase="policy")
-    mit_counts = assert_mit_routing(layer, mit_commands)
-    assert_signal_routing(layer, mit_commands)
+    mit_counts = assert_mit_routing(layer, mit_commands, bus_names)
+    assert_signal_routing(layer, mit_commands, bus_names)
 
     proto = layer.proto
     enable_counts = assert_raw_routing(
         layer,
         layer.build_enable_commands(),
         "enable commands",
+        bus_names,
         expected_comm_type=int(proto["comm_type_enable"]),
     )
     poll_counts = assert_raw_routing(
         layer,
         layer.build_feedback_poll_commands(),
         "feedback poll commands",
+        bus_names,
         expected_comm_type=int(proto["comm_type_stop"]),
     )
     zero_counts = assert_raw_routing(
         layer,
         layer.build_set_zero_commands(),
         "set-zero commands",
+        bus_names,
         expected_comm_type=int(proto["comm_type_set_zero"]),
     )
     stop_counts = assert_raw_routing(
         layer,
         layer.build_stop_commands(),
         "stop commands",
+        bus_names,
         expected_comm_type=int(proto["comm_type_stop"]),
     )
-    assert_shared_bus_read_once(layer)
-    assert_duplicate_id_feedback_mapping(policy_order, motor_ids, joint_can_bus, layer)
+    assert_shared_bus_read_once(layer, bus_names)
+    duplicate_mapping_checked = assert_duplicate_id_feedback_mapping(
+        policy_order,
+        motor_ids,
+        joint_can_bus,
+        layer,
+    )
     assert_software_zero_calibration(policy_order, motor_ids, joint_can_bus)
 
     bus_to_joints = {
         bus_name: [name for name in policy_order if joint_can_bus.get(name, "front") == bus_name]
-        for bus_name in sorted(VALID_BUS_NAMES)
+        for bus_name in bus_names
     }
 
     print("CAN routing check OK.")
@@ -393,13 +428,16 @@ def main():
         joined = ", ".join(f"{name}=0x{int(motor_ids[name]):02X}" for name in joints)
         print(f"  {bus_name:5s}: {len(joints)} joint(s) -> {joined}")
     print("Route-tested active joints:", ", ".join(layer.active_joints))
-    print(f"MIT command routing:       front={mit_counts.get('front', 0)} back={mit_counts.get('back', 0)}")
-    print(f"Enable command routing:    front={enable_counts.get('front', 0)} back={enable_counts.get('back', 0)}")
-    print(f"Feedback poll routing:     front={poll_counts.get('front', 0)} back={poll_counts.get('back', 0)}")
-    print(f"Set-zero command routing:  front={zero_counts.get('front', 0)} back={zero_counts.get('back', 0)}")
-    print(f"Stop command routing:      front={stop_counts.get('front', 0)} back={stop_counts.get('back', 0)}")
+    print("MIT command routing:      ", format_counts(mit_counts, bus_names))
+    print("Enable command routing:   ", format_counts(enable_counts, bus_names))
+    print("Feedback poll routing:    ", format_counts(poll_counts, bus_names))
+    print("Set-zero command routing: ", format_counts(zero_counts, bus_names))
+    print("Stop command routing:     ", format_counts(stop_counts, bus_names))
     print("Shared-port de-duplication: OK")
-    print("Duplicate motor IDs on separate CAN buses: feedback mapping OK")
+    if duplicate_mapping_checked:
+        print("Duplicate motor IDs on separate CAN buses: feedback mapping OK")
+    else:
+        print("Duplicate motor IDs on separate CAN buses: skipped for one-CAN topology")
     print("Software zero calibration and joint direction handling: OK")
     return 0
 

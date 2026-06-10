@@ -20,9 +20,12 @@ motor_ids:
 #   --active-joints FL_thigh_joint FL_calf_joint
 active_joints: []
 
-# Which CAN bus each joint's motor is wired to.
-# front bus -> FL + FR legs (6 motors)
-# back  bus -> BL + BR legs (6 motors)
+# Default 2-CAN wiring reference.
+# Runtime commands can override routing with:
+#   --can-count 1 --can-ports /dev/ttyUSB0
+#   --can-count 2 --can-ports FRONT_CAN BACK_CAN
+#   --can-count 4 --can-ports FR_CAN FL_CAN BR_CAN BL_CAN
+# For 4-CAN mode, the logical buses are FR, FL, BR, BL.
 joint_can_bus:
   FR_hip_joint: front
   FR_thigh_joint: front

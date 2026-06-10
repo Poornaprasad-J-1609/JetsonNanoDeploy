@@ -22,8 +22,16 @@ from motor_command_layer import (
     print_mit_commands,
 )
 from policy_runner import PolicyRunner
-from robstride_can_interface import ATUsbCan
 from state_estimator import MitFeedbackStateEstimator
+from can_topology import (
+    add_can_topology_args,
+    close_can_buses,
+    open_can_buses,
+    ports_for_active_joints,
+    resolve_joint_can_bus,
+    resolve_port_by_bus,
+    topology_lines,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -78,12 +86,7 @@ def print_joint_feedback(step, commands, estimator):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--port", default="/dev/ttyUSB1",
-                        help="fallback USB-CAN port used when --port-front / --port-back are not given")
-    parser.add_argument("--port-front", default=None,
-                        help="USB-CAN port for front legs (FL/FR); overrides --port")
-    parser.add_argument("--port-back", default=None,
-                        help="USB-CAN port for back legs (BL/BR); overrides --port")
+    add_can_topology_args(parser, default_port="/dev/ttyUSB1", default_can_count=2)
     parser.add_argument("--baud", type=int, default=921600)
     parser.add_argument(
         "--joints",
@@ -111,43 +114,43 @@ def main():
     args = parser.parse_args()
     args.log_every = max(1, args.log_every)
 
-    port_front = args.port_front if args.port_front is not None else args.port
-    port_back  = args.port_back  if args.port_back  is not None else args.port
+    try:
+        port_by_bus = resolve_port_by_bus(args)
+    except ValueError as exc:
+        print("ERROR:", exc)
+        return 1
 
     runner = PolicyRunner()
     motor_ids = load_motor_ids()
-    joint_can_bus = load_joint_can_bus()
+    joint_can_bus = resolve_joint_can_bus(runner.policy_order, args.can_count)
     layer = MotorCommandLayer(
         runner.policy_order,
         motor_ids,
         active_joints=args.joints,
         joint_can_bus=joint_can_bus,
     )
+    active_port_by_bus = ports_for_active_joints(
+        port_by_bus,
+        joint_can_bus,
+        layer.active_joints,
+    )
+    if not active_port_by_bus:
+        active_port_by_bus = port_by_bus
 
     print("==== DIRECT MIT JOINT MOTION TEST ====")
     print("This bypasses policy, joystick, and IMU.")
     print("Joints:", ", ".join(args.joints))
-    print("Port front (FL/FR):", port_front)
-    print("Port back  (BL/BR):", port_back)
+    for line in topology_lines(args.can_count, port_by_bus):
+        print(line)
     print("Amplitude:", args.amplitude)
     print("Frequency:", args.frequency)
     print()
 
     buses = None
     try:
-        bus_front = ATUsbCan(port=port_front, baud=args.baud).open()
-        print(f"USB-CAN front ({port_front}) opened.")
-        try:
-            if port_back != port_front:
-                bus_back = ATUsbCan(port=port_back, baud=args.baud).open()
-                print(f"USB-CAN back ({port_back}) opened.")
-            else:
-                bus_back = bus_front
-                print(f"USB-CAN back shares front port ({port_front}).")
-        except Exception:
-            bus_front.close()
-            raise
-        buses = {"front": bus_front, "back": bus_back}
+        buses = open_can_buses(active_port_by_bus, baud=args.baud)
+        for bus_name, port in active_port_by_bus.items():
+            print(f"USB-CAN {bus_name} ({port}) opened.")
 
         estimator = MitFeedbackStateEstimator(
             q_initial=runner.q_stand,
@@ -221,11 +224,7 @@ def main():
                 print("Stop frames sent.")
             except Exception as exc:
                 print("WARNING: failed to send stop frames:", exc)
-            closed_ids = set()
-            for b in buses.values():
-                if id(b) not in closed_ids:
-                    b.close()
-                    closed_ids.add(id(b))
+            close_can_buses(buses)
             print("USB-CAN closed.")
 
     print("Direct MIT joint motion test finished.")

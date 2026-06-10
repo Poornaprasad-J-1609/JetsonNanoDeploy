@@ -21,7 +21,15 @@ from motor_command_layer import (
     decode_mit_feedback_frame,
     motor_position_to_joint_angle,
 )
-from robstride_can_interface import ATUsbCan
+from can_topology import (
+    add_can_topology_args,
+    close_can_buses,
+    open_can_buses,
+    ports_for_active_joints,
+    resolve_joint_can_bus,
+    resolve_port_by_bus,
+    topology_lines,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -687,12 +695,7 @@ def main():
     pose_references, poses = load_pose_references(policy_order)
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--port", default="/dev/ttyUSB0",
-                        help="fallback USB-CAN port used when --port-front / --port-back are not given")
-    parser.add_argument("--port-front", default=None,
-                        help="USB-CAN port for front legs (FL/FR); overrides --port")
-    parser.add_argument("--port-back", default=None,
-                        help="USB-CAN port for back legs (BL/BR); overrides --port")
+    add_can_topology_args(parser, default_port="/dev/ttyUSB0", default_can_count=2)
     parser.add_argument("--baud", type=int, default=921600)
     parser.add_argument("--active-joints", nargs="*", default=None)
     parser.add_argument("--all", action="store_true", help="ignore config active_joints and check all configured joints")
@@ -725,8 +728,11 @@ def main():
     if args.gui_only:
         args.gui = True
 
-    port_front = args.port_front if args.port_front is not None else args.port
-    port_back  = args.port_back  if args.port_back  is not None else args.port
+    try:
+        port_by_bus = resolve_port_by_bus(args)
+    except ValueError as exc:
+        print("ERROR:", exc)
+        return 1
 
     if args.all:
         joints = policy_order
@@ -734,13 +740,20 @@ def main():
         joints = resolve_joints(policy_order, motor_cfg, args.active_joints)
 
     motor_ids = motor_cfg["motor_ids"]
-    joint_can_bus = motor_cfg.get("joint_can_bus", {})
+    joint_can_bus = resolve_joint_can_bus(policy_order, args.can_count)
     layer = MotorCommandLayer(
         policy_order=policy_order,
         motor_ids=motor_ids,
         active_joints=joints,
         joint_can_bus=joint_can_bus,
     )
+    active_port_by_bus = ports_for_active_joints(
+        port_by_bus,
+        joint_can_bus,
+        layer.active_joints,
+    )
+    if not active_port_by_bus:
+        active_port_by_bus = port_by_bus
     poll_commands = layer.build_feedback_poll_commands()
     set_zero_commands = layer.build_set_zero_commands()
     set_zero_key = (args.set_zero_key or "s")[0].lower()
@@ -748,22 +761,15 @@ def main():
     quit_key = (args.quit_key or "q")[0].lower()
 
     print("Opening RobStride AT USB-CAN adapters...")
-    print(f"port_front={port_front}, port_back={port_back}, baud={args.baud}")
+    for line in topology_lines(args.can_count, port_by_bus):
+        print(line)
+    print(f"baud={args.baud}")
     print("Checking joints:")
     for joint_name in layer.active_joints:
         bus_name = joint_can_bus.get(joint_name, "front")
         print(f"  {joint_name:20s} -> 0x{int(motor_ids[joint_name]):02X}  [{bus_name}]")
 
-    bus_front = ATUsbCan(port=port_front, baud=args.baud, timeout=0.002).open()
-    try:
-        if port_back != port_front:
-            bus_back = ATUsbCan(port=port_back, baud=args.baud, timeout=0.002).open()
-        else:
-            bus_back = bus_front
-    except Exception:
-        bus_front.close()
-        raise
-    buses = {"front": bus_front, "back": bus_back}
+    buses = open_can_buses(active_port_by_bus, baud=args.baud, timeout=0.002)
 
     gui_proc = None
     telemetry_sock = None
@@ -930,11 +936,7 @@ def main():
         print("\nStopped by user.")
 
     finally:
-        closed_ids = set()
-        for b in buses.values():
-            if id(b) not in closed_ids:
-                b.close()
-                closed_ids.add(id(b))
+        close_can_buses(buses)
         if telemetry_sock is not None:
             telemetry_sock.close()
         if gui_proc is not None:
