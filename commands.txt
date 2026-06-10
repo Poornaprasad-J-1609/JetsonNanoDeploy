@@ -141,12 +141,13 @@ Put the robot manually in its stand/default pose, then run:
   --all \
   --rate 20 \
   --print-every 1.0 \
+  --set-zero-value-rad 1.0 \
   --gui-only
   
 
 Keyboard while this command is running:
 
-s = send RobStride set-zero to all active motors and save default_pose/stand_pose as zero
+s = send RobStride set-zero and save default_pose/stand_pose as +1.0 rad
 q = quit
 
 
@@ -163,11 +164,12 @@ Step 3: press q to quit.
   --all \
   --rate 20 \
   --print-every 1.0 \
+  --set-zero-value-rad 1.0 \
   --gui-only
 
 Keyboard while this command is running:
 
-s = set current motor positions as zero/default/stand
+s = set current motor positions as local +1.0 rad/default/stand
 c = save current feedback angles as crouch_pose in config/default_pose.yaml
 q = quit
 
@@ -217,6 +219,8 @@ x = emergency stop.
   --auto-zero-on-startup \
   --auto-stand-zero \
   --auto-sit-zero \
+  --crouch-calibration-value 1.0 \
+  --stand-calibration-value 0.0 \
   --policy-steps 0 \
   --walk-command-threshold 999 \
   --max-vx 0.0 \
@@ -264,6 +268,8 @@ first tests. For simulation-match policy input, see section 12.
   --auto-zero-on-startup \
   --auto-stand-zero \
   --auto-sit-zero \
+  --crouch-calibration-value 1.0 \
+  --stand-calibration-value 0.0 \
   --policy-steps 0 \
   --walk-command-threshold 0.02 \
   --max-vx 1.80 \
@@ -316,6 +322,8 @@ first tests. For simulation-match policy input, see section 12.
   --auto-zero-on-startup \
   --auto-stand-zero \
   --auto-sit-zero \
+  --crouch-calibration-value 1.0 \
+  --stand-calibration-value 0.0 \
   --policy-steps 0 \
   --walk-command-threshold 0.02 \
   --max-vx 1.80 \

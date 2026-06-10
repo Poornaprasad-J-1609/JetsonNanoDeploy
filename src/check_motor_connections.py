@@ -509,14 +509,15 @@ def capture_crouch_pose(
     )
 
 
-def set_stand_default_yaml_zero(joints):
-    zeros = {joint_name: 0.0 for joint_name in joints}
+def set_stand_default_yaml_value(joints, value):
+    values = {joint_name: float(value) for joint_name in joints}
     path, backup_path = update_default_pose_yaml({
-        "default_pose": zeros,
-        "stand_pose": zeros,
+        "default_pose": values,
+        "stand_pose": values,
     })
     return (
-        f"default_pose and stand_pose set to 0.0 for {len(zeros)} joint(s) "
+        f"default_pose and stand_pose set to {float(value):+.3f} rad "
+        f"for {len(values)} joint(s) "
         f"in {path}; backup={backup_path}"
     )
 
@@ -715,7 +716,9 @@ def main():
     parser.add_argument("--disable-crouch-key", action="store_true",
                         help="disable keyboard crouch-pose capture")
     parser.add_argument("--set-zero-yaml", action=argparse.BooleanOptionalAction, default=True,
-                        help="when pressing set-zero, also write default_pose and stand_pose as 0.0")
+                        help="when pressing set-zero, also write default_pose and stand_pose")
+    parser.add_argument("--set-zero-value-rad", type=float, default=1.0,
+                        help="joint value assigned after pressing set-zero; default is 1.0 rad")
     parser.add_argument("--gui", action="store_true",
                         help="launch telemetry GUI and stream encoder values only")
     parser.add_argument("--gui-only", action="store_true",
@@ -813,17 +816,25 @@ def main():
                             last_set_zero_time = now
                             branch_offsets.clear()
                             joint_positions = {
-                                joint_name: 0.0 for joint_name in layer.active_joints
+                                joint_name: float(args.set_zero_value_rad)
+                                for joint_name in layer.active_joints
                             }
+                            for joint_name in layer.active_joints:
+                                direction = float(layer.joint_directions.get(joint_name, 1.0))
+                                layer.joint_offsets[joint_name] = -direction * float(args.set_zero_value_rad)
                             feedback_by_bus_motor_id.clear()
                             feedback_by_motor_id.clear()
                             status_message = (
                                 f"SET ZERO sent to {len(set_zero_commands)} active motor(s) "
-                                f"at {time.strftime('%H:%M:%S')}"
+                                f"at {time.strftime('%H:%M:%S')}; "
+                                f"local q={float(args.set_zero_value_rad):+.3f} rad"
                             )
                             if args.set_zero_yaml:
                                 try:
-                                    yaml_status = set_stand_default_yaml_zero(layer.active_joints)
+                                    yaml_status = set_stand_default_yaml_value(
+                                        layer.active_joints,
+                                        args.set_zero_value_rad,
+                                    )
                                     status_message += "\n" + yaml_status
                                 except Exception as exc:
                                     status_message += f"\nYAML zero update failed: {exc}"

@@ -205,6 +205,7 @@ class MotorCommandLayer:
         self.joint_directions = self._load_joint_directions()
         self.active_joints = self.resolve_active_joints(active_joints)
         self.joint_can_bus = dict(joint_can_bus) if joint_can_bus else {}
+        self.joint_coordinate_shifts = {joint_name: 0.0 for joint_name in self.policy_order}
         self.reload_joint_limits(force=True)
         self.reload_control_limits(force=True)
 
@@ -303,6 +304,9 @@ class MotorCommandLayer:
     def apply_hard_joint_limit(self, joint_name, q_des):
         self.reload_joint_limits()
         q_min, q_max = self.hard_joint_limits[joint_name]
+        shift = float(self.joint_coordinate_shifts.get(joint_name, 0.0))
+        q_min += shift
+        q_max += shift
         return float(np.clip(q_des, q_min, q_max))
 
     def apply_hard_joint_limit_to_motor_position(self, joint_name, p_des, offset, direction=1.0):
@@ -310,9 +314,15 @@ class MotorCommandLayer:
         q_des = self.apply_hard_joint_limit(joint_name, q_des)
         return float(offset) + float(direction) * q_des, q_des
 
-    def set_software_zero_from_feedback(self, feedback_by_joint, active_joints=None):
+    def coordinate_shift_array(self):
+        return np.array(
+            [self.joint_coordinate_shifts.get(joint_name, 0.0) for joint_name in self.policy_order],
+            dtype=np.float32,
+        )
+
+    def set_software_zero_from_feedback(self, feedback_by_joint, active_joints=None, target_value=0.0):
         """
-        Make the current measured motor position read as q=0 in software.
+        Make the current measured motor position read as target_value in software.
 
         This updates only this process' joint_offsets. It does not send a
         RobStride set-zero frame, so MIT control can keep holding the same raw
@@ -327,14 +337,18 @@ class MotorCommandLayer:
         # BEFORE mutating any offset. A partial calibration leaves some motors
         # referenced to a stale raw position, so they fail to hold while the
         # rest do. Make the whole operation all-or-nothing.
+        target_value = float(target_value)
         new_offsets = {}
+        new_shifts = {}
         missing = []
         for joint_name in active_joints:
             feedback = feedback_by_joint.get(joint_name)
             if feedback is None or "position" not in feedback:
                 missing.append(joint_name)
                 continue
-            new_offsets[joint_name] = float(feedback["position"])
+            direction = float(self.joint_directions[joint_name])
+            new_offsets[joint_name] = float(feedback["position"]) - direction * target_value
+            new_shifts[joint_name] = target_value
 
         if missing:
             # Do not touch self.joint_offsets at all.
@@ -342,13 +356,16 @@ class MotorCommandLayer:
 
         updated = {}
         old_offsets = dict(self.joint_offsets)
+        old_shifts = dict(self.joint_coordinate_shifts)
         for joint_name, position in new_offsets.items():
             self.joint_offsets[joint_name] = position
+            self.joint_coordinate_shifts[joint_name] = new_shifts[joint_name]
             updated[joint_name] = position
         try:
             self.reload_joint_limits(force=True)
         except Exception:
             self.joint_offsets = old_offsets
+            self.joint_coordinate_shifts = old_shifts
             self.reload_joint_limits(force=True)
             raise
         return updated, missing

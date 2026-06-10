@@ -792,16 +792,26 @@ def encoder_feedback_required(mode, estimator):
     return mode == "mit-signal" and hasattr(estimator, "last_feedback_by_joint")
 
 
-def encoder_safety_stop_reason(safety, estimator, active_joints, mode, require_feedback=None):
+def encoder_safety_stop_reason(
+    safety,
+    estimator,
+    active_joints,
+    mode,
+    require_feedback=None,
+    q_shift=None,
+):
     q_current = getattr(estimator, "q_current", None)
     if q_current is None:
         return "ABNORMAL ENCODER ANGLE: estimator has no joint position vector"
+    q_for_safety = np.asarray(q_current, dtype=np.float32)
+    if q_shift is not None:
+        q_for_safety = q_for_safety - np.asarray(q_shift, dtype=np.float32)
 
     if require_feedback is None:
         require_feedback = encoder_feedback_required(mode, estimator)
 
     stop, reason = safety.encoder_sanity_check(
-        q_current=q_current,
+        q_current=q_for_safety,
         active_joints=active_joints,
         feedback_by_joint=getattr(estimator, "last_feedback_by_joint", None),
         require_feedback=require_feedback,
@@ -882,6 +892,21 @@ def max_active_error(q_a, q_b, active_indices):
     return float(np.max(np.abs(q_a[active_indices] - q_b[active_indices])))
 
 
+def constant_pose_like(runner, value):
+    return np.full(len(runner.policy_order), float(value), dtype=np.float32)
+
+
+def shifted_safety_filter(safety, q_target, q_previous, q_shift):
+    q_shift = np.asarray(q_shift, dtype=np.float32)
+    if not np.any(np.abs(q_shift) > 1e-8):
+        return safety.safety_filter(q_target, q_previous)
+    filtered = safety.safety_filter(
+        np.asarray(q_target, dtype=np.float32) - q_shift,
+        np.asarray(q_previous, dtype=np.float32) - q_shift,
+    )
+    return (filtered + q_shift).astype(np.float32)
+
+
 def apply_software_zero_calibration(
     estimator,
     motor_layer,
@@ -890,6 +915,7 @@ def apply_software_zero_calibration(
     buses,
     mode,
     label,
+    target_value=0.0,
 ):
     # Do not send stop/poll frames here. During live control those frames can
     # drop torque and cause exactly the sit/stand jerk we are avoiding.
@@ -897,15 +923,18 @@ def apply_software_zero_calibration(
 
     if hasattr(estimator, "apply_software_zero"):
         try:
-            updated, missing = estimator.apply_software_zero(active_joints=active_joints)
+            updated, missing = estimator.apply_software_zero(
+                active_joints=active_joints,
+                target_value=target_value,
+            )
         except Exception as exc:
             print(f"\n[ZERO CAL] {label}: failed: {exc}")
             return False
     else:
-        updated = {joint_name: 0.0 for joint_name in active_joints}
+        updated = {joint_name: float(target_value) for joint_name in active_joints}
         missing = []
         if hasattr(estimator, "q_current"):
-            estimator.q_current[:] = 0.0
+            estimator.q_current[:] = float(target_value)
         if hasattr(estimator, "qd_current"):
             estimator.qd_current[:] = 0.0
 
@@ -918,8 +947,9 @@ def apply_software_zero_calibration(
 
     q_current, _, _, _, _ = estimator.read()
     print(
-        f"\n[ZERO CAL] {label}: software zero applied to "
-        f"{len(updated)} active joint(s). No RobStride hardware set-zero frame was sent."
+        f"\n[ZERO CAL] {label}: software calibration applied as "
+        f"q={float(target_value):+.3f} rad for {len(updated)} active joint(s). "
+        "No RobStride hardware set-zero frame was sent."
     )
     return q_current.copy()
 
@@ -1146,6 +1176,8 @@ def run_policy_loop(
     policy_action_smoothing,
     hold_capture_seconds,
     hold_command_repeats,
+    crouch_calibration_value,
+    stand_calibration_value,
     telemetry=None,
     csv_logger=None,
 ):
@@ -1193,7 +1225,10 @@ def run_policy_loop(
     print("zero_frame:", zero_frame)
     print("zero_calibrated:", bool(zero_calibrated))
     if has_motion_target and control_mode == "hold" and zero_frame == "crouch":
-        print("[ZERO CAL] MIT hold is active at q=0 for the crouch/default pose.")
+        print(
+            "[ZERO CAL] MIT hold is active at "
+            f"q={float(crouch_calibration_value):+.3f} for the crouch/default pose."
+        )
     print("auto_stand_zero:", bool(auto_stand_zero))
     print("auto_sit_zero:", bool(auto_sit_zero))
     print("pose_sync_error_rad:", float(pose_sync_error_rad))
@@ -1209,6 +1244,8 @@ def run_policy_loop(
     print("policy_action_smoothing:", float(policy_action_smoothing), "(0 disables)")
     print("hold_capture_seconds:", float(hold_capture_seconds))
     print("hold_command_repeats:", int(hold_command_repeats))
+    print("crouch_calibration_value:", float(crouch_calibration_value))
+    print("stand_calibration_value:", float(stand_calibration_value))
     if stand_zero_pending:
         print("[ZERO CAL] initial stand target will auto-zero when settled.")
     if sit_zero_pending:
@@ -1230,6 +1267,7 @@ def run_policy_loop(
             base_ang_vel_b,
             projected_gravity_b,
         ) = estimator.read()
+        q_coordinate_shift = motor_layer.coordinate_shift_array()
 
         joystick_emergency_reason = command_source.get_emergency_stop_request()
         if joystick_emergency_reason is not None:
@@ -1291,11 +1329,13 @@ def run_policy_loop(
                         buses=buses,
                         mode=mode,
                         label="crouch/default pose",
+                        target_value=crouch_calibration_value,
                     )
                 if q_zeroed is not False:
                     q_previous_target = q_zeroed.copy()
                     q_current = q_zeroed.copy()
                     qd_current = np.zeros_like(q_current, dtype=np.float32)
+                    q_coordinate_shift = motor_layer.coordinate_shift_array()
                     zero_frame = "crouch"
                     zero_calibrated = True
                     control_mode = "hold"
@@ -1305,7 +1345,10 @@ def run_policy_loop(
                     sit_zero_pending = False
                     sit_zero_settle_count = 0
                     calibration_hold_until_step = step + 10
-                    print("[ZERO CAL] zero_frame -> crouch. MIT hold is now active at q=0 for this pose.")
+                    print(
+                        "[ZERO CAL] zero_frame -> crouch. MIT hold is now active at "
+                        f"q={float(crouch_calibration_value):+.3f} for this pose."
+                    )
                     print("[ZERO CAL] Press STAND to move to stand and auto-zero for policy.")
 
         motion_feedback_guard_active = bool(
@@ -1319,6 +1362,7 @@ def run_policy_loop(
                 active_joints=motor_layer.active_joints,
                 mode=mode,
                 require_feedback=True,
+                q_shift=q_coordinate_shift,
             )
             if reason is not None:
                 print("\nEMERGENCY STOP:", reason)
@@ -1390,6 +1434,7 @@ def run_policy_loop(
                     buses=buses,
                     mode=mode,
                     label="crouch/default pose",
+                    target_value=crouch_calibration_value,
                 )
                 if q_zeroed is False:
                     print(
@@ -1401,6 +1446,7 @@ def run_policy_loop(
                     q_previous_target = q_zeroed.copy()
                     q_current = q_zeroed.copy()
                     qd_current = np.zeros_like(q_current, dtype=np.float32)
+                    q_coordinate_shift = motor_layer.coordinate_shift_array()
                     zero_calibrated = True
                     calibration_hold_until_step = step + 5
             if mode_request is None:
@@ -1445,6 +1491,7 @@ def run_policy_loop(
                     estimator=estimator,
                     active_joints=motor_layer.active_joints,
                     mode=mode,
+                    q_shift=q_coordinate_shift,
                 )
                 if reason is not None:
                     print("\nEMERGENCY STOP:", reason)
@@ -1570,9 +1617,15 @@ def run_policy_loop(
 
         elif active_control_mode == "stand":
             if zero_frame == "crouch":
-                q_policy_target = runner.q_stand_when_sit_zero.copy()
+                q_policy_target = (
+                    constant_pose_like(runner, crouch_calibration_value)
+                    + runner.q_stand_when_sit_zero
+                )
             else:
-                q_policy_target = runner.q_stand.copy()
+                q_policy_target = (
+                    constant_pose_like(runner, stand_calibration_value)
+                    + runner.q_stand
+                )
             q_policy_target = apply_motion_assists(
                 q_target=q_policy_target,
                 command=policy_command,
@@ -1582,7 +1635,12 @@ def run_policy_loop(
                 cfg=motion_assist_cfg,
                 use_gait=False,
             )
-            q_safe_target = safety.safety_filter(q_policy_target, q_previous_target)
+            q_safe_target = shifted_safety_filter(
+                safety,
+                q_policy_target,
+                q_previous_target,
+                q_coordinate_shift,
+            )
             commands = motor_layer.build_mit_commands(
                 q_safe_target,
                 phase="startup",
@@ -1592,10 +1650,18 @@ def run_policy_loop(
 
         elif active_control_mode == "sit":
             if zero_frame == "crouch":
-                q_policy_target = np.zeros(len(runner.policy_order), dtype=np.float32)
+                q_policy_target = constant_pose_like(runner, crouch_calibration_value)
             else:
-                q_policy_target = runner.q_sit_when_stand_zero.copy()
-            q_safe_target = safety.safety_filter(q_policy_target, q_previous_target)
+                q_policy_target = (
+                    constant_pose_like(runner, stand_calibration_value)
+                    + runner.q_sit_when_stand_zero
+                )
+            q_safe_target = shifted_safety_filter(
+                safety,
+                q_policy_target,
+                q_previous_target,
+                q_coordinate_shift,
+            )
             commands = motor_layer.build_mit_commands(
                 q_safe_target,
                 phase="startup",
@@ -1631,7 +1697,12 @@ def run_policy_loop(
                 cfg=motion_assist_cfg,
                 use_gait=True,
             )
-            q_safe_target = safety.safety_filter(q_policy_target, q_previous_target)
+            q_safe_target = shifted_safety_filter(
+                safety,
+                q_policy_target,
+                q_previous_target,
+                q_coordinate_shift,
+            )
             commands = motor_layer.build_mit_commands(
                 q_safe_target,
                 phase="policy",
@@ -1666,6 +1737,7 @@ def run_policy_loop(
             active_joints=motor_layer.active_joints,
             mode=mode,
             require_feedback=require_command_feedback,
+            q_shift=q_coordinate_shift,
         )
         if reason is not None:
             print("\nEMERGENCY STOP:", reason)
@@ -1722,12 +1794,17 @@ def run_policy_loop(
                     buses=buses,
                     mode=mode,
                     label="stand pose",
+                    target_value=stand_calibration_value,
                 )
                 if q_zeroed is not False:
                     zero_frame = "stand"
                     stand_zero_pending = False
                     stand_zero_settle_count = 0
-                    q_safe_target = runner.q_stand.copy()
+                    q_coordinate_shift = motor_layer.coordinate_shift_array()
+                    q_safe_target = (
+                        constant_pose_like(runner, stand_calibration_value)
+                        + runner.q_stand
+                    )
                     q_previous_target = q_safe_target.copy()
                     zero_calibrated = True
                     previous_action = np.zeros(action_dim, dtype=np.float32)
@@ -1763,12 +1840,14 @@ def run_policy_loop(
                     buses=buses,
                     mode=mode,
                     label="crouch/sit pose",
+                    target_value=crouch_calibration_value,
                 )
                 if q_zeroed is not False:
                     zero_frame = "crouch"
                     sit_zero_pending = False
                     sit_zero_settle_count = 0
-                    q_safe_target = np.zeros(len(runner.policy_order), dtype=np.float32)
+                    q_coordinate_shift = motor_layer.coordinate_shift_array()
+                    q_safe_target = constant_pose_like(runner, crouch_calibration_value)
                     q_previous_target = q_safe_target.copy()
                     zero_calibrated = True
                     previous_action = np.zeros(action_dim, dtype=np.float32)
@@ -1781,7 +1860,10 @@ def run_policy_loop(
                         motor_layer.send_harmless_frames(buses, commands)
                     elif mode == "mit-signal":
                         motor_layer.send_signal_commands(buses, commands)
-                    print("[ZERO CAL] zero_frame -> crouch. Crouch-zero hold is active.")
+                    print(
+                        "[ZERO CAL] zero_frame -> crouch. Crouch hold is active at "
+                        f"q={float(crouch_calibration_value):+.3f}."
+                    )
 
         if step % log_every == 0:
             telemetry_record = compact_telemetry_record(
@@ -2017,6 +2099,18 @@ def main():
         action=argparse.BooleanOptionalAction,
         default=True,
         help="when starting in crouch frame, software-zero current encoder pose automatically before joystick commands",
+    )
+    parser.add_argument(
+        "--crouch-calibration-value",
+        type=float,
+        default=1.0,
+        help="joint-coordinate value assigned to the current crouch/default pose during software calibration",
+    )
+    parser.add_argument(
+        "--stand-calibration-value",
+        type=float,
+        default=0.0,
+        help="joint-coordinate value assigned to stand during stand auto-calibration; keep 0.0 for RL policy",
     )
     parser.add_argument("--stand-zero-error-rad", type=float, default=0.08)
     parser.add_argument("--stand-zero-settle-steps", type=int, default=15)
@@ -2426,10 +2520,14 @@ def main():
                 buses=buses,
                 mode=args.mode,
                 label="startup crouch/default pose",
+                target_value=args.crouch_calibration_value,
             )
             if q_auto_zero is not False:
                 startup_zero_calibrated = True
-                print("[ZERO CAL] startup crouch/default pose is now q=0. D-pad zero is optional.")
+                print(
+                    "[ZERO CAL] startup crouch/default pose is now "
+                    f"q={float(args.crouch_calibration_value):+.3f}. D-pad zero is optional."
+                )
             else:
                 print(
                     "[ZERO CAL] startup auto-zero did not complete. The first stand/sit "
@@ -2475,6 +2573,7 @@ def main():
                     active_joints=motor_layer.active_joints,
                     mode=args.mode,
                     require_feedback=False,
+                    q_shift=motor_layer.coordinate_shift_array(),
                 )
                 if reason is not None:
                     print("\nWARNING:", reason)
@@ -2545,6 +2644,8 @@ def main():
             policy_action_smoothing=args.policy_action_smoothing,
             hold_capture_seconds=max(0.02, args.hold_capture_seconds),
             hold_command_repeats=max(1, args.hold_command_repeats),
+            crouch_calibration_value=float(args.crouch_calibration_value),
+            stand_calibration_value=float(args.stand_calibration_value),
             telemetry=telemetry,
             csv_logger=csv_logger,
         )

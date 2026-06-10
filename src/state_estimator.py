@@ -267,19 +267,21 @@ class MitFeedbackStateEstimator(FakeStateEstimator):
     def has_all_joint_feedback(self):
         return len(self.last_feedback_by_joint) >= len(self.policy_order)
 
-    def apply_software_zero(self, active_joints=None):
+    def apply_software_zero(self, active_joints=None, target_value=0.0):
+        target_value = float(target_value)
         updated, missing = self.motor_layer.set_software_zero_from_feedback(
             self.last_feedback_by_joint,
             active_joints=active_joints,
+            target_value=target_value,
         )
         for joint_name in updated:
             index = self.joint_index_by_name.get(joint_name)
             if index is not None:
-                self.q_current[index] = 0.0
+                self.q_current[index] = target_value
                 self.qd_current[index] = 0.0
             feedback = self.last_feedback_by_joint.get(joint_name)
             if feedback is not None:
-                feedback["joint_position"] = 0.0
+                feedback["joint_position"] = target_value
                 feedback["position_branch_offset"] = 0.0
                 feedback["position_unwrapped"] = float(feedback["position"])
                 feedback["velocity"] = 0.0
