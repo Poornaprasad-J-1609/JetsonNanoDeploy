@@ -691,6 +691,95 @@ def count_fresh_active_feedback(estimator, active_joints, max_age_s):
     return count
 
 
+def fresh_active_feedback_names(estimator, active_joints, max_age_s):
+    feedback = getattr(estimator, "last_feedback_by_joint", {}) or {}
+    now = time.monotonic()
+    fresh = set()
+    stale_or_missing = []
+    for joint_name in active_joints:
+        item = feedback.get(joint_name)
+        if not isinstance(item, dict):
+            stale_or_missing.append(joint_name)
+            continue
+        timestamp = item.get("timestamp")
+        try:
+            age = now - float(timestamp)
+        except (TypeError, ValueError):
+            stale_or_missing.append(joint_name)
+            continue
+        if np.isfinite(age) and age <= float(max_age_s):
+            fresh.add(joint_name)
+        else:
+            stale_or_missing.append(joint_name)
+    return fresh, stale_or_missing
+
+
+def acquire_hold_target_from_feedback(
+    estimator,
+    motor_layer,
+    safety,
+    q_previous_target,
+    feedback_timeout,
+    capture_seconds,
+    buses,
+    mode,
+    allow_poll_snapshot=False,
+):
+    """Build a hold target from fresh per-joint feedback only.
+
+    If a motor does not provide fresh feedback within the short capture window,
+    keep its previous command target instead of copying a stale q_current value.
+    """
+    active_joints = list(motor_layer.active_joints)
+    max_age_s = getattr(safety, "max_feedback_age_s", 0.25)
+    capture_seconds = max(float(feedback_timeout), float(capture_seconds), 0.02)
+    deadline = time.monotonic() + capture_seconds
+
+    if allow_poll_snapshot:
+        request_feedback_snapshot(motor_layer, buses, mode)
+
+    fresh_names = set()
+    stale_or_missing = list(active_joints)
+    while time.monotonic() < deadline:
+        remaining = max(0.0, deadline - time.monotonic())
+        refresh_estimator_feedback(
+            estimator,
+            timeout=min(float(feedback_timeout), remaining),
+        )
+        fresh_names, stale_or_missing = fresh_active_feedback_names(
+            estimator,
+            active_joints,
+            max_age_s,
+        )
+        if len(fresh_names) >= len(active_joints):
+            break
+        time.sleep(0.002)
+
+    refresh_estimator_feedback(estimator, timeout=0.0)
+    q_current, qd_current, base_lin_vel_b, base_ang_vel_b, projected_gravity_b = estimator.read()
+    q_hold = np.asarray(q_previous_target, dtype=np.float32).copy()
+    index_by_joint = getattr(
+        estimator,
+        "joint_index_by_name",
+        {name: index for index, name in enumerate(motor_layer.policy_order)},
+    )
+    for joint_name in fresh_names:
+        index = index_by_joint.get(joint_name)
+        if index is not None:
+            q_hold[index] = q_current[index]
+
+    return (
+        q_hold,
+        len(fresh_names),
+        stale_or_missing,
+        q_current,
+        qd_current,
+        base_lin_vel_b,
+        base_ang_vel_b,
+        projected_gravity_b,
+    )
+
+
 def encoder_feedback_required(mode, estimator):
     return mode == "mit-signal" and hasattr(estimator, "last_feedback_by_joint")
 
@@ -1047,6 +1136,7 @@ def run_policy_loop(
     policy_command_yaw_max,
     policy_action_clip,
     policy_action_smoothing,
+    hold_capture_seconds,
     telemetry=None,
     csv_logger=None,
 ):
@@ -1108,6 +1198,7 @@ def run_policy_loop(
     )
     print("policy_action_clip:", float(policy_action_clip), "(0 disables)")
     print("policy_action_smoothing:", float(policy_action_smoothing), "(0 disables)")
+    print("hold_capture_seconds:", float(hold_capture_seconds))
     if stand_zero_pending:
         print("[ZERO CAL] initial stand target will auto-zero when settled.")
     if sit_zero_pending:
@@ -1363,23 +1454,39 @@ def run_policy_loop(
                     )
                     break
             elif mode_request == "hold":
-                feedback_count = refresh_estimator_feedback(
-                    estimator,
-                    timeout=feedback_timeout,
-                )
                 (
+                    q_hold,
+                    feedback_count,
+                    hold_missing,
                     q_current,
                     qd_current,
                     base_lin_vel_b,
                     base_ang_vel_b,
                     projected_gravity_b,
-                ) = estimator.read()
-                q_previous_target = q_current.copy()
+                ) = acquire_hold_target_from_feedback(
+                    estimator,
+                    motor_layer,
+                    safety,
+                    q_previous_target,
+                    feedback_timeout=feedback_timeout,
+                    capture_seconds=hold_capture_seconds,
+                    buses=buses,
+                    mode=mode,
+                    allow_poll_snapshot=not has_motion_target,
+                )
+                q_previous_target = q_hold.copy()
                 previous_action = np.zeros(action_dim, dtype=np.float32)
-                if feedback_count > 0:
+                print(
+                    f"\n[FEEDBACK] hold target captured from "
+                    f"{feedback_count}/{len(motor_layer.active_joints)} fresh motor angle(s)"
+                )
+                if hold_missing:
+                    shown = ", ".join(hold_missing[:6])
+                    if len(hold_missing) > 6:
+                        shown += f", +{len(hold_missing) - 6} more"
                     print(
-                        f"\n[FEEDBACK] hold starts from "
-                        f"{feedback_count} measured motor angle(s)"
+                        "[FEEDBACK] hold kept previous target for stale/missing joint(s): "
+                        + shown
                     )
 
             if mode_request is not None:
@@ -1932,6 +2039,12 @@ def main():
         help="seconds to wait for MIT feedback after sending commands",
     )
     parser.add_argument(
+        "--hold-capture-seconds",
+        type=float,
+        default=0.35,
+        help="seconds to gather fresh encoder feedback when h/HOLD is requested",
+    )
+    parser.add_argument(
         "--imu-source",
         choices=["auto", "fake", "none", "xsens", "serial-json", "serial-csv"],
         default="auto",
@@ -2392,6 +2505,7 @@ def main():
             policy_command_yaw_max=args.policy_command_yaw_max,
             policy_action_clip=args.policy_action_clip,
             policy_action_smoothing=args.policy_action_smoothing,
+            hold_capture_seconds=max(0.02, args.hold_capture_seconds),
             telemetry=telemetry,
             csv_logger=csv_logger,
         )

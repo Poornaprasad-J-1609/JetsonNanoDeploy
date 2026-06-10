@@ -30,7 +30,7 @@ communication:
   # Manual gait scripts use a short gap between RobStride frames.
   # 1 ms matches the working manual gait scripts and keeps a 12-motor command
   # batch near one 20 ms control tick without over-driving the serial adapters.
-  frame_gap_s: 0.0010
+  frame_gap_s: 0.0030
 
 gains:
   startup:
