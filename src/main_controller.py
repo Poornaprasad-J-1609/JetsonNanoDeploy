@@ -1471,7 +1471,7 @@ def run_policy_loop(
 
         mode_request = command_source.get_mode_request()
         if mode_request is not None:
-            if mode_request in ("stand", "sit") and zero_frame == "crouch" and not zero_calibrated:
+            if mode_request == "stand" and zero_frame == "crouch" and not zero_calibrated:
                 print("\n[ZERO CAL] first pose command is auto-zeroing current crouch/default pose.")
                 fresh, n_active = collect_complete_feedback_before_zero(
                     estimator=estimator,
@@ -1511,6 +1511,15 @@ def run_policy_loop(
                     q_coordinate_shift = motor_layer.coordinate_shift_array()
                     zero_calibrated = True
                     calibration_hold_until_step = -1
+            elif mode_request == "sit" and zero_frame == "crouch" and not zero_calibrated:
+                print(
+                    "\n[POSE] crouch/default requested before software zero; "
+                    "commanding q=0 without redefining the current pose."
+                )
+                print(
+                    "[POSE] Press SPACE from the crouch/default pose later if you "
+                    "want stand auto-zero for policy walking."
+                )
             if mode_request is None:
                 pass
             elif mode_request in ("stand", "sit"):
