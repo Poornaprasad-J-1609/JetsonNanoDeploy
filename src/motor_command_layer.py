@@ -11,6 +11,7 @@ except ImportError as exc:
 
 
 ROOT = Path(__file__).resolve().parents[1]
+TWO_PI = 2.0 * np.pi
 
 
 def load_yaml(path):
@@ -30,6 +31,11 @@ def uint_to_float(x, x_min, x_max, bits):
     return float(x_min + span * x / ((1 << bits) - 1))
 
 
+def wrap_to_pi(angle):
+    """Map an angle or angle error into [-pi, pi)."""
+    return float((float(angle) + np.pi) % TWO_PI - np.pi)
+
+
 def motor_position_to_joint_angle(
     position,
     offset=0.0,
@@ -38,8 +44,15 @@ def motor_position_to_joint_angle(
     references=None,
     pose_snap_tolerance=0.0,
 ):
-    """Convert raw motor feedback to deployed joint coordinates without 2*pi wrapping."""
-    return float(direction) * (float(position) - float(offset))
+    """Convert raw motor feedback to deployed joint coordinates.
+
+    RobStride can report the same physical zero as 0, +2*pi, or -2*pi after
+    power cycling near an encoder branch boundary. Apply the motor mounting
+    direction first, then normalize the phase in true joint space so inverted
+    left/right motors unwrap with the correct sign.
+    """
+    oriented_angle = float(direction) * (float(position) - float(offset))
+    return wrap_to_pi(oriented_angle)
 
 
 def motor_command_position_near_feedback(
@@ -51,7 +64,7 @@ def motor_command_position_near_feedback(
     p_min=None,
     p_max=None,
 ):
-    """Convert desired joint angle to raw MIT motor position."""
+    """Convert desired joint angle to the raw MIT motor branch nearest feedback."""
     direction = float(direction)
     p_base = float(offset) + direction * float(q_des)
     if feedback_position is None or not np.isfinite(feedback_position):
@@ -64,13 +77,25 @@ def motor_command_position_near_feedback(
     p_min = float(p_min)
     p_max = float(p_max)
 
+    feedback_position = float(feedback_position)
     if feedback_joint_position is not None and np.isfinite(feedback_joint_position):
-        p_branch = (
-            float(feedback_position)
-            + direction * (float(q_des) - float(feedback_joint_position))
-        )
+        q_error = wrap_to_pi(float(q_des) - float(feedback_joint_position))
+        p_branch = feedback_position + direction * q_error
         if p_min <= p_branch <= p_max:
             return float(p_branch)
+
+    # Pick the equivalent command position separated by whole 2*pi turns that
+    # is closest to the live encoder branch. This prevents a target near zero
+    # from commanding a full-turn jump when feedback booted at +2*pi/-2*pi.
+    k_nearest = int(round((feedback_position - p_base) / TWO_PI))
+    candidates = [p_base + TWO_PI * k for k in (k_nearest - 1, k_nearest, k_nearest + 1)]
+    valid = [candidate for candidate in candidates if p_min <= candidate <= p_max]
+    if valid:
+        return float(min(valid, key=lambda candidate: abs(candidate - feedback_position)))
+
+    p_near = feedback_position + wrap_to_pi(p_base - feedback_position)
+    if p_min <= p_near <= p_max:
+        return float(p_near)
 
     return p_base
 
@@ -310,7 +335,11 @@ class MotorCommandLayer:
         return float(np.clip(q_des, q_min, q_max))
 
     def apply_hard_joint_limit_to_motor_position(self, joint_name, p_des, offset, direction=1.0):
-        q_des = float(direction) * (float(p_des) - float(offset))
+        q_des = motor_position_to_joint_angle(
+            p_des,
+            offset=offset,
+            direction=direction,
+        )
         q_des = self.apply_hard_joint_limit(joint_name, q_des)
         return float(offset) + float(direction) * q_des, q_des
 

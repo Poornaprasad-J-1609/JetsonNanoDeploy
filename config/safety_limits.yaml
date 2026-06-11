@@ -21,10 +21,10 @@ encoder:
   # stale encoder data from being reused if a CAN cable, adapter, or motor drops.
   max_feedback_age_s: 0.25
 
-  # Absolute sanity limit for measured joint angle after software zero offset
-  # and direction correction. No 2*pi filtering is applied; if a motor reports
-  # a shifted raw angle, press the joystick D-pad software-zero calibration
-  # while the robot is in the known crouch/default pose before commanding motion.
+  # Absolute sanity limit for measured joint angle after zero offset,
+  # joint-direction correction, and direction-aware 2*pi phase unwrapping.
+  # If this trips, the remaining error is larger than a single-turn branch
+  # correction and motion should stay blocked.
   max_abs_position_rad: 3.5
 
   # Also stop if measured q is outside config/joint_limits.yaml by this margin.

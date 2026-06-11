@@ -131,19 +131,6 @@ class MitFeedbackStateEstimator(FakeStateEstimator):
             for joint_name, motor_id in motor_ids.items()
         }
 
-        motor_id_to_joint = {}
-        duplicate_motor_ids = set()
-        for joint_name, motor_id in motor_ids.items():
-            motor_id = int(motor_id)
-            if motor_id in motor_id_to_joint:
-                duplicate_motor_ids.add(motor_id)
-            else:
-                motor_id_to_joint[motor_id] = joint_name
-        self.joint_name_by_motor_id = {
-            motor_id: joint_name
-            for motor_id, joint_name in motor_id_to_joint.items()
-            if motor_id not in duplicate_motor_ids
-        }
         self.last_feedback_by_joint = {}
         self.last_feedback_count = 0
         self.position_branch_offsets = {}
@@ -198,11 +185,9 @@ class MitFeedbackStateEstimator(FakeStateEstimator):
 
             motor_id = int(feedback["motor_id"])
             bus_name = getattr(frame, "bus_name", None)
-            joint_name = None
-            if bus_name is not None:
-                joint_name = self.joint_name_by_bus_motor_id.get((bus_name, motor_id))
-            if joint_name is None:
-                joint_name = self.joint_name_by_motor_id.get(motor_id)
+            if bus_name is None:
+                continue
+            joint_name = self.joint_name_by_bus_motor_id.get((bus_name, motor_id))
             if joint_name is None:
                 continue
 
@@ -225,7 +210,8 @@ class MitFeedbackStateEstimator(FakeStateEstimator):
                 offset=offset,
                 direction=direction,
             )
-            self.position_branch_offsets[joint_name] = 0.0
+            position_unwrapped = offset + direction * q_joint
+            self.position_branch_offsets[joint_name] = raw_position - position_unwrapped
 
             self.q_current[index] = q_joint
             velocity_raw = float(feedback["velocity"])
@@ -242,7 +228,7 @@ class MitFeedbackStateEstimator(FakeStateEstimator):
             feedback["joint_torque"] = direction * torque_raw
             feedback["velocity"] = direction * velocity_raw
             feedback["torque"] = direction * torque_raw
-            feedback["position_unwrapped"] = offset + direction * q_joint
+            feedback["position_unwrapped"] = position_unwrapped
             feedback["position_branch_offset"] = float(self.position_branch_offsets[joint_name])
             feedback["joint_direction"] = direction
             self.last_feedback_by_joint[joint_name] = feedback

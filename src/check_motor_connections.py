@@ -29,6 +29,7 @@ from can_topology import (
     resolve_joint_can_bus,
     resolve_port_by_bus,
     topology_lines,
+    validate_unique_motor_ids_per_physical_bus,
 )
 
 
@@ -198,7 +199,8 @@ def resolve_feedback_joint_positions(
             offset=offset,
             direction=direction,
         )
-        branch_offsets[joint_name] = 0.0
+        position_unwrapped = offset + direction * q_joint
+        branch_offsets[joint_name] = raw_position - position_unwrapped
 
         joint_positions[joint_name] = q_joint
         velocity_raw = float(feedback["velocity"])
@@ -247,7 +249,6 @@ def update_feedback_from_frames(
     frames,
     layer,
     active_bus_motor_keys,
-    active_motor_ids,
     feedback_by_bus_motor_id,
     feedback_by_motor_id,
 ):
@@ -262,12 +263,15 @@ def update_feedback_from_frames(
             continue
 
         motor_id = int(feedback["motor_id"])
-        bus_name = getattr(frame, "bus_name", "front")
-        if (bus_name, motor_id) not in active_bus_motor_keys and motor_id not in active_motor_ids:
+        bus_name = getattr(frame, "bus_name", None)
+        if bus_name is None:
+            continue
+        if (bus_name, motor_id) not in active_bus_motor_keys:
             continue
         feedback["timestamp"] = frame.timestamp
+        feedback["bus_name"] = bus_name
         feedback_by_bus_motor_id[(bus_name, motor_id)] = feedback
-        feedback_by_motor_id[motor_id] = feedback
+        feedback_by_motor_id.pop(motor_id, None)
         updated += 1
     return updated
 
@@ -384,12 +388,10 @@ def feedback_for_joint(
     feedback_by_bus_motor_id,
     feedback_by_motor_id,
 ):
+    """Fetch feedback strictly by CAN bus and motor ID."""
     motor_id = int(motor_ids[joint_name])
     bus_name = joint_can_bus.get(joint_name, "front")
-    feedback = feedback_by_bus_motor_id.get((bus_name, motor_id))
-    if feedback is None:
-        feedback = feedback_by_motor_id.get(motor_id)
-    return feedback
+    return feedback_by_bus_motor_id.get((bus_name, motor_id))
 
 
 def active_joint_angles_from_feedback(
@@ -717,8 +719,8 @@ def main():
                         help="disable keyboard crouch-pose capture")
     parser.add_argument("--set-zero-yaml", action=argparse.BooleanOptionalAction, default=True,
                         help="when pressing set-zero, also write default_pose and stand_pose")
-    parser.add_argument("--set-zero-value-rad", type=float, default=1.0,
-                        help="joint value assigned after pressing set-zero; default is 1.0 rad")
+    parser.add_argument("--set-zero-value-rad", type=float, default=0.0,
+                        help="joint value assigned after pressing set-zero; default is true 0.0 rad")
     parser.add_argument("--gui", action="store_true",
                         help="launch telemetry GUI and stream encoder values only")
     parser.add_argument("--gui-only", action="store_true",
@@ -757,6 +759,16 @@ def main():
     )
     if not active_port_by_bus:
         active_port_by_bus = port_by_bus
+    try:
+        validate_unique_motor_ids_per_physical_bus(
+            motor_ids=motor_ids,
+            joint_can_bus=joint_can_bus,
+            active_joints=layer.active_joints,
+            port_by_bus=active_port_by_bus,
+        )
+    except ValueError as exc:
+        print("ERROR:", exc)
+        return 1
     poll_commands = layer.build_feedback_poll_commands()
     set_zero_commands = layer.build_set_zero_commands()
     set_zero_key = (args.set_zero_key or "s")[0].lower()
@@ -789,7 +801,6 @@ def main():
         (joint_can_bus.get(name, "front"), int(motor_ids[name]))
         for name in layer.active_joints
     }
-    active_motor_ids = {int(motor_ids[name]) for name in layer.active_joints}
     dt = 1.0 / max(1e-6, args.rate)
     deadline = None if args.seconds <= 0.0 else time.monotonic() + args.seconds
     next_print = 0.0
@@ -870,7 +881,6 @@ def main():
                     frames=frames,
                     layer=layer,
                     active_bus_motor_keys=active_bus_motor_keys,
-                    active_motor_ids=active_motor_ids,
                     feedback_by_bus_motor_id=feedback_by_bus_motor_id,
                     feedback_by_motor_id=feedback_by_motor_id,
                 )

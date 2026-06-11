@@ -2079,25 +2079,25 @@ def main():
     parser.add_argument(
         "--initial-zero-frame",
         choices=["stand", "crouch"],
-        default="crouch",
-        help="coordinate frame before joystick zero calibration; policy walking requires stand",
+        default="stand",
+        help="coordinate frame at startup; use stand after one-time hardware set-zero",
     )
     parser.add_argument(
         "--auto-stand-zero",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
         help="after standing from crouch-zero frame, make current stand pose software zero",
     )
     parser.add_argument(
         "--auto-sit-zero",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
         help="after sitting from stand-zero frame, make current crouch/sit pose software zero",
     )
     parser.add_argument(
         "--auto-zero-on-startup",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
         help="when starting in crouch frame, software-zero current encoder pose automatically before joystick commands",
     )
     parser.add_argument(

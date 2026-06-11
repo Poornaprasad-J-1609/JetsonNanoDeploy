@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """CAN adapter topology helpers for one, two, or four RobStride USB-CAN buses."""
 
+import os
+
 from robstride_can_interface import ATUsbCan
 
 
@@ -172,6 +174,55 @@ def ports_for_active_joints(port_by_bus, joint_can_bus, active_joints):
         for bus_name, port in port_by_bus.items()
         if bus_name in used_bus_names
     }
+
+
+def physical_port_identity(port):
+    """Return a stable identity for duplicate-port checks."""
+    return os.path.realpath(str(port))
+
+
+def validate_unique_motor_ids_per_physical_bus(
+    motor_ids,
+    joint_can_bus,
+    active_joints,
+    port_by_bus,
+):
+    """
+    Reject duplicate motor IDs that would be addressed on the same physical CAN adapter.
+
+    Duplicate motor IDs are valid only when they live on different CAN networks. If two
+    logical buses point to the same /dev/ttyUSB* and reuse an ID, RobStride set-zero,
+    stop, enable, and MIT packets cannot target one motor independently.
+    """
+    seen = {}
+    conflicts = []
+
+    for joint_name in active_joints:
+        if joint_name not in motor_ids:
+            continue
+        bus_name = joint_can_bus.get(joint_name)
+        if bus_name is None:
+            continue
+        port = port_by_bus.get(bus_name)
+        if port is None:
+            continue
+
+        key = (physical_port_identity(port), int(motor_ids[joint_name]))
+        if key in seen:
+            other_joint, other_bus, other_port = seen[key]
+            conflicts.append(
+                f"{other_joint} [{other_bus}:{other_port}] and "
+                f"{joint_name} [{bus_name}:{port}] both use motor_id=0x{key[1]:02X}"
+            )
+        else:
+            seen[key] = (joint_name, bus_name, port)
+
+    if conflicts:
+        raise ValueError(
+            "Duplicate RobStride motor IDs share the same physical CAN adapter. "
+            "Use unique IDs on one CAN bus, or put reused IDs on separate adapters. "
+            "Conflicts: " + "; ".join(conflicts)
+        )
 
 
 def open_can_buses(port_by_bus, baud, timeout=None):
