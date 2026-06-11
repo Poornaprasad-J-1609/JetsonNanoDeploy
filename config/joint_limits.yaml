@@ -8,10 +8,10 @@
 # These values are target slew limits, not hard joint angles. Hard angle limits
 # below are still always applied before MIT packets are sent.
 #
-# Fast sit/stand/keyboard-control testing defaults:
-#   hip   0.040 rad/step = 2.00 rad/s
-#   thigh 0.060 rad/step = 3.00 rad/s
-#   calf  0.070 rad/step = 3.50 rad/s
+# Conservative sit/stand/keyboard-control testing defaults:
+#   0.020 rad/step = 1.00 rad/s at 50 Hz.
+# Increase per-joint values only after the robot moves smoothly and all
+# encoder directions/limits are verified on hardware.
 
 joint_limits:
   FL_hip_joint:

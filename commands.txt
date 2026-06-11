@@ -86,8 +86,9 @@ Main controller workflow:
 3. Keyboard controls: space = stand, c = crouch/default, h = hold current
    position, x = emergency stop.
 4. Press h only when you want to hold the current pose. Press space or c to
-   start a pose transition. The first pose command can software-zero the current
-   crouch/default frame if needed.
+   start a pose transition. The first space/stand command can software-zero the
+   current crouch/default frame if needed; c/crouch commands q=0 and never
+   redefines the current pose as zero.
 
 
 3. IMU check without GUI

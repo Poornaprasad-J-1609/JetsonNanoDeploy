@@ -487,6 +487,17 @@ def main():
             command = command_source.read()
             walk_requested = joystick_walk_requested(command, args.walk_command_threshold)
 
+            if args.mode == "mit-signal" and (walk_requested or has_motion_target):
+                stop, reason = safety.encoder_sanity_check(
+                    q_current=q_current,
+                    active_joints=motor_layer.active_joints,
+                    feedback_by_joint=getattr(estimator, "last_feedback_by_joint", None),
+                    require_feedback=True,
+                )
+                if stop:
+                    print("\nSTOP:", reason)
+                    break
+
             if walk_requested:
                 obs = runner.build_observation(
                     base_lin_vel_b=np.zeros(3, dtype=np.float32),

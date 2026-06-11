@@ -1351,11 +1351,13 @@ def run_policy_loop(
                 max_age_s = getattr(safety, "max_feedback_age_s", 0.25)
                 n_active = len(motor_layer.active_joints)
                 deadline = time.monotonic() + 0.5  # max 500 ms to gather all
+                allow_poll_snapshot = control_mode == "idle" and not has_motion_target
                 fresh = count_fresh_active_feedback(
                     estimator, motor_layer.active_joints, max_age_s
                 )
                 while fresh < n_active and time.monotonic() < deadline:
-                    request_feedback_snapshot(motor_layer, buses, mode)
+                    if allow_poll_snapshot:
+                        request_feedback_snapshot(motor_layer, buses, mode)
                     refresh_estimator_feedback(estimator, timeout=feedback_timeout)
                     fresh = count_fresh_active_feedback(
                         estimator, motor_layer.active_joints, max_age_s
@@ -1667,6 +1669,30 @@ def run_policy_loop(
             walk_requested = False
             if step % max(1, log_every) == 0:
                 print("[ZERO CAL] walking blocked until STAND auto-zero completes.")
+        if (
+            walk_requested
+            and not has_motion_target
+            and encoder_feedback_required(mode, estimator)
+            and count_fresh_active_feedback(
+                estimator,
+                motor_layer.active_joints,
+                getattr(safety, "max_feedback_age_s", 0.25),
+            ) < len(motor_layer.active_joints)
+        ):
+            request_feedback_snapshot(motor_layer, buses, mode)
+            refresh_estimator_feedback(estimator, timeout=feedback_timeout)
+            fresh = count_fresh_active_feedback(
+                estimator,
+                motor_layer.active_joints,
+                getattr(safety, "max_feedback_age_s", 0.25),
+            )
+            if fresh < len(motor_layer.active_joints):
+                if step % max(1, log_every) == 0:
+                    print(
+                        f"[FEEDBACK] walking blocked: only {fresh}/"
+                        f"{len(motor_layer.active_joints)} active joints have fresh MIT feedback."
+                    )
+                walk_requested = False
         if control_mode == "sit":
             active_control_mode = "sit"
         elif walk_requested:
