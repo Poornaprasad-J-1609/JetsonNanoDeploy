@@ -280,7 +280,11 @@ class KeyboardCommandSource:
         return clip_command(self.command * self.speed_scale, self.command_limits)
 
     def get_mode_request(self):
-        return self._pop_matching_key({" ": "stand", "c": "sit", "h": "hold"})
+        return self._pop_matching_key({
+            " ": "stand",
+            "c": "sit",
+            "h": "hold",
+        })
 
     def get_emergency_stop_request(self):
         reason = self._pop_matching_key({"x": "terminal keyboard emergency stop key x"})

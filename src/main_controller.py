@@ -896,6 +896,24 @@ def constant_pose_like(runner, value):
     return np.full(len(runner.policy_order), float(value), dtype=np.float32)
 
 
+def stand_pose_for_zero_frame(runner, zero_frame, crouch_calibration_value, stand_calibration_value):
+    if str(zero_frame).lower() == "crouch":
+        return (
+            constant_pose_like(runner, crouch_calibration_value)
+            + runner.q_stand_when_sit_zero
+        )
+    return constant_pose_like(runner, stand_calibration_value) + runner.q_stand
+
+
+def sit_pose_for_zero_frame(runner, zero_frame, crouch_calibration_value, stand_calibration_value):
+    if str(zero_frame).lower() == "crouch":
+        return constant_pose_like(runner, crouch_calibration_value)
+    return (
+        constant_pose_like(runner, stand_calibration_value)
+        + runner.q_sit_when_stand_zero
+    )
+
+
 def shifted_safety_filter(safety, q_target, q_previous, q_shift):
     q_shift = np.asarray(q_shift, dtype=np.float32)
     if not np.any(np.abs(q_shift) > 1e-8):
@@ -952,6 +970,34 @@ def apply_software_zero_calibration(
         "No RobStride hardware set-zero frame was sent."
     )
     return q_current.copy()
+
+
+def collect_complete_feedback_before_zero(
+    estimator,
+    motor_layer,
+    safety,
+    buses,
+    mode,
+    feedback_timeout,
+    gather_seconds=0.5,
+):
+    if not encoder_feedback_required(mode, estimator):
+        refresh_estimator_feedback(estimator, timeout=feedback_timeout)
+        return len(motor_layer.active_joints), len(motor_layer.active_joints)
+
+    active_joints = list(motor_layer.active_joints)
+    n_active = len(active_joints)
+    max_age_s = getattr(safety, "max_feedback_age_s", 0.25)
+    deadline = time.monotonic() + max(float(gather_seconds), float(feedback_timeout), 0.02)
+    fresh = count_fresh_active_feedback(estimator, active_joints, max_age_s)
+    while fresh < n_active and time.monotonic() < deadline:
+        request_feedback_snapshot(motor_layer, buses, mode)
+        refresh_estimator_feedback(estimator, timeout=feedback_timeout)
+        fresh = count_fresh_active_feedback(estimator, active_joints, max_age_s)
+        if fresh >= n_active:
+            break
+        time.sleep(0.002)
+    return fresh, n_active
 
 
 def run_startup_to_stand(
@@ -1349,7 +1395,7 @@ def run_policy_loop(
                         "[ZERO CAL] zero_frame -> crouch. MIT hold is now active at "
                         f"q={float(crouch_calibration_value):+.3f} for this pose."
                     )
-                    print("[ZERO CAL] Press STAND to move to stand and auto-zero for policy.")
+                    print("[ZERO CAL] Press STAND to move to stand and auto-zero for policy walking.")
 
         motion_feedback_guard_active = bool(
             (has_motion_target or control_mode != "hold")
@@ -1426,16 +1472,31 @@ def run_policy_loop(
         if mode_request is not None:
             if mode_request in ("stand", "sit") and zero_frame == "crouch" and not zero_calibrated:
                 print("\n[ZERO CAL] first pose command is auto-zeroing current crouch/default pose.")
-                q_zeroed = apply_software_zero_calibration(
+                fresh, n_active = collect_complete_feedback_before_zero(
                     estimator=estimator,
                     motor_layer=motor_layer,
-                    active_joints=motor_layer.active_joints,
-                    feedback_timeout=feedback_timeout,
+                    safety=safety,
                     buses=buses,
                     mode=mode,
-                    label="crouch/default pose",
-                    target_value=crouch_calibration_value,
+                    feedback_timeout=feedback_timeout,
                 )
+                if fresh < n_active:
+                    print(
+                        f"[ZERO CAL] pose command blocked: only {fresh}/{n_active} "
+                        "active joints returned fresh feedback."
+                    )
+                    q_zeroed = False
+                else:
+                    q_zeroed = apply_software_zero_calibration(
+                        estimator=estimator,
+                        motor_layer=motor_layer,
+                        active_joints=motor_layer.active_joints,
+                        feedback_timeout=feedback_timeout,
+                        buses=buses,
+                        mode=mode,
+                        label="crouch/default pose",
+                        target_value=crouch_calibration_value,
+                    )
                 if q_zeroed is False:
                     print(
                         "[ZERO CAL] pose command blocked because valid feedback was not "
@@ -1555,7 +1616,13 @@ def run_policy_loop(
                     stand_zero_settle_count = 0
                     sit_zero_pending = False
                     sit_zero_settle_count = 0
-                    print("[ZERO CAL] stand target uses stand_pose_when_sit_zero; stand will auto-zero when settled.")
+                    if stand_zero_pending:
+                        print("[ZERO CAL] stand target uses stand_pose_when_sit_zero; stand will auto-zero when settled.")
+                    else:
+                        print(
+                            "[POSE] stand target uses stand_pose_when_sit_zero; "
+                            "policy walking remains blocked until stand auto-zero is enabled/applied."
+                        )
                 elif control_mode == "sit":
                     stand_zero_pending = False
                     stand_zero_settle_count = 0
@@ -1616,16 +1683,12 @@ def run_policy_loop(
             action = np.zeros(action_dim, dtype=np.float32)
 
         elif active_control_mode == "stand":
-            if zero_frame == "crouch":
-                q_policy_target = (
-                    constant_pose_like(runner, crouch_calibration_value)
-                    + runner.q_stand_when_sit_zero
-                )
-            else:
-                q_policy_target = (
-                    constant_pose_like(runner, stand_calibration_value)
-                    + runner.q_stand
-                )
+            q_policy_target = stand_pose_for_zero_frame(
+                runner,
+                zero_frame,
+                crouch_calibration_value,
+                stand_calibration_value,
+            )
             q_policy_target = apply_motion_assists(
                 q_target=q_policy_target,
                 command=policy_command,
@@ -1649,13 +1712,12 @@ def run_policy_loop(
             action = np.zeros(action_dim, dtype=np.float32)
 
         elif active_control_mode == "sit":
-            if zero_frame == "crouch":
-                q_policy_target = constant_pose_like(runner, crouch_calibration_value)
-            else:
-                q_policy_target = (
-                    constant_pose_like(runner, stand_calibration_value)
-                    + runner.q_sit_when_stand_zero
-                )
+            q_policy_target = sit_pose_for_zero_frame(
+                runner,
+                zero_frame,
+                crouch_calibration_value,
+                stand_calibration_value,
+            )
             q_safe_target = shifted_safety_filter(
                 safety,
                 q_policy_target,
@@ -2079,31 +2141,31 @@ def main():
     parser.add_argument(
         "--initial-zero-frame",
         choices=["stand", "crouch"],
-        default="stand",
-        help="coordinate frame at startup; use stand after one-time hardware set-zero",
+        default="crouch",
+        help="coordinate frame at startup; crouch means the current crouch/default pose is software-zeroed",
     )
     parser.add_argument(
         "--auto-stand-zero",
         action=argparse.BooleanOptionalAction,
-        default=False,
+        default=True,
         help="after standing from crouch-zero frame, make current stand pose software zero",
     )
     parser.add_argument(
         "--auto-sit-zero",
         action=argparse.BooleanOptionalAction,
-        default=False,
+        default=True,
         help="after sitting from stand-zero frame, make current crouch/sit pose software zero",
     )
     parser.add_argument(
         "--auto-zero-on-startup",
         action=argparse.BooleanOptionalAction,
-        default=False,
+        default=True,
         help="when starting in crouch frame, software-zero current encoder pose automatically before joystick commands",
     )
     parser.add_argument(
         "--crouch-calibration-value",
         type=float,
-        default=1.0,
+        default=0.0,
         help="joint-coordinate value assigned to the current crouch/default pose during software calibration",
     )
     parser.add_argument(
@@ -2512,16 +2574,31 @@ def main():
 
         if args.auto_zero_on_startup and str(args.initial_zero_frame).lower() == "crouch":
             print("\n[ZERO CAL] startup auto-zero enabled for current crouch/default pose.")
-            q_auto_zero = apply_software_zero_calibration(
+            fresh, n_active = collect_complete_feedback_before_zero(
                 estimator=estimator,
                 motor_layer=motor_layer,
-                active_joints=motor_layer.active_joints,
-                feedback_timeout=args.feedback_timeout,
+                safety=safety,
                 buses=buses,
                 mode=args.mode,
-                label="startup crouch/default pose",
-                target_value=args.crouch_calibration_value,
+                feedback_timeout=args.feedback_timeout,
             )
+            if fresh < n_active:
+                print(
+                    f"[ZERO CAL] startup auto-zero blocked: only {fresh}/{n_active} "
+                    "active joints returned fresh feedback."
+                )
+                q_auto_zero = False
+            else:
+                q_auto_zero = apply_software_zero_calibration(
+                    estimator=estimator,
+                    motor_layer=motor_layer,
+                    active_joints=motor_layer.active_joints,
+                    feedback_timeout=args.feedback_timeout,
+                    buses=buses,
+                    mode=args.mode,
+                    label="startup crouch/default pose",
+                    target_value=args.crouch_calibration_value,
+                )
             if q_auto_zero is not False:
                 startup_zero_calibrated = True
                 print(

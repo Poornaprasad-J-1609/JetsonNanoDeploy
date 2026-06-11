@@ -81,12 +81,12 @@ To see raw axes/buttons:
 Main controller workflow:
 
 1. Start with the robot manually in crouch/default pose.
-2. The controller automatically software-zeros the current crouch/default pose
-   from live encoder feedback at startup. D-pad down is optional and can still
-   be used with joystick mode to recalibrate manually before standing.
-3. Press stand. When stand settles, the controller auto-applies
-   software zero again, so stand becomes q=0 for the RL policy.
-4. Crouch/sit returns to crouch. Emergency stop stops the process immediately.
+2. Normal controller runs software-zero the current crouch/default pose from
+   live MIT joint radians at startup. No RobStride hardware set-zero is needed.
+3. Keyboard controls: space = stand, c = crouch/default, h = hold current
+   position, x = emergency stop.
+4. After space/stand settles, the controller software-zeroes stand as q=0 for
+   RL walking. W/A/S/D policy walking is blocked until that stand-zero is active.
 
 
 3. IMU check without GUI
@@ -130,12 +130,11 @@ Main controller workflow:
   --gui-only
 
 
-6. One-time motor hardware set zero
------------------------------------
+6. Motor encoder check only, no hardware zero
+---------------------------------------------
 
-Put the robot manually in its stand/default pose, then run this once. Press s
-one time only. This sends RobStride hardware set-zero to the motors; do not
-repeat it on later runs unless you intentionally want to redefine motor zero.
+This only polls encoder feedback and shows safe joint radians. It disables the
+hardware set-zero key so pressing s cannot write zero to the RobStride motors.
 
 /usr/bin/python3 src/check_motor_connections.py \
   --can-count 2 \
@@ -143,22 +142,22 @@ repeat it on later runs unless you intentionally want to redefine motor zero.
   --all \
   --rate 20 \
   --print-every 1.0 \
-  --set-zero-value-rad 0.0 \
+  --disable-set-zero-key \
+  --disable-crouch-key \
   --gui-only
   
 
 Keyboard while this command is running:
 
-s = send RobStride hardware set-zero and save default_pose/stand_pose as 0.0 rad
 q = quit
 
 
-7. Motor set zero plus set crouch pose
---------------------------------------
+7. Optional YAML crouch pose capture, no hardware zero
+-----------------------------------------------------
 
-Step 1: manually put the robot in stand/default pose and press s.
-Step 2: manually put the robot in crouch/sit pose and press c.
-Step 3: press q to quit.
+This still does not send RobStride hardware set-zero. Press c only if you want
+to save the current safe joint-radian feedback as config/default_pose.yaml
+crouch_pose.
 
 /usr/bin/python3 src/check_motor_connections.py \
   --can-count 2 \
@@ -166,12 +165,11 @@ Step 3: press q to quit.
   --all \
   --rate 20 \
   --print-every 1.0 \
-  --set-zero-value-rad 0.0 \
+  --disable-set-zero-key \
   --gui-only
 
 Keyboard while this command is running:
 
-s = set current motor positions as hardware 0.0 rad/default/stand
 c = save current feedback angles as crouch_pose in config/default_pose.yaml
 q = quit
 
@@ -192,6 +190,8 @@ q = quit
   --base-lin-vel-source zero \
   --start-control-mode policy \
   --startup-action hold \
+  --initial-zero-frame stand \
+  --no-auto-zero-on-startup \
   --policy-steps 100 \
   --log-every 5 \
   --gui
@@ -202,8 +202,8 @@ q = quit
 
 This sends real MIT commands. Keep the robot suspended/secured.
 Walking is disabled by the huge walk threshold and zero velocity limits.
-Keys after launch: space = stand, c = crouch/sit, h = hold current position,
-x = emergency stop.
+Keys after launch: space = stand, c = crouch/default, h = hold current
+position, x = emergency stop. Startup uses software-zero only.
 
 /usr/bin/python3 src/main_controller.py \
   --mode mit-signal \
@@ -217,10 +217,12 @@ x = emergency stop.
   --base-lin-vel-source zero \
   --start-control-mode hold \
   --startup-action hold \
-  --initial-zero-frame stand \
-  --no-auto-zero-on-startup \
-  --no-auto-stand-zero \
-  --no-auto-sit-zero \
+  --initial-zero-frame crouch \
+  --auto-zero-on-startup \
+  --auto-stand-zero \
+  --auto-sit-zero \
+  --crouch-calibration-value 0.0 \
+  --stand-calibration-value 0.0 \
   --policy-steps 0 \
   --walk-command-threshold 999 \
   --max-vx 0.0 \
@@ -245,9 +247,10 @@ x = emergency stop.
 ---------------------------------------------------------------------
 
 This sends real MIT commands. First full robot tests should be suspended/secured.
-After launch: press space to stand, wait for "zero_frame -> stand", then hold
-w/a/s/d to walk. Press h to hold current position, c to crouch/sit, x to
-emergency-stop. Movement keys time out unless held/repeated.
+After launch: press space to stand and wait for "zero_frame -> stand", then
+hold w/a/s/d to walk. Press c to return to crouch/default and software-zero
+crouch again, h to hold current position, x to emergency-stop. Walking is
+blocked while the controller is in crouch-zero mode.
 These settings deliberately soften the policy command and action output for
 first tests. For simulation-match policy input, see section 12.
 
@@ -264,10 +267,12 @@ first tests. For simulation-match policy input, see section 12.
   --base-lin-vel-source zero \
   --start-control-mode hold \
   --startup-action hold \
-  --initial-zero-frame stand \
-  --no-auto-zero-on-startup \
-  --no-auto-stand-zero \
-  --no-auto-sit-zero \
+  --initial-zero-frame crouch \
+  --auto-zero-on-startup \
+  --auto-stand-zero \
+  --auto-sit-zero \
+  --crouch-calibration-value 0.0 \
+  --stand-calibration-value 0.0 \
   --policy-steps 0 \
   --walk-command-threshold 0.02 \
   --max-vx 1.80 \
@@ -298,9 +303,9 @@ first tests. For simulation-match policy input, see section 12.
 ---------------------------------------------------------------------
 
 This sends real MIT commands but uses fake upright IMU values.
-After launch: press space to stand, wait for "zero_frame -> stand", then hold
-w/a/s/d to walk. Press h to hold current position, c to crouch/sit, x to
-emergency-stop.
+After launch: press space to stand and wait for "zero_frame -> stand", then
+hold w/a/s/d to walk. Press c to return to crouch/default and software-zero
+crouch again, h to hold current position, x to emergency-stop.
 These settings deliberately soften the policy command and action output for
 first tests. For simulation-match policy input, see section 12.
 
@@ -316,10 +321,12 @@ first tests. For simulation-match policy input, see section 12.
   --base-lin-vel-source zero \
   --start-control-mode hold \
   --startup-action hold \
-  --initial-zero-frame stand \
-  --no-auto-zero-on-startup \
-  --no-auto-stand-zero \
-  --no-auto-sit-zero \
+  --initial-zero-frame crouch \
+  --auto-zero-on-startup \
+  --auto-stand-zero \
+  --auto-sit-zero \
+  --crouch-calibration-value 0.0 \
+  --stand-calibration-value 0.0 \
   --policy-steps 0 \
   --walk-command-threshold 0.02 \
   --max-vx 1.80 \
