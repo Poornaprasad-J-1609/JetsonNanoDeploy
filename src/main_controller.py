@@ -869,9 +869,9 @@ def initialize_hold_target(estimator, feedback_timeout):
     q_current, _, _, _, _ = estimator.read()
 
     print("\n" + "#" * 80)
-    print("STARTUP PHASE: HOLD current pose")
+    print("STARTUP PHASE: PASSIVE / IDLE")
     print("#" * 80)
-    print("No sit, stand, or walking command is sent until controller input.")
+    print("No hold, sit, stand, or walking command is sent until controller input.")
     return q_current.copy()
 
 
@@ -1232,7 +1232,7 @@ def run_policy_loop(
     action_dim = len(runner.policy_order)
     previous_action = np.zeros(action_dim, dtype=np.float32)
 
-    control_mode = start_control_mode  # options: hold, policy, stand, sit
+    control_mode = start_control_mode  # options: idle, hold, policy, stand, sit
     zero_frame = str(initial_zero_frame).lower()
     zero_calibrated = zero_frame == "stand" or bool(initial_zero_calibrated)
     has_motion_target = (
@@ -1339,8 +1339,8 @@ def run_policy_loop(
         if calibration_request == "zero_current_pose":
             if zero_frame == "stand":
                 print("[ZERO CAL] ignored because stand/RL zero is already active.")
-            elif control_mode not in ("hold", "sit"):
-                print("[ZERO CAL] ignored; zero calibration is only allowed from hold/sit.")
+            elif control_mode not in ("idle", "hold", "sit"):
+                print("[ZERO CAL] ignored; zero calibration is only allowed from idle/hold/sit.")
             else:
                 # Collect a COMPLETE feedback snapshot before zeroing. The dpad
                 # press is a single instant; with a tight --feedback-timeout the
@@ -1385,21 +1385,21 @@ def run_policy_loop(
                     q_coordinate_shift = motor_layer.coordinate_shift_array()
                     zero_frame = "crouch"
                     zero_calibrated = True
-                    control_mode = "hold"
-                    has_motion_target = True
+                    control_mode = "idle"
+                    has_motion_target = False
                     stand_zero_pending = False
                     stand_zero_settle_count = 0
                     sit_zero_pending = False
                     sit_zero_settle_count = 0
-                    calibration_hold_until_step = step + 10
+                    calibration_hold_until_step = -1
                     print(
-                        "[ZERO CAL] zero_frame -> crouch. MIT hold is now active at "
+                        "[ZERO CAL] zero_frame -> crouch at "
                         f"q={float(crouch_calibration_value):+.3f} for this pose."
                     )
-                    print("[ZERO CAL] Press STAND to move to stand and auto-zero for policy walking.")
+                    print("[ZERO CAL] No hold commands are sent until H or a pose command.")
 
         motion_feedback_guard_active = bool(
-            (has_motion_target or control_mode != "hold")
+            (has_motion_target or control_mode not in ("idle", "hold"))
             and encoder_feedback_required(mode, estimator)
         )
         if motion_feedback_guard_active:
@@ -1510,7 +1510,7 @@ def run_policy_loop(
                     qd_current = np.zeros_like(q_current, dtype=np.float32)
                     q_coordinate_shift = motor_layer.coordinate_shift_array()
                     zero_calibrated = True
-                    calibration_hold_until_step = step + 5
+                    calibration_hold_until_step = -1
             if mode_request is None:
                 pass
             elif mode_request in ("stand", "sit"):
@@ -1670,7 +1670,12 @@ def run_policy_loop(
         if walk_requested:
             has_motion_target = True
 
-        if active_control_mode == "hold":
+        if active_control_mode == "idle":
+            q_safe_target = q_previous_target.copy()
+            commands = []
+            action = np.zeros(action_dim, dtype=np.float32)
+
+        elif active_control_mode == "hold":
             q_safe_target = q_previous_target.copy()
             commands = (
                 motor_layer.build_mit_commands(
@@ -2137,7 +2142,7 @@ def main():
     parser.add_argument("--standup-seconds", type=float, default=None)
     parser.add_argument("--log-every", type=int, default=25)
     parser.add_argument("--show-hex", action="store_true")
-    parser.add_argument("--start-control-mode", choices=["hold", "stand", "sit", "policy"], default="hold")
+    parser.add_argument("--start-control-mode", choices=["idle", "hold", "stand", "sit", "policy"], default="idle")
     parser.add_argument("--startup-action", choices=["hold", "stand"], default="hold")
     parser.add_argument(
         "--initial-zero-frame",
@@ -2160,7 +2165,7 @@ def main():
     parser.add_argument(
         "--auto-zero-on-startup",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
         help="when starting in crouch frame, software-zero current encoder pose automatically before joystick commands",
     )
     parser.add_argument(

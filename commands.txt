@@ -81,12 +81,13 @@ To see raw axes/buttons:
 Main controller workflow:
 
 1. Start with the robot manually in crouch/default pose.
-2. Normal controller runs software-zero the current crouch/default pose from
-   live MIT joint radians at startup. No RobStride hardware set-zero is needed.
+2. Normal controller startup is passive: no software-zero and no MIT hold
+   command stream is sent when the program opens.
 3. Keyboard controls: space = stand, c = crouch/default, h = hold current
    position, x = emergency stop.
-4. After space/stand settles, the controller software-zeroes stand as q=0 for
-   RL walking. W/A/S/D policy walking is blocked until that stand-zero is active.
+4. Press h only when you want to hold the current pose. Press space or c to
+   start a pose transition. The first pose command can software-zero the current
+   crouch/default frame if needed.
 
 
 3. IMU check without GUI
@@ -111,7 +112,7 @@ Main controller workflow:
   --yaw 0.0 \
   --imu-source xsens \
   --imu-port "$IMU_PORT" \
-  --start-control-mode hold \
+  --start-control-mode idle \
   --startup-action hold \
   --policy-steps 0 \
   --log-every 5 \
@@ -203,7 +204,7 @@ q = quit
 This sends real MIT commands. Keep the robot suspended/secured.
 Walking is disabled by the huge walk threshold and zero velocity limits.
 Keys after launch: space = stand, c = crouch/default, h = hold current
-position, x = emergency stop. Startup uses software-zero only.
+position, x = emergency stop. Startup is idle: no auto-zero and no auto-hold.
 
 /usr/bin/python3 src/main_controller.py \
   --mode mit-signal \
@@ -215,10 +216,10 @@ position, x = emergency stop. Startup uses software-zero only.
   --no-imu-stabilization \
   --no-gait-assist \
   --base-lin-vel-source zero \
-  --start-control-mode hold \
+  --start-control-mode idle \
   --startup-action hold \
   --initial-zero-frame crouch \
-  --auto-zero-on-startup \
+  --no-auto-zero-on-startup \
   --auto-stand-zero \
   --auto-sit-zero \
   --crouch-calibration-value 0.0 \
@@ -265,10 +266,10 @@ first tests. For simulation-match policy input, see section 12.
   --imu-stabilization \
   --no-gait-assist \
   --base-lin-vel-source zero \
-  --start-control-mode hold \
+  --start-control-mode idle \
   --startup-action hold \
   --initial-zero-frame crouch \
-  --auto-zero-on-startup \
+  --no-auto-zero-on-startup \
   --auto-stand-zero \
   --auto-sit-zero \
   --crouch-calibration-value 0.0 \
@@ -319,10 +320,10 @@ first tests. For simulation-match policy input, see section 12.
   --no-imu-stabilization \
   --no-gait-assist \
   --base-lin-vel-source zero \
-  --start-control-mode hold \
+  --start-control-mode idle \
   --startup-action hold \
   --initial-zero-frame crouch \
-  --auto-zero-on-startup \
+  --no-auto-zero-on-startup \
   --auto-stand-zero \
   --auto-sit-zero \
   --crouch-calibration-value 0.0 \
