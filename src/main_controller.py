@@ -908,10 +908,11 @@ def stand_pose_for_zero_frame(runner, zero_frame, crouch_calibration_value, stan
 def sit_pose_for_zero_frame(runner, zero_frame, crouch_calibration_value, stand_calibration_value):
     if str(zero_frame).lower() == "crouch":
         return constant_pose_like(runner, crouch_calibration_value)
-    return (
-        constant_pose_like(runner, stand_calibration_value)
-        + runner.q_sit_when_stand_zero
-    )
+    # After stand auto-zero, the only target that returns exactly to the
+    # startup crouch/default pose is the inverse of the stand-from-crouch delta.
+    # This keeps c/CROUCH mathematically tied to the zero pose captured at
+    # startup instead of depending on a separately tuned YAML value drifting.
+    return constant_pose_like(runner, stand_calibration_value) - runner.q_stand_when_sit_zero
 
 
 def shifted_safety_filter(safety, q_target, q_previous, q_shift):

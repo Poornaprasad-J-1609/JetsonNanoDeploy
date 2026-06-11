@@ -56,15 +56,15 @@ sit_pose_when_stand_zero:
   FL_hip_joint: 0.0
   FR_hip_joint: 0.0
 
-  BL_thigh_joint: 0.30
-  BR_thigh_joint: -0.30
-  FL_thigh_joint: 0.30
-  FR_thigh_joint: -0.30
+  BL_thigh_joint: 0.35
+  BR_thigh_joint: -0.35
+  FL_thigh_joint: 0.35
+  FR_thigh_joint: -0.35
 
-  BL_calf_joint: 1.0
-  BR_calf_joint: -1.0
-  FL_calf_joint: 1.0
-  FR_calf_joint: -1.0
+  BL_calf_joint: 0.95
+  BR_calf_joint: -0.95
+  FL_calf_joint: 0.95
+  FR_calf_joint: -0.95
 
 # stand_pose_when_sit_zero is the stand target immediately after you start the
 # robot in crouch/sit and press the joystick D-pad zero-calibration command.
