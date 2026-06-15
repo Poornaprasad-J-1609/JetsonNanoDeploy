@@ -164,6 +164,7 @@ class KeyboardCommandSource:
 
     Keys:
       w/a/s/d -> movement command while the key repeats
+      up/down arrows -> increase/decrease speed scale
       c -> sit/crouch
       space -> stand
       h -> hold current position
@@ -178,6 +179,7 @@ class KeyboardCommandSource:
         speed_scale_initial=0.5,
         speed_scale_min=0.2,
         speed_scale_max=1.0,
+        speed_scale_step=0.1,
         command_timeout_s=0.35,
     ):
         self.max_vx = float(max_vx)
@@ -188,6 +190,7 @@ class KeyboardCommandSource:
         self.speed_scale = float(
             np.clip(speed_scale_initial, self.speed_scale_min, self.speed_scale_max)
         )
+        self.speed_scale_step = float(max(0.0, speed_scale_step))
         self.command_timeout_s = float(max(0.05, command_timeout_s))
         self.command_deadline = -1.0
         self.command = np.zeros(3, dtype=np.float32)
@@ -208,6 +211,7 @@ class KeyboardCommandSource:
         print("  s -> backward")
         print("  a -> left")
         print("  d -> right")
+        print("  up/down arrows -> increase/decrease speed scale")
         print("  c -> crouch/sit")
         print("  space -> stand")
         print("  h -> hold current position")
@@ -215,6 +219,15 @@ class KeyboardCommandSource:
         print(f"  speed scale: {self.speed_scale:.2f}")
         if not self.active:
             print("  WARNING: stdin is not an interactive terminal; keyboard input is inactive.")
+
+    def _read_escape_sequence(self):
+        seq = "\x1b"
+        for _ in range(2):
+            readable, _, _ = select.select([sys.stdin], [], [], 0.002)
+            if not readable:
+                break
+            seq += sys.stdin.read(1)
+        return seq
 
     def _poll_keys(self):
         if not self.active:
@@ -226,7 +239,28 @@ class KeyboardCommandSource:
             key = sys.stdin.read(1)
             if key == "\x03":
                 raise KeyboardInterrupt
+            if key == "\x1b":
+                seq = self._read_escape_sequence()
+                if seq == "\x1b[A":
+                    self.key_queue.append("arrow_up")
+                elif seq == "\x1b[B":
+                    self.key_queue.append("arrow_down")
+                # Ignore other escape sequences so arrow-left/right cannot be
+                # misread as movement keys from their trailing A/B/C/D bytes.
+                continue
             self.key_queue.append(key.lower())
+
+    def _change_speed_scale(self, delta):
+        old_scale = self.speed_scale
+        self.speed_scale = float(
+            np.clip(
+                self.speed_scale + float(delta),
+                self.speed_scale_min,
+                self.speed_scale_max,
+            )
+        )
+        if abs(self.speed_scale - old_scale) > 1.0e-9:
+            print(f"[KEYBOARD] speed_scale={self.speed_scale:.2f}")
 
     def _process_movement_keys(self):
         self._poll_keys()
@@ -250,6 +284,10 @@ class KeyboardCommandSource:
             elif key == "d":
                 self.command = np.array([0.0, -self.max_vy, 0.0], dtype=np.float32)
                 self.command_deadline = now + self.command_timeout_s
+            elif key == "arrow_up":
+                self._change_speed_scale(self.speed_scale_step)
+            elif key == "arrow_down":
+                self._change_speed_scale(-self.speed_scale_step)
             else:
                 consumed = False
 
@@ -693,6 +731,7 @@ class CommandSource:
                 speed_scale_initial=kwargs.get("speed_scale_initial", speed_defaults["initial"]),
                 speed_scale_min=kwargs.get("speed_scale_min", speed_defaults["min"]),
                 speed_scale_max=kwargs.get("speed_scale_max", speed_defaults["max"]),
+                speed_scale_step=kwargs.get("speed_scale_step", speed_defaults["step"]),
                 command_timeout_s=kwargs.get("keyboard_command_timeout", 0.35),
             )
         elif source == "joystick":

@@ -4,7 +4,10 @@
 #   config/joint_limits.yaml
 
 emergency:
-  projected_gravity_gz_min: -0.75
+  # Upright projected_gravity.z is -1.0. The controller stops when z rises
+  # above this value. -0.75 allowed about 41 deg tilt; -0.25 allows about
+  # 75 deg, roughly 3x the previous gravity-z deviation from upright.
+  projected_gravity_gz_min: -0.25
   max_body_ang_vel_norm: 8.0
 
 # Live encoder sanity checks. These are checked before sit, stand, and walking

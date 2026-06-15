@@ -84,7 +84,7 @@ Main controller workflow:
 2. Normal controller startup is passive: no software-zero and no MIT hold
    command stream is sent when the program opens.
 3. Keyboard controls: space = stand, c = crouch/default, h = hold current
-   position, x = emergency stop.
+   position, up/down arrows = speed up/down, x = emergency stop.
 4. Press h only when you want to hold the current pose. Press space or c to
    start a pose transition. The first space/stand command can software-zero the
    current crouch/default frame if needed; c/crouch commands q=0 and never
@@ -250,8 +250,9 @@ position, x = emergency stop. Startup is idle: no auto-zero and no auto-hold.
 
 This sends real MIT commands. First full robot tests should be suspended/secured.
 After launch: press space to stand and wait for "zero_frame -> stand", then
-hold w/a/s/d to walk. Press c to return to crouch/default and software-zero
-crouch again, h to hold current position, x to emergency-stop. Walking is
+hold w/a/s/d to walk. Press up/down arrows to change speed scale. Press c to
+return to crouch/default and software-zero crouch again, h to hold current
+position, x to emergency-stop. Walking is
 blocked while the controller is in crouch-zero mode.
 These settings deliberately soften the policy command and action output for
 first tests. For simulation-match policy input, see section 12.
@@ -306,8 +307,9 @@ first tests. For simulation-match policy input, see section 12.
 
 This sends real MIT commands but uses fake upright IMU values.
 After launch: press space to stand and wait for "zero_frame -> stand", then
-hold w/a/s/d to walk. Press c to return to crouch/default and software-zero
-crouch again, h to hold current position, x to emergency-stop.
+hold w/a/s/d to walk. Press up/down arrows to change speed scale. Press c to
+return to crouch/default and software-zero crouch again, h to hold current
+position, x to emergency-stop.
 These settings deliberately soften the policy command and action output for
 first tests. For simulation-match policy input, see section 12.
 

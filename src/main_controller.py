@@ -1265,6 +1265,7 @@ def run_policy_loop(
     print("  right stick X -> turn/yaw")
     print("Terminal keys:")
     print("  w/a/s/d -> movement, c -> SIT/CROUCH, space -> STAND")
+    print("  up/down arrows -> increase/decrease speed scale")
     print("  h -> HOLD current position, x -> EMERGENCY STOP")
     print("start_control_mode:", control_mode)
     print("walk_command_threshold:", walk_command_threshold)
