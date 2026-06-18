@@ -245,6 +245,57 @@ position, x = emergency stop. Startup is idle: no auto-zero and no auto-hold.
   --gui
 
 
+9b. Keyboard stand-only RL IMU stabilization, real IMU
+------------------------------------------------------
+
+This sends real MIT commands. Walking is disabled, but after you press space
+and stand auto-zero completes, the RL policy keeps running with zero velocity
+command. The policy receives live projected_gravity, gyro, encoder positions,
+encoder velocities, and previous_action exactly like walking mode. Use this to
+tilt/move the IMU gently and watch whether policy actions/leg targets respond.
+
+/usr/bin/python3 src/main_controller.py \
+  --mode mit-signal \
+  --can-count 2 \
+  --can-ports "$FRONT_CAN" "$BACK_CAN" \
+  --feedback-source mit \
+  --command-source keyboard \
+  --imu-source xsens \
+  --imu-port "$IMU_PORT" \
+  --stand-policy-stabilization \
+  --no-imu-stabilization \
+  --no-gait-assist \
+  --base-lin-vel-source zero \
+  --start-control-mode idle \
+  --startup-action hold \
+  --initial-zero-frame crouch \
+  --no-auto-zero-on-startup \
+  --auto-stand-zero \
+  --auto-sit-zero \
+  --crouch-calibration-value 0.0 \
+  --stand-calibration-value 0.0 \
+  --policy-steps 0 \
+  --walk-command-threshold 999 \
+  --max-vx 0.0 \
+  --max-vy 0.0 \
+  --max-yaw 0.0 \
+  --speed-scale-initial 0.05 \
+  --speed-scale-min 0.05 \
+  --speed-scale-max 0.05 \
+  --keyboard-command-timeout 0.35 \
+  --policy-action-clip 1.0 \
+  --policy-action-smoothing 0.45 \
+  --enable-retries 3 \
+  --enable-retry-delay 0.05 \
+  --feedback-timeout 0.08 \
+  --hold-capture-seconds 0.50 \
+  --hold-command-repeats 2 \
+  --pose-sync-error-rad 0.25 \
+  --log-every 5 \
+  --joint-debug \
+  --gui
+
+
 10. Keyboard walk control with policy, real IMU, safe hanging preview
 ---------------------------------------------------------------------
 

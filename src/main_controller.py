@@ -1294,6 +1294,7 @@ def run_policy_loop(
     policy_command_yaw_max,
     policy_action_clip,
     policy_action_smoothing,
+    stand_policy_stabilization,
     hold_capture_seconds,
     hold_command_repeats,
     crouch_calibration_value,
@@ -1363,6 +1364,7 @@ def run_policy_loop(
     )
     print("policy_action_clip:", float(policy_action_clip), "(0 disables)")
     print("policy_action_smoothing:", float(policy_action_smoothing), "(0 disables)")
+    print("stand_policy_stabilization:", bool(stand_policy_stabilization))
     print("hold_capture_seconds:", float(hold_capture_seconds))
     print("hold_command_repeats:", int(hold_command_repeats))
     print("crouch_calibration_value:", float(crouch_calibration_value))
@@ -1815,6 +1817,13 @@ def run_policy_loop(
         if control_mode == "sit":
             active_control_mode = "sit"
         elif walk_requested:
+            active_control_mode = "policy"
+        elif (
+            stand_policy_stabilization
+            and control_mode == "stand"
+            and zero_frame == "stand"
+            and not stand_zero_pending
+        ):
             active_control_mode = "policy"
         elif control_mode == "policy":
             active_control_mode = "hold"
@@ -2415,6 +2424,12 @@ def main():
         help="enable/disable small projected-gravity posture corrections",
     )
     parser.add_argument(
+        "--stand-policy-stabilization",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="after stand auto-zero, keep running the RL policy at zero command for IMU/encoder balance stabilization",
+    )
+    parser.add_argument(
         "--gait-assist",
         action=argparse.BooleanOptionalAction,
         default=None,
@@ -2879,6 +2894,7 @@ def main():
             policy_command_yaw_max=args.policy_command_yaw_max,
             policy_action_clip=args.policy_action_clip,
             policy_action_smoothing=args.policy_action_smoothing,
+            stand_policy_stabilization=bool(args.stand_policy_stabilization),
             hold_capture_seconds=max(0.02, args.hold_capture_seconds),
             hold_command_repeats=max(1, args.hold_command_repeats),
             crouch_calibration_value=float(args.crouch_calibration_value),
