@@ -714,6 +714,62 @@ def fresh_active_feedback_names(estimator, active_joints, max_age_s):
     return fresh, stale_or_missing
 
 
+def refresh_active_feedback_before_fault(
+    estimator,
+    motor_layer,
+    safety,
+    buses,
+    mode,
+    feedback_timeout,
+    q_keepalive=None,
+    phase="startup",
+    allow_poll_snapshot=False,
+    max_wait_s=0.12,
+):
+    """Try to refresh active motor feedback before declaring a stale fault.
+
+    During live MIT control we keep torque on by sending another safe MIT target
+    instead of using RobStride stop/poll frames. This avoids false stops from a
+    few milliseconds of serial/CAN scheduling jitter while still failing if a
+    motor really stops replying.
+    """
+    if not encoder_feedback_required(mode, estimator):
+        refresh_estimator_feedback(estimator, timeout=feedback_timeout)
+        active_count = len(motor_layer.active_joints)
+        return active_count, active_count
+
+    active_joints = list(motor_layer.active_joints)
+    n_active = len(active_joints)
+    max_age_s = getattr(safety, "max_feedback_age_s", 0.25)
+    deadline = time.monotonic() + max(float(max_wait_s), float(feedback_timeout), 0.02)
+
+    refresh_estimator_feedback(estimator, timeout=0.0)
+    fresh = count_fresh_active_feedback(estimator, active_joints, max_age_s)
+    while fresh < n_active and time.monotonic() < deadline:
+        if mode == "mit-signal" and buses is not None:
+            if q_keepalive is not None:
+                keepalive_commands = motor_layer.build_mit_commands(
+                    q_keepalive,
+                    phase=phase,
+                    feedback_by_joint=getattr(estimator, "last_feedback_by_joint", None),
+                )
+                motor_layer.send_signal_commands(buses, keepalive_commands)
+            elif allow_poll_snapshot:
+                request_feedback_snapshot(motor_layer, buses, mode)
+
+        remaining = max(0.0, deadline - time.monotonic())
+        refresh_estimator_feedback(
+            estimator,
+            timeout=min(float(feedback_timeout), remaining),
+        )
+        fresh = count_fresh_active_feedback(estimator, active_joints, max_age_s)
+        if fresh >= n_active:
+            break
+        time.sleep(0.002)
+
+    return fresh, n_active
+
+
 def acquire_hold_target_from_feedback(
     estimator,
     motor_layer,
@@ -1122,6 +1178,23 @@ def run_startup_to_stand(
         require_command_feedback = bool(
             commands and encoder_feedback_required(mode, estimator)
         )
+        if require_command_feedback:
+            fresh = count_fresh_active_feedback(
+                estimator,
+                motor_layer.active_joints,
+                getattr(safety, "max_feedback_age_s", 0.25),
+            )
+            if fresh < len(motor_layer.active_joints):
+                refresh_active_feedback_before_fault(
+                    estimator=estimator,
+                    motor_layer=motor_layer,
+                    safety=safety,
+                    buses=buses,
+                    mode=mode,
+                    feedback_timeout=feedback_timeout,
+                    q_keepalive=q_safe_target,
+                    phase="startup",
+                )
         reason = encoder_safety_stop_reason(
             safety=safety,
             estimator=estimator,
@@ -1406,6 +1479,29 @@ def run_policy_loop(
             and encoder_feedback_required(mode, estimator)
         )
         if motion_feedback_guard_active:
+            fresh = count_fresh_active_feedback(
+                estimator,
+                motor_layer.active_joints,
+                getattr(safety, "max_feedback_age_s", 0.25),
+            )
+            if fresh < len(motor_layer.active_joints):
+                refresh_active_feedback_before_fault(
+                    estimator=estimator,
+                    motor_layer=motor_layer,
+                    safety=safety,
+                    buses=buses,
+                    mode=mode,
+                    feedback_timeout=feedback_timeout,
+                    q_keepalive=q_previous_target,
+                    phase="policy" if control_mode == "policy" else "startup",
+                )
+                (
+                    q_current,
+                    qd_current,
+                    base_lin_vel_b,
+                    base_ang_vel_b,
+                    projected_gravity_b,
+                ) = estimator.read()
             reason = encoder_safety_stop_reason(
                 safety=safety,
                 estimator=estimator,
@@ -1560,6 +1656,28 @@ def run_policy_loop(
                             f"\n[FEEDBACK] pose transition uses "
                             f"{cached_count} cached live motor angle(s)"
                         )
+                if encoder_feedback_required(mode, estimator):
+                    fresh = count_fresh_active_feedback(
+                        estimator,
+                        motor_layer.active_joints,
+                        getattr(safety, "max_feedback_age_s", 0.25),
+                    )
+                    if fresh < len(motor_layer.active_joints):
+                        fresh, n_active = refresh_active_feedback_before_fault(
+                            estimator=estimator,
+                            motor_layer=motor_layer,
+                            safety=safety,
+                            buses=buses,
+                            mode=mode,
+                            feedback_timeout=feedback_timeout,
+                            q_keepalive=q_previous_target,
+                            phase="startup",
+                        )
+                        if fresh < n_active:
+                            print(
+                                f"[FEEDBACK] pose transition still has only "
+                                f"{fresh}/{n_active} fresh motor feedback frame(s)."
+                            )
                 reason = encoder_safety_stop_reason(
                     safety=safety,
                     estimator=estimator,

@@ -20,9 +20,10 @@ encoder:
   # This is ignored for fake-feedback dry runs.
   require_feedback_for_motion: true
 
-  # Once motion is active, each active motor must keep replying. This prevents
-  # stale encoder data from being reused if a CAN cable, adapter, or motor drops.
-  max_feedback_age_s: 0.25
+  # Once motion is active, each active motor must keep replying. 0.50 s avoids
+  # false stops from serial USB-CAN jitter on 12 motors while still catching a
+  # real cable/adapter/motor dropout quickly.
+  max_feedback_age_s: 0.50
 
   # Absolute sanity limit for measured joint angle after zero offset,
   # joint-direction correction, and direction-aware 2*pi phase unwrapping.
