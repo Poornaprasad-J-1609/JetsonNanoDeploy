@@ -2,14 +2,17 @@
 # limits. Keep values conservative; joint_limits.yaml is still the hard stop.
 
 imu_posture:
-  # Adds a small roll/pitch correction from projected_gravity on top of stand
-  # pose targets. Disable with --no-imu-stabilization.
+  # Optional hand-written roll/pitch correction from projected_gravity.
+  # Keep both apply_* switches false for normal tests. The trained RL policy
+  # already receives IMU in its observation during walking, and MIT sit/stand
+  # should stay deterministic unless you are explicitly tuning these gains.
   #
   # During RL walking the IMU already enters the policy observation as
   # base_ang_vel and projected_gravity. Keep this manual overlay off during
   # policy mode so the deployed gait matches IsaacSim instead of getting a
   # second hand-tuned correction added on top.
   enabled: false
+  apply_during_pose: false
   apply_during_policy: false
   roll_kp: 0.12
   pitch_kp: 0.08

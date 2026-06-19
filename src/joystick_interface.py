@@ -323,10 +323,19 @@ class KeyboardCommandSource:
         mapping = mapping or {}
         for index, key in enumerate(self.key_queue):
             if key in mapping:
+                request = mapping[key]
                 del self.key_queue[index]
-                if mapping[key] in ("stand", "sit", "hold"):
+                # Drop repeated mode-key events already queued by terminal key
+                # repeat. Holding C/space/H should request one transition, not
+                # restart the same pose transition every control step.
+                self.key_queue = deque(
+                    queued_key
+                    for queued_key in self.key_queue
+                    if mapping.get(queued_key) != request
+                )
+                if request in ("stand", "sit", "hold"):
                     self._clear_motion_command()
-                return mapping[key]
+                return request
         return None
 
     def read(self):
@@ -353,7 +362,6 @@ class KeyboardCommandSource:
         return None
 
     def raw_state(self):
-        self._poll_keys()
         command = self.command.copy()
         scaled_command = clip_command(
             command * self.speed_scale,

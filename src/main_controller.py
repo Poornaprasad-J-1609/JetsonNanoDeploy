@@ -1413,6 +1413,10 @@ def run_policy_loop(
     imu_posture_cfg = motion_assist_cfg.get("imu_posture", {})
     print("imu_stabilization:", bool(imu_posture_cfg.get("enabled", False)))
     print(
+        "manual_imu_overlay_during_pose:",
+        bool(imu_posture_cfg.get("apply_during_pose", False)),
+    )
+    print(
         "manual_imu_overlay_during_policy:",
         bool(imu_posture_cfg.get("apply_during_policy", False)),
     )
@@ -1613,6 +1617,8 @@ def run_policy_loop(
             break
 
         mode_request = command_source.get_mode_request()
+        if mode_request == control_mode:
+            mode_request = None
         if mode_request is not None:
             if mode_request == "stand" and zero_frame == "crouch" and not zero_calibrated:
                 print("\n[ZERO CAL] first pose command is auto-zeroing current crouch/default pose.")
@@ -1908,7 +1914,9 @@ def run_policy_loop(
                 runner=runner,
                 cfg=motion_assist_cfg,
                 use_gait=False,
-                use_imu_posture=True,
+                use_imu_posture=bool(
+                    motion_assist_cfg.get("imu_posture", {}).get("apply_during_pose", False)
+                ),
             )
             q_safe_target = shifted_safety_filter(
                 safety,
