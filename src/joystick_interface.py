@@ -163,7 +163,9 @@ class KeyboardCommandSource:
     Non-blocking terminal keyboard drive source.
 
     Keys:
-      w/a/s/d -> movement command while the key repeats
+      w/s -> straight forward/back while the key repeats
+      a/d -> left/right while the key repeats
+      w+a, w+d, s+a, s+d -> diagonal xy movement
       up/down arrows -> increase/decrease speed scale
       c -> sit/crouch
       space -> stand
@@ -192,7 +194,12 @@ class KeyboardCommandSource:
         )
         self.speed_scale_step = float(max(0.0, speed_scale_step))
         self.command_timeout_s = float(max(0.05, command_timeout_s))
-        self.command_deadline = -1.0
+        self.movement_key_deadlines = {
+            "w": -1.0,
+            "s": -1.0,
+            "a": -1.0,
+            "d": -1.0,
+        }
         self.command = np.zeros(3, dtype=np.float32)
         self.command_limits = load_command_limits()
         self.key_queue = deque()
@@ -207,10 +214,11 @@ class KeyboardCommandSource:
             self.active = True
 
         print("Terminal keyboard command source:")
-        print("  w -> forward")
-        print("  s -> backward")
+        print("  w -> straight forward")
+        print("  s -> straight backward")
         print("  a -> left")
         print("  d -> right")
+        print("  w+a/w+d/s+a/s+d -> diagonal xy movement")
         print("  up/down arrows -> increase/decrease speed scale")
         print("  c -> crouch/sit")
         print("  space -> stand")
@@ -264,26 +272,14 @@ class KeyboardCommandSource:
 
     def _process_movement_keys(self):
         self._poll_keys()
-        if not self.key_queue:
-            return
 
         now = time.monotonic()
         kept = deque()
         while self.key_queue:
             key = self.key_queue.popleft()
             consumed = True
-            if key == "w":
-                self.command = np.array([self.max_vx, 0.0, 0.0], dtype=np.float32)
-                self.command_deadline = now + self.command_timeout_s
-            elif key == "s":
-                self.command = np.array([-self.max_vx, 0.0, 0.0], dtype=np.float32)
-                self.command_deadline = now + self.command_timeout_s
-            elif key == "a":
-                self.command = np.array([0.0, self.max_vy, 0.0], dtype=np.float32)
-                self.command_deadline = now + self.command_timeout_s
-            elif key == "d":
-                self.command = np.array([0.0, -self.max_vy, 0.0], dtype=np.float32)
-                self.command_deadline = now + self.command_timeout_s
+            if key in self.movement_key_deadlines:
+                self.movement_key_deadlines[key] = now + self.command_timeout_s
             elif key == "arrow_up":
                 self._change_speed_scale(self.speed_scale_step)
             elif key == "arrow_down":
@@ -294,10 +290,33 @@ class KeyboardCommandSource:
             if not consumed:
                 kept.append(key)
         self.key_queue = kept
+        self._update_command_from_active_keys(now)
+
+    def _update_command_from_active_keys(self, now=None):
+        now = time.monotonic() if now is None else float(now)
+        active = {
+            key for key, deadline in self.movement_key_deadlines.items()
+            if now <= float(deadline)
+        }
+
+        vx = 0.0
+        vy = 0.0
+        if "w" in active and "s" not in active:
+            vx = self.max_vx
+        elif "s" in active and "w" not in active:
+            vx = -self.max_vx
+
+        if "a" in active and "d" not in active:
+            vy = self.max_vy
+        elif "d" in active and "a" not in active:
+            vy = -self.max_vy
+
+        self.command = np.array([vx, vy, 0.0], dtype=np.float32)
 
     def _clear_motion_command(self):
         self.command = np.zeros(3, dtype=np.float32)
-        self.command_deadline = -1.0
+        for key in self.movement_key_deadlines:
+            self.movement_key_deadlines[key] = -1.0
 
     def _pop_matching_key(self, mapping):
         self._poll_keys()
@@ -312,8 +331,7 @@ class KeyboardCommandSource:
 
     def read(self):
         self._process_movement_keys()
-        if time.monotonic() > self.command_deadline:
-            self.command = np.zeros(3, dtype=np.float32)
+        self._update_command_from_active_keys()
         self.command_limits = load_command_limits()
         return clip_command(self.command * self.speed_scale, self.command_limits)
 
@@ -338,6 +356,10 @@ class KeyboardCommandSource:
         self._poll_keys()
         return {
             "pending_keys": list(self.key_queue),
+            "active_keys": [
+                key for key, deadline in self.movement_key_deadlines.items()
+                if time.monotonic() <= float(deadline)
+            ],
             "command": [float(x) for x in self.command],
         }
 

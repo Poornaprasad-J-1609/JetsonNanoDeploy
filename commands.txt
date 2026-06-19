@@ -301,7 +301,8 @@ tilt/move the IMU gently and watch whether policy actions/leg targets respond.
 
 This sends real MIT commands. First full robot tests should be suspended/secured.
 After launch: press space to stand and wait for "zero_frame -> stand", then
-hold w/a/s/d to walk. Press up/down arrows to change speed scale. Press c to
+hold W/S for straight forward/back, A/D for lateral, and W+A/W+D/S+A/S+D for
+diagonal xy movement. Press up/down arrows to change speed scale. Press c to
 return to crouch/default and software-zero crouch again, h to hold current
 position, x to emergency-stop. Walking is
 blocked while the controller is in crouch-zero mode.
@@ -358,7 +359,8 @@ first tests. For simulation-match policy input, see section 12.
 
 This sends real MIT commands but uses fake upright IMU values.
 After launch: press space to stand and wait for "zero_frame -> stand", then
-hold w/a/s/d to walk. Press up/down arrows to change speed scale. Press c to
+hold W/S for straight forward/back, A/D for lateral, and W+A/W+D/S+A/S+D for
+diagonal xy movement. Press up/down arrows to change speed scale. Press c to
 return to crouch/default and software-zero crouch again, h to hold current
 position, x to emergency-stop.
 These settings deliberately soften the policy command and action output for
@@ -427,9 +429,10 @@ Replace these switches in section 10 or 11:
   --policy-action-clip 0.0 \
   --policy-action-smoothing 0.0 \
 
-Keyboard W/S then sends +/-1.8 vx to the policy, and A/D sends +/-0.8 vy,
-matching the IsaacSim keyboard script. Yaw is still disabled in keyboard deploy
-commands because the current terminal control request uses only W/A/S/D.
+Keyboard W/S alone sends only +/-1.8 vx to the policy. A/D alone sends only
+/-0.8 vy. Combined W+A/W+D/S+A/S+D sends xy diagonal commands, matching the
+IsaacSim keyboard script. Yaw is still disabled in keyboard deploy commands
+because the current terminal control request uses only W/A/S/D.
 
 
 13. Quick code checks after migration
