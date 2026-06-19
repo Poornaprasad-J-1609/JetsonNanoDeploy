@@ -588,6 +588,23 @@ def print_joystick_debug(command_source):
     if raw is None:
         return
 
+    if "active_keys" in raw or "command" in raw or "scaled_command" in raw:
+        active_keys = " ".join(str(key) for key in raw.get("active_keys", []))
+        pending_keys = " ".join(str(key) for key in raw.get("pending_keys", []))
+        command = " ".join(
+            f"{float(value):+.3f}" for value in raw.get("command", [])
+        )
+        scaled_command = " ".join(
+            f"{float(value):+.3f}" for value in raw.get("scaled_command", [])
+        )
+        speed_scale = raw.get("speed_scale", None)
+        speed_text = "" if speed_scale is None else f" speed={float(speed_scale):.2f}"
+        print(
+            f"  keyboard_active=[{active_keys}] pending=[{pending_keys}]"
+            f"{speed_text} keyboard_command=[{command}] scaled_command=[{scaled_command}]"
+        )
+        return
+
     axes = " ".join(
         f"{axis_id}:{value:+.3f}"
         for axis_id, value in enumerate(raw.get("axes", []))

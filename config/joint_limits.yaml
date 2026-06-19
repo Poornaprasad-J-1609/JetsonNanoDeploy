@@ -23,12 +23,12 @@ joint_limits:
     max: 2.0
     dq_max_per_step: 0.040
   BL_hip_joint:
-    min: -0.35
-    max: 0.35
+    min: -2.0
+    max: 2.0
     dq_max_per_step: 0.040
   BR_hip_joint:
-    min: -0.35
-    max: 0.35
+    min: -2.0
+    max: 2.0
     dq_max_per_step: 0.040
 
   FL_thigh_joint:
@@ -40,12 +40,12 @@ joint_limits:
     max: 3.0
     dq_max_per_step: 0.040
   BL_thigh_joint:
-    min: -1.2
-    max: 1.2
+    min: -3.0
+    max: 3.0
     dq_max_per_step: 0.040
   BR_thigh_joint:
-    min: -1.2
-    max: 1.2
+    min: -3.0
+    max: 3.0
     dq_max_per_step: 0.040
 
   FL_calf_joint:
@@ -57,10 +57,10 @@ joint_limits:
     max: 2.0
     dq_max_per_step: 0.040
   BL_calf_joint:
-    min: -1.2
-    max: 1.42
+    min: -2.0
+    max: 2.0
     dq_max_per_step: 0.040
   BR_calf_joint:
-    min: -1.42
-    max: 1.2
+    min: -2.0
+    max: 2.0
     dq_max_per_step: 0.040

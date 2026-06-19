@@ -354,13 +354,20 @@ class KeyboardCommandSource:
 
     def raw_state(self):
         self._poll_keys()
+        command = self.command.copy()
+        scaled_command = clip_command(
+            command * self.speed_scale,
+            self.command_limits,
+        )
         return {
             "pending_keys": list(self.key_queue),
             "active_keys": [
                 key for key, deadline in self.movement_key_deadlines.items()
                 if time.monotonic() <= float(deadline)
             ],
-            "command": [float(x) for x in self.command],
+            "command": [float(x) for x in command],
+            "scaled_command": [float(x) for x in scaled_command],
+            "speed_scale": float(self.speed_scale),
         }
 
     def close(self):
