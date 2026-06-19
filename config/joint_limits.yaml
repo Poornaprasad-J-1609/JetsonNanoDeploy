@@ -8,8 +8,8 @@
 # These values are target slew limits, not hard joint angles. Hard angle limits
 # below are still always applied before MIT packets are sent.
 #
-# Conservative sit/stand/keyboard-control testing defaults:
-#   0.020 rad/step = 1.00 rad/s at 50 Hz.
+# Conservative walking-test defaults:
+#   0.040 rad/step = 2.00 rad/s at 50 Hz.
 # Increase per-joint values only after the robot moves smoothly and all
 # encoder directions/limits are verified on hardware.
 
@@ -17,50 +17,50 @@ joint_limits:
   FL_hip_joint:
     min: -2.0
     max: 2.0
-    dq_max_per_step: 0.020
+    dq_max_per_step: 0.040
   FR_hip_joint:
     min: -2.0
     max: 2.0
-    dq_max_per_step: 0.020
+    dq_max_per_step: 0.040
   BL_hip_joint:
     min: -0.35
     max: 0.35
-    dq_max_per_step: 0.020    
+    dq_max_per_step: 0.040
   BR_hip_joint:
     min: -0.35
     max: 0.35
-    dq_max_per_step: 0.020
+    dq_max_per_step: 0.040
 
   FL_thigh_joint:
     min: -3.0
     max: 3.0
-    dq_max_per_step: 0.020
+    dq_max_per_step: 0.040
   FR_thigh_joint:
     min: -3.0
     max: 3.0
-    dq_max_per_step: 0.020
+    dq_max_per_step: 0.040
   BL_thigh_joint:
     min: -1.2
     max: 1.2
-    dq_max_per_step: 0.020
+    dq_max_per_step: 0.040
   BR_thigh_joint:
     min: -1.2
     max: 1.2
-    dq_max_per_step: 0.020
+    dq_max_per_step: 0.040
 
   FL_calf_joint:
     min: -2.0
     max: 2.0
-    dq_max_per_step: 0.020
+    dq_max_per_step: 0.040
   FR_calf_joint:
     min: -2.0
     max: 2.0
-    dq_max_per_step: 0.020
+    dq_max_per_step: 0.040
   BL_calf_joint:
     min: -1.2
     max: 1.42
-    dq_max_per_step: 0.020
+    dq_max_per_step: 0.040
   BR_calf_joint:
     min: -1.42
     max: 1.2
-    dq_max_per_step: 0.020
+    dq_max_per_step: 0.040
