@@ -79,7 +79,7 @@ stand_pose_when_sit_zero:
   FL_thigh_joint: -0.35
   FR_thigh_joint: 0.35
 
-  BL_calf_joint: -0.95
-  BR_calf_joint: 0.95
-  FL_calf_joint: -0.95
-  FR_calf_joint: 0.95
+  BL_calf_joint: -1.42
+  BR_calf_joint: 1.42
+  FL_calf_joint: -1.42
+  FR_calf_joint: 1.42
