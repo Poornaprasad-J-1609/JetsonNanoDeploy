@@ -3,8 +3,14 @@
 
 imu_posture:
   # Adds a small roll/pitch correction from projected_gravity on top of stand
-  # and policy targets. Disable with --no-imu-stabilization.
+  # pose targets. Disable with --no-imu-stabilization.
+  #
+  # During RL walking the IMU already enters the policy observation as
+  # base_ang_vel and projected_gravity. Keep this manual overlay off during
+  # policy mode so the deployed gait matches IsaacSim instead of getting a
+  # second hand-tuned correction added on top.
   enabled: false
+  apply_during_policy: false
   roll_kp: 0.12
   pitch_kp: 0.08
   max_roll_correction: 0.08

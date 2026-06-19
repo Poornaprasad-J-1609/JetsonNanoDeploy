@@ -252,7 +252,16 @@ def projected_gravity_to_roll_pitch(projected_gravity_b):
     return roll, pitch
 
 
-def apply_imu_posture_stabilization(q_target, projected_gravity_b, policy_order, cfg):
+def apply_imu_posture_stabilization(
+    q_target,
+    projected_gravity_b,
+    policy_order,
+    cfg,
+    allow=True,
+):
+    if not bool(allow):
+        return q_target
+
     imu_cfg = cfg.get("imu_posture", {})
     if not bool(imu_cfg.get("enabled", False)):
         return q_target
@@ -340,12 +349,22 @@ def apply_gait_assist(q_target, command, elapsed_time, runner, cfg):
     return q_target
 
 
-def apply_motion_assists(q_target, command, elapsed_time, projected_gravity_b, runner, cfg, use_gait):
+def apply_motion_assists(
+    q_target,
+    command,
+    elapsed_time,
+    projected_gravity_b,
+    runner,
+    cfg,
+    use_gait,
+    use_imu_posture=True,
+):
     q = apply_imu_posture_stabilization(
         q_target=q_target,
         projected_gravity_b=projected_gravity_b,
         policy_order=runner.policy_order,
         cfg=cfg,
+        allow=use_imu_posture,
     )
     if use_gait:
         q = apply_gait_assist(
@@ -1391,7 +1410,12 @@ def run_policy_loop(
         print("[ZERO CAL] initial stand target will auto-zero when settled.")
     if sit_zero_pending:
         print("[ZERO CAL] initial sit/crouch target will auto-zero when settled.")
-    print("imu_stabilization:", bool(motion_assist_cfg.get("imu_posture", {}).get("enabled", False)))
+    imu_posture_cfg = motion_assist_cfg.get("imu_posture", {})
+    print("imu_stabilization:", bool(imu_posture_cfg.get("enabled", False)))
+    print(
+        "manual_imu_overlay_during_policy:",
+        bool(imu_posture_cfg.get("apply_during_policy", False)),
+    )
     print("gait_assist:", bool(motion_assist_cfg.get("gait_assist", {}).get("enabled", False)))
     if steps is None:
         print("policy_steps: unlimited, running until emergency stop or Ctrl+C")
@@ -1884,6 +1908,7 @@ def run_policy_loop(
                 runner=runner,
                 cfg=motion_assist_cfg,
                 use_gait=False,
+                use_imu_posture=True,
             )
             q_safe_target = shifted_safety_filter(
                 safety,
@@ -1937,6 +1962,7 @@ def run_policy_loop(
                 smoothing=policy_action_smoothing,
             )
             q_policy_target = runner.action_to_q_target(action)
+            imu_cfg = motion_assist_cfg.get("imu_posture", {})
             q_policy_target = apply_motion_assists(
                 q_target=q_policy_target,
                 command=policy_command,
@@ -1945,6 +1971,7 @@ def run_policy_loop(
                 runner=runner,
                 cfg=motion_assist_cfg,
                 use_gait=True,
+                use_imu_posture=bool(imu_cfg.get("apply_during_policy", False)),
             )
             q_safe_target = shifted_safety_filter(
                 safety,

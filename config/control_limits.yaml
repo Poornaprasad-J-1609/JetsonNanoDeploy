@@ -19,10 +19,12 @@ velocity_command:
   yaw_max: 0.70
 
 joystick_speed_scale:
-  initial: 0.10
-  min: 0.05
-  max: 0.40
-  step: 0.05
+  # Slow normal-walk defaults for first hardware tests.
+  # With keyboard W and max_vx=1.8, initial 0.08 gives ~0.14 m/s.
+  initial: 0.08
+  min: 0.04
+  max: 0.18
+  step: 0.02
 
 policy_deployment:
   # These affect only the policy inference path. The joystick speed_scale still

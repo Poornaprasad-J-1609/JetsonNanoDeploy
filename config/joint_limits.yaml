@@ -8,8 +8,8 @@
 # These values are target slew limits, not hard joint angles. Hard angle limits
 # below are still always applied before MIT packets are sent.
 #
-# Conservative walking-test defaults:
-#   0.040 rad/step = 2.00 rad/s at 50 Hz.
+# Walking-test defaults:
+#   0.080 rad/step = 4.00 rad/s at 50 Hz.
 # Increase per-joint values only after the robot moves smoothly and all
 # encoder directions/limits are verified on hardware.
 
