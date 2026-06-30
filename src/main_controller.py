@@ -957,6 +957,15 @@ def encoder_safety_stop_reason(
     return reason if stop else None
 
 
+def is_recoverable_feedback_issue(reason):
+    """Missing/stale communication pauses motion; measured motor faults still stop."""
+    reason = str(reason or "")
+    return (
+        "missing MIT encoder feedback" in reason
+        or "stale MIT encoder feedback" in reason
+    )
+
+
 def publish_safety_fault(
     telemetry,
     csv_logger,
@@ -1046,12 +1055,11 @@ def stand_pose_for_zero_frame(runner, zero_frame, crouch_calibration_value, stan
 def sit_pose_for_zero_frame(runner, zero_frame, crouch_calibration_value, stand_calibration_value):
     if str(zero_frame).lower() == "crouch":
         return constant_pose_like(runner, crouch_calibration_value)
-    # Startup validation guarantees this is exactly the inverse of the
-    # crouch-zero -> stand delta, so the physical round trip closes at crouch.
-    return (
-        constant_pose_like(runner, stand_calibration_value)
-        + runner.q_sit_when_stand_zero
-    )
+    # After stand auto-zero, the only target that returns exactly to the
+    # startup crouch/default pose is the inverse of the stand-from-crouch delta.
+    # This keeps c/CROUCH mathematically tied to the zero pose captured at
+    # startup instead of depending on a separately tuned YAML value drifting.
+    return constant_pose_like(runner, stand_calibration_value) - runner.q_stand_when_sit_zero
 
 
 def shifted_safety_filter(
@@ -1179,6 +1187,10 @@ def run_startup_to_stand(
         active_joints=motor_layer.active_joints,
         mode=mode,
     )
+    if reason is not None and is_recoverable_feedback_issue(reason):
+        print("\n[FEEDBACK HOLD] Startup stand blocked:", reason)
+        print("[FEEDBACK HOLD] Remaining at the last known position; motors are not stopped.")
+        return q_previous_target
     if reason is not None:
         print("\nEMERGENCY STOP:", reason)
         publish_safety_fault(
@@ -1204,6 +1216,7 @@ def run_startup_to_stand(
     print("mode:", mode)
 
     safety_faulted = False
+    feedback_hold_triggered = False
     for step in range(steps):
         cycle_start = time.monotonic()
         if hasattr(estimator, "imu_stale") and estimator.imu_stale():
@@ -1232,6 +1245,19 @@ def run_startup_to_stand(
             mode=mode,
         )
         if reason is not None:
+            if is_recoverable_feedback_issue(reason):
+                print("\n[FEEDBACK HOLD] Startup motion paused:", reason)
+                hold_commands = motor_layer.build_mit_commands(
+                    q_previous_target,
+                    phase="startup",
+                    feedback_by_joint=getattr(estimator, "last_feedback_by_joint", None),
+                )
+                if mode == "signal":
+                    motor_layer.send_harmless_frames(buses, hold_commands)
+                elif mode == "mit-signal":
+                    motor_layer.send_signal_commands(buses, hold_commands)
+                feedback_hold_triggered = True
+                break
             print("\nEMERGENCY STOP:", reason)
             safety_faulted = True
             publish_safety_fault(
@@ -1286,7 +1312,7 @@ def run_startup_to_stand(
                     buses=buses,
                     mode=mode,
                     feedback_timeout=feedback_timeout,
-                    q_keepalive=q_safe_target,
+                    q_keepalive=q_safe,
                     phase="startup",
                 )
         reason = encoder_safety_stop_reason(
@@ -1297,6 +1323,19 @@ def run_startup_to_stand(
             require_feedback=require_command_feedback,
         )
         if reason is not None:
+            if is_recoverable_feedback_issue(reason):
+                print("\n[FEEDBACK HOLD] Startup feedback was lost:", reason)
+                hold_commands = motor_layer.build_mit_commands(
+                    q_previous_target,
+                    phase="startup",
+                    feedback_by_joint=getattr(estimator, "last_feedback_by_joint", None),
+                )
+                if mode == "signal":
+                    motor_layer.send_harmless_frames(buses, hold_commands)
+                elif mode == "mit-signal":
+                    motor_layer.send_signal_commands(buses, hold_commands)
+                feedback_hold_triggered = True
+                break
             print("\nEMERGENCY STOP:", reason)
             safety_faulted = True
             publish_safety_fault(
@@ -1351,6 +1390,8 @@ def run_startup_to_stand(
 
     if safety_faulted:
         print("\nStartup phase stopped by safety fault.")
+    elif feedback_hold_triggered:
+        print("\nStartup phase paused in HOLD until motor feedback recovers.")
     else:
         print("\nStartup phase completed. Robot target is STAND / DEFAULT pose.")
     return q_previous_target
@@ -1411,6 +1452,9 @@ def run_policy_loop(
     previous_active_control_mode = None
     policy_entry_target = np.asarray(q_previous_target, dtype=np.float32).copy()
     policy_transition_step = 0
+    feedback_hold_active = False
+    feedback_hold_reason = ""
+    feedback_rearm_required = False
     policy_transition_steps = max(
         0,
         int(np.ceil(max(0.0, float(policy_transition_seconds)) / float(dt))),
@@ -1610,7 +1654,7 @@ def run_policy_loop(
                     print("[ZERO CAL] No hold commands are sent until H or a pose command.")
 
         motion_feedback_guard_active = bool(
-            (has_motion_target or control_mode not in ("idle", "hold"))
+            (feedback_hold_active or has_motion_target or control_mode not in ("idle", "hold"))
             and encoder_feedback_required(mode, estimator)
         )
         if motion_feedback_guard_active:
@@ -1646,22 +1690,38 @@ def run_policy_loop(
                 q_shift=q_coordinate_shift,
             )
             if reason is not None:
-                print("\nEMERGENCY STOP:", reason)
-                command = command_source.read()
-                publish_safety_fault(
-                    telemetry=telemetry,
-                    csv_logger=csv_logger,
-                    step=step,
-                    mode="encoder_fault",
-                    command=command,
-                    command_source=command_source,
-                    commands=[],
-                    estimator=estimator,
-                    reason=reason,
-                    action=np.zeros(action_dim, dtype=np.float32),
-                    phase="policy",
-                )
-                break
+                if is_recoverable_feedback_issue(reason):
+                    if not feedback_hold_active or reason != feedback_hold_reason:
+                        print("\n[FEEDBACK HOLD] Motor feedback unavailable:", reason)
+                        print("[FEEDBACK HOLD] Policy and pose motion paused at the last safe target.")
+                    feedback_hold_active = True
+                    feedback_hold_reason = reason
+                    feedback_rearm_required = False
+                    control_mode = "hold" if has_motion_target else "idle"
+                    previous_action = np.zeros(action_dim, dtype=np.float32)
+                    filtered_command = np.zeros(3, dtype=np.float32)
+                else:
+                    print("\nEMERGENCY STOP:", reason)
+                    command = command_source.read()
+                    publish_safety_fault(
+                        telemetry=telemetry,
+                        csv_logger=csv_logger,
+                        step=step,
+                        mode="encoder_fault",
+                        command=command,
+                        command_source=command_source,
+                        commands=[],
+                        estimator=estimator,
+                        reason=reason,
+                        action=np.zeros(action_dim, dtype=np.float32),
+                        phase="policy",
+                    )
+                    break
+            elif feedback_hold_active:
+                print("\n[FEEDBACK RECOVERED] All active motor feedback is fresh; remaining in HOLD.")
+                feedback_hold_active = False
+                feedback_hold_reason = ""
+                feedback_rearm_required = True
 
         stop, reason = safety.emergency_stop_check(
             projected_gravity_b=projected_gravity_b,
@@ -1704,6 +1764,12 @@ def run_policy_loop(
             break
 
         mode_request = command_source.get_mode_request()
+        if feedback_hold_active and mode_request is not None:
+            print(
+                f"[FEEDBACK HOLD] Ignoring {mode_request} request until all active "
+                "motor feedback is fresh."
+            )
+            mode_request = None
         if mode_request == control_mode:
             mode_request = None
         if mode_request is not None:
@@ -1823,22 +1889,32 @@ def run_policy_loop(
                     q_shift=q_coordinate_shift,
                 )
                 if reason is not None:
-                    print("\nEMERGENCY STOP:", reason)
-                    command = command_source.read()
-                    publish_safety_fault(
-                        telemetry=telemetry,
-                        csv_logger=csv_logger,
-                        step=step,
-                        mode="encoder_fault",
-                        command=command,
-                        command_source=command_source,
-                        commands=[],
-                        estimator=estimator,
-                        reason=reason,
-                        action=np.zeros(action_dim, dtype=np.float32),
-                        phase="policy",
-                    )
-                    break
+                    if is_recoverable_feedback_issue(reason):
+                        print("\n[FEEDBACK HOLD] Pose request paused:", reason)
+                        feedback_hold_active = True
+                        feedback_hold_reason = reason
+                        feedback_rearm_required = False
+                        control_mode = "hold" if has_motion_target else "idle"
+                        mode_request = None
+                        previous_action = np.zeros(action_dim, dtype=np.float32)
+                        filtered_command = np.zeros(3, dtype=np.float32)
+                    else:
+                        print("\nEMERGENCY STOP:", reason)
+                        command = command_source.read()
+                        publish_safety_fault(
+                            telemetry=telemetry,
+                            csv_logger=csv_logger,
+                            step=step,
+                            mode="encoder_fault",
+                            command=command,
+                            command_source=command_source,
+                            commands=[],
+                            estimator=estimator,
+                            reason=reason,
+                            action=np.zeros(action_dim, dtype=np.float32),
+                            phase="policy",
+                        )
+                        break
             elif mode_request == "hold":
                 (
                     q_hold,
@@ -1906,6 +1982,15 @@ def run_policy_loop(
                 print(f"\n[MODE CHANGE] control_mode -> {control_mode}")
 
         command = command_source.read()
+        if feedback_hold_active:
+            command = np.zeros(3, dtype=np.float32)
+            filtered_command = np.zeros(3, dtype=np.float32)
+        elif feedback_rearm_required:
+            if not joystick_walk_requested(command, walk_command_threshold):
+                feedback_rearm_required = False
+                print("[FEEDBACK HOLD] Motion input re-armed; a new command may now move the robot.")
+            command = np.zeros(3, dtype=np.float32)
+            filtered_command = np.zeros(3, dtype=np.float32)
         if step < calibration_hold_until_step:
             command = np.zeros(3, dtype=np.float32)
         policy_command_target = scaled_policy_command(
@@ -2063,18 +2148,19 @@ def run_policy_loop(
             action = np.zeros(action_dim, dtype=np.float32)
 
         elif active_control_mode == "policy":
-            if getattr(estimator, "joint_state_units", None) != "joint_radians":
+            if not hasattr(estimator, "read_policy_joint_state"):
                 raise RuntimeError(
-                    "Policy joint-state contract violated: expected converted "
-                    "joint radians, not raw motor encoder radians"
+                    "Policy joint-state contract is unavailable; refusing to use "
+                    "an untyped/raw encoder state"
                 )
+            q_policy_joint, qd_policy_joint = estimator.read_policy_joint_state()
             obs = runner.build_observation(
                 base_lin_vel_b=policy_base_lin_vel_b,
                 base_ang_vel_b=base_ang_vel_b,
                 projected_gravity_b=projected_gravity_b,
                 command=policy_command,
-                q_current=q_current,
-                qd_current=qd_current,
+                q_current=q_policy_joint,
+                qd_current=qd_policy_joint,
                 previous_action=previous_action,
             )
             if (
@@ -2167,21 +2253,51 @@ def run_policy_loop(
             q_shift=q_coordinate_shift,
         )
         if reason is not None:
-            print("\nEMERGENCY STOP:", reason)
-            publish_safety_fault(
-                telemetry=telemetry,
-                csv_logger=csv_logger,
-                step=step,
-                mode="encoder_fault",
-                command=command,
-                command_source=command_source,
-                commands=commands,
-                estimator=estimator,
-                reason=reason,
-                action=action,
-                phase="policy",
-            )
-            break
+            if is_recoverable_feedback_issue(reason):
+                hold_command_already_sent = bool(
+                    feedback_hold_active
+                    and active_control_mode == "hold"
+                    and commands
+                )
+                if not feedback_hold_active or reason != feedback_hold_reason:
+                    print("\n[FEEDBACK HOLD] Feedback lost after command:", reason)
+                    print("[FEEDBACK HOLD] Replacing motion target with the last safe target.")
+                feedback_hold_active = True
+                feedback_hold_reason = reason
+                feedback_rearm_required = False
+                control_mode = "hold"
+                active_control_mode = "hold"
+                has_motion_target = True
+                previous_action = np.zeros(action_dim, dtype=np.float32)
+                filtered_command = np.zeros(3, dtype=np.float32)
+                action = np.zeros(action_dim, dtype=np.float32)
+                q_safe_target = np.asarray(q_previous_target, dtype=np.float32).copy()
+                if not hold_command_already_sent:
+                    commands = motor_layer.build_mit_commands(
+                        q_safe_target,
+                        phase="startup",
+                        feedback_by_joint=getattr(estimator, "last_feedback_by_joint", None),
+                    )
+                    if mode == "signal":
+                        motor_layer.send_harmless_frames(buses, commands)
+                    elif mode == "mit-signal":
+                        motor_layer.send_signal_commands(buses, commands)
+            else:
+                print("\nEMERGENCY STOP:", reason)
+                publish_safety_fault(
+                    telemetry=telemetry,
+                    csv_logger=csv_logger,
+                    step=step,
+                    mode="encoder_fault",
+                    command=command,
+                    command_source=command_source,
+                    commands=commands,
+                    estimator=estimator,
+                    reason=reason,
+                    action=action,
+                    phase="policy",
+                )
+                break
 
         advance_target = True
         if (
@@ -2304,6 +2420,8 @@ def run_policy_loop(
                 policy_command=policy_command,
                 phase="policy",
             )
+            if feedback_hold_active:
+                telemetry_record["fault_reason"] = feedback_hold_reason
             print(compact_telemetry_line(telemetry_record))
             if csv_logger is not None:
                 csv_logger.log(telemetry_record)
@@ -2334,7 +2452,8 @@ def run_policy_loop(
                 command_source=command_source,
                 commands=commands,
                 action=action,
-                safety_ok=True,
+                safety_ok=not feedback_hold_active,
+                safety_reason=feedback_hold_reason,
             )
 
         step += 1
@@ -2347,8 +2466,6 @@ def run_policy_loop(
 def run_dry_policy_contract_check(runner, safety, motor_layer, emit=True):
     """Exercise policy-to-MIT conversion without constructing or writing a CAN bus."""
     estimator = FakeStateEstimator(q_initial=runner.q_default)
-    if getattr(estimator, "joint_state_units", None) != "joint_radians":
-        raise RuntimeError("Dry-run estimator does not expose converted joint radians")
     estimator.base_lin_vel_b = np.array([1.25, -0.50, 0.25], dtype=np.float32)
     (
         q_current,
@@ -2357,13 +2474,14 @@ def run_dry_policy_contract_check(runner, safety, motor_layer, emit=True):
         base_ang_vel_b,
         projected_gravity_b,
     ) = estimator.read()
+    q_policy_joint, qd_policy_joint = estimator.read_policy_joint_state()
     obs = runner.build_observation(
         base_lin_vel_b=base_lin_vel_b,
         base_ang_vel_b=base_ang_vel_b,
         projected_gravity_b=projected_gravity_b,
         command=np.zeros(3, dtype=np.float32),
-        q_current=q_current,
-        qd_current=qd_current,
+        q_current=q_policy_joint,
+        qd_current=qd_policy_joint,
         previous_action=np.zeros(runner.action_dim, dtype=np.float32),
     )
     runner.assert_observation_contract(obs)

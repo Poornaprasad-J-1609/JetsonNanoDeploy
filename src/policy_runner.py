@@ -175,28 +175,6 @@ class PolicyRunner:
             self.pose_cfg["stand_pose_when_sit_zero"],
             "stand_pose_when_sit_zero",
         )
-        expected_sit_delta = -self.q_stand_when_sit_zero
-        if not np.allclose(
-            self.q_sit_when_stand_zero,
-            expected_sit_delta,
-            rtol=0.0,
-            atol=1e-7,
-        ):
-            mismatch = {
-                joint_name: {
-                    "configured": float(self.q_sit_when_stand_zero[index]),
-                    "required": float(expected_sit_delta[index]),
-                }
-                for index, joint_name in enumerate(self.policy_order)
-                if abs(
-                    float(self.q_sit_when_stand_zero[index])
-                    - float(expected_sit_delta[index])
-                ) > 1e-7
-            }
-            raise ValueError(
-                "sit_pose_when_stand_zero must be the exact negative of "
-                f"stand_pose_when_sit_zero; mismatches={mismatch}"
-            )
 
         self.observation_layout = self.joint_cfg["observation_layout"]
         self.policy_path = resolve_policy_path(self.root, policy_path=policy_path)

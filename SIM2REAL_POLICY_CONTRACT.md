@@ -51,26 +51,20 @@ q_target = q_default + policy_action_scale * action
 `policy_action_scale` is `0.25`. The target then passes through joint position
 and per-step rate safety limits before MIT command packing.
 
-MIT feedback is converted with each joint's configured offset and direction
-before it reaches `q_current`. The policy receives these converted joint radians
-and joint velocities; raw motor encoder radians are retained only as diagnostic
-feedback fields.
+## Joint Feedback Units
 
-## Sit And Stand Frames
-
-The manually calibrated crouch pose is the initial pose-controller zero.
-`stand_pose_when_sit_zero` is the crouch-to-stand delta. After stand is made the
-RL policy zero, `sit_pose_when_stand_zero` must be exactly the negative of that
-delta. Therefore:
+The policy receives joint-space radians, never raw MIT motor radians. Live
+feedback follows this path:
 
 ```text
-crouch-zero -> stand: +stand_pose_when_sit_zero
-stand-zero -> crouch: -stand_pose_when_sit_zero
+MIT position -> subtract joint offset -> apply joint direction -> wrap 2*pi
+             -> q_current joint radians -> observation[12:24] - q_default
 ```
 
-Startup validation rejects `default_pose.yaml` if these two relative poses do
-not form an exact round trip. Stand remains zero in policy coordinates while
-sit/stand pose control retains the physical crouch-to-stand displacement.
+Joint velocity is also transformed by the configured joint direction before it
+enters observation indices `24:36`. Raw position, velocity, and torque remain in
+the feedback dictionary as diagnostic fields such as `position_raw`; they are
+not exposed by the policy joint-state API.
 
 ## Command Convention
 
@@ -169,3 +163,8 @@ Start in the configured crouch pose, press Space to stand, wait for stand zero
 calibration to complete, then hold a movement key. Walking remains blocked if
 the IMU is not live, MIT feedback is missing or stale, motor fault bits are
 nonzero, projected gravity is unsafe, or the stand zero frame is incomplete.
+Missing or stale MIT feedback enters `FEEDBACK HOLD`: policy and pose motion are
+cancelled and the last safe target is maintained without disabling the motors.
+After feedback recovers, release the movement keys once to re-arm motion.
+Measured motor fault bits, impossible encoder angles, and body safety faults
+remain emergency-stop conditions.

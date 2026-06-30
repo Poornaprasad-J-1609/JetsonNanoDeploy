@@ -11,15 +11,14 @@ except ImportError as exc:
 
 from policy_runner import PolicyRunner
 from safety_monitor import SafetyMonitor
-from motor_command_layer import MotorCommandLayer
+from motor_command_layer import MotorCommandLayer, motor_position_to_joint_angle
 from imu_interface import projected_gravity_absolute_xsens
 from main_controller import (
     filtered_policy_action,
+    is_recoverable_feedback_issue,
     rate_limit_policy_command,
     run_dry_policy_contract_check,
-    sit_pose_for_zero_frame,
     smoothstep,
-    stand_pose_for_zero_frame,
 )
 from state_estimator import FakeStateEstimator
 from joystick_interface import (
@@ -138,28 +137,6 @@ def check_simulation_joint_order(runner):
     return []
 
 
-def check_pose_frame_round_trip(runner):
-    stand_delta = stand_pose_for_zero_frame(
-        runner,
-        zero_frame="crouch",
-        crouch_calibration_value=0.0,
-        stand_calibration_value=0.0,
-    )
-    sit_delta = sit_pose_for_zero_frame(
-        runner,
-        zero_frame="stand",
-        crouch_calibration_value=0.0,
-        stand_calibration_value=0.0,
-    )
-    residual = stand_delta + sit_delta
-    max_error = float(np.max(np.abs(residual)))
-    print("\nSit/stand frame round trip:")
-    print(f"  max |stand_delta + sit_delta| = {max_error:.9f} rad")
-    if not np.allclose(residual, np.zeros(12, dtype=np.float32), atol=1e-7):
-        return ["stand/sit relative pose deltas do not return to crouch zero"]
-    return []
-
-
 def check_imu_upright_frame():
     upright = projected_gravity_absolute_xsens(
         np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
@@ -169,6 +146,61 @@ def check_imu_upright_frame():
     if not np.allclose(upright, np.array([0.0, 0.0, -1.0], dtype=np.float32), atol=1e-5):
         return ["Xsens upright projected_gravity is not [0, 0, -1]"]
     return []
+
+
+def check_policy_joint_radian_source(runner):
+    failures = []
+    estimator = FakeStateEstimator(runner.q_default)
+    if getattr(estimator, "joint_state_units", None) != "joint_radians":
+        failures.append("state estimator does not label policy state as joint radians")
+    q_joint, qd_joint = estimator.read_policy_joint_state()
+    if not np.array_equal(q_joint, runner.q_default):
+        failures.append("policy joint-state API returned unexpected joint positions")
+    if not np.array_equal(qd_joint, np.zeros(12, dtype=np.float32)):
+        failures.append("policy joint-state API returned unexpected joint velocities")
+
+    expected_joint_angle = 0.37
+    offset = -0.24
+    conversion_errors = []
+    for direction in (1.0, -1.0):
+        raw_motor_angle = offset + direction * (expected_joint_angle + 2.0 * np.pi)
+        converted = motor_position_to_joint_angle(
+            raw_motor_angle,
+            offset=offset,
+            direction=direction,
+        )
+        conversion_errors.append(abs(converted - expected_joint_angle))
+    max_error = max(conversion_errors)
+    if max_error > 1e-6:
+        failures.append(
+            f"raw motor to joint-radian conversion error is {max_error:.9f} rad"
+        )
+
+    print("\nPolicy joint-state source:")
+    print("  source=converted joint radians")
+    print(f"  +/- direction and 2*pi conversion max_error={max_error:.9f} rad")
+    print("  raw motor position is retained only in feedback['position_raw']")
+    return failures
+
+
+def check_feedback_hold_classification():
+    recoverable = (
+        "ABNORMAL ENCODER ANGLE: missing MIT encoder feedback before motion",
+        "ABNORMAL ENCODER ANGLE: stale MIT encoder feedback before motion",
+    )
+    hard_stop = (
+        "MOTOR FAULT: nonzero MIT feedback fault bits",
+        "ABNORMAL ENCODER ANGLE: FR_calf_joint=+8.0 rad",
+    )
+    failures = []
+    if not all(is_recoverable_feedback_issue(reason) for reason in recoverable):
+        failures.append("missing/stale feedback is not classified as FEEDBACK HOLD")
+    if any(is_recoverable_feedback_issue(reason) for reason in hard_stop):
+        failures.append("motor/encoder safety fault was incorrectly classified as recoverable")
+    print("\nFeedback failure behavior:")
+    print("  missing/stale feedback -> HOLD")
+    print("  motor fault/impossible angle -> EMERGENCY STOP")
+    return failures
 
 
 def check_keyboard_mapping():
@@ -573,7 +605,7 @@ def main():
         and dry_result.get("joint_radians_to_policy", False)
     )
     if not joint_radians_to_policy:
-        failures.append("policy joint state is not explicitly converted joint radians")
+        failures.append("dry-run policy state was not converted joint radians")
     command_names = (
         [command["joint_name"] for command in dry_result["commands"]]
         if dry_result is not None
@@ -584,8 +616,10 @@ def main():
 
     failures += check_observation_layout(runner)
     failures += check_simulation_joint_order(runner)
-    failures += check_pose_frame_round_trip(runner)
     failures += check_imu_upright_frame()
+    failures += check_policy_joint_radian_source(runner)
+    feedback_hold_failures = check_feedback_hold_classification()
+    failures += feedback_hold_failures
     failures += check_pose("default_pose", runner.q_default, runner, limits)
     failures += check_pose("stand_pose", runner.q_stand, runner, limits)
     failures += check_pose("crouch_pose", runner.q_crouch, runner, limits)
@@ -696,6 +730,7 @@ def main():
     )
     print(f"PASS dry_run_no_can={dry_run_no_can}")
     print(f"PASS joint_radians_to_policy={joint_radians_to_policy}")
+    print(f"PASS stale_feedback_enters_hold={not feedback_hold_failures}")
 
     print("\nOK: poses are inside limits.")
     print("OK: velocity commands are clipped to control_limits.yaml before policy observation.")

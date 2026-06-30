@@ -28,8 +28,8 @@ class FakeStateEstimator:
         dry_follow_alpha=0.10,
         dry_max_joint_velocity=10.0,
     ):
-        # q_current/qd_current are the only joint state vectors exposed to the
-        # policy. Live MIT raw motor radians remain in feedback dictionaries.
+        # Policy-facing joint state is always expressed in deployed joint
+        # radians. Raw MIT motor values are kept only in feedback dictionaries.
         self.joint_state_units = "joint_radians"
         self.q_current = np.asarray(q_initial, dtype=np.float32).copy()
         self.qd_current = np.zeros_like(self.q_current, dtype=np.float32)
@@ -116,6 +116,16 @@ class FakeStateEstimator:
             self.base_ang_vel_b.copy(),
             self.projected_gravity_b.copy(),
         )
+
+    def read_policy_joint_state(self):
+        """Return only converted joint-space position/velocity for policy input."""
+        if self.joint_state_units != "joint_radians":
+            raise RuntimeError(
+                "Policy joint state must be converted joint radians, not raw motor radians"
+            )
+        if not np.all(np.isfinite(self.q_current)) or not np.all(np.isfinite(self.qd_current)):
+            raise ValueError("Policy joint state contains NaN or infinite values")
+        return self.q_current.copy(), self.qd_current.copy()
 
     def dry_update_as_if_robot_followed(self, q_target, dt):
         q_target = np.asarray(q_target, dtype=np.float32)
@@ -245,6 +255,9 @@ class MitFeedbackStateEstimator(FakeStateEstimator):
             offset = float(self.motor_layer.joint_offsets[joint_name])
             direction = float(self.motor_layer.joint_directions[joint_name])
             raw_position = float(feedback["position"])
+            # This is the sole raw-position -> policy joint-position boundary.
+            # Apply offset, mounting direction, and 2*pi normalization before
+            # q_current can be observed by the policy.
             q_joint = motor_position_to_joint_angle(
                 feedback["position"],
                 offset=offset,
