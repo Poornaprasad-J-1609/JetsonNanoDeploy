@@ -17,7 +17,9 @@ from main_controller import (
     filtered_policy_action,
     rate_limit_policy_command,
     run_dry_policy_contract_check,
+    sit_pose_for_zero_frame,
     smoothstep,
+    stand_pose_for_zero_frame,
 )
 from state_estimator import FakeStateEstimator
 from joystick_interface import (
@@ -133,6 +135,28 @@ def check_simulation_joint_order(runner):
         return [
             "policy joint order differs from the native IsaacLab telemetry order"
         ]
+    return []
+
+
+def check_pose_frame_round_trip(runner):
+    stand_delta = stand_pose_for_zero_frame(
+        runner,
+        zero_frame="crouch",
+        crouch_calibration_value=0.0,
+        stand_calibration_value=0.0,
+    )
+    sit_delta = sit_pose_for_zero_frame(
+        runner,
+        zero_frame="stand",
+        crouch_calibration_value=0.0,
+        stand_calibration_value=0.0,
+    )
+    residual = stand_delta + sit_delta
+    max_error = float(np.max(np.abs(residual)))
+    print("\nSit/stand frame round trip:")
+    print(f"  max |stand_delta + sit_delta| = {max_error:.9f} rad")
+    if not np.allclose(residual, np.zeros(12, dtype=np.float32), atol=1e-7):
+        return ["stand/sit relative pose deltas do not return to crouch zero"]
     return []
 
 
@@ -544,6 +568,12 @@ def main():
     )
     if not base_lin_vel_zero:
         failures.append("dry-run observation base linear velocity is not exactly zero")
+    joint_radians_to_policy = bool(
+        dry_result is not None
+        and dry_result.get("joint_radians_to_policy", False)
+    )
+    if not joint_radians_to_policy:
+        failures.append("policy joint state is not explicitly converted joint radians")
     command_names = (
         [command["joint_name"] for command in dry_result["commands"]]
         if dry_result is not None
@@ -554,6 +584,7 @@ def main():
 
     failures += check_observation_layout(runner)
     failures += check_simulation_joint_order(runner)
+    failures += check_pose_frame_round_trip(runner)
     failures += check_imu_upright_frame()
     failures += check_pose("default_pose", runner.q_default, runner, limits)
     failures += check_pose("stand_pose", runner.q_stand, runner, limits)
@@ -664,6 +695,7 @@ def main():
         f"{motion_assists_default_disabled}"
     )
     print(f"PASS dry_run_no_can={dry_run_no_can}")
+    print(f"PASS joint_radians_to_policy={joint_radians_to_policy}")
 
     print("\nOK: poses are inside limits.")
     print("OK: velocity commands are clipped to control_limits.yaml before policy observation.")

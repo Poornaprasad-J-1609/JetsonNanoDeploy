@@ -28,6 +28,9 @@ class FakeStateEstimator:
         dry_follow_alpha=0.10,
         dry_max_joint_velocity=10.0,
     ):
+        # q_current/qd_current are the only joint state vectors exposed to the
+        # policy. Live MIT raw motor radians remain in feedback dictionaries.
+        self.joint_state_units = "joint_radians"
         self.q_current = np.asarray(q_initial, dtype=np.float32).copy()
         self.qd_current = np.zeros_like(self.q_current, dtype=np.float32)
         self.dry_follow_alpha = float(np.clip(dry_follow_alpha, 0.0, 1.0))

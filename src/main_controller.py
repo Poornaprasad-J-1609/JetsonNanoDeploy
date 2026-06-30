@@ -1046,11 +1046,12 @@ def stand_pose_for_zero_frame(runner, zero_frame, crouch_calibration_value, stan
 def sit_pose_for_zero_frame(runner, zero_frame, crouch_calibration_value, stand_calibration_value):
     if str(zero_frame).lower() == "crouch":
         return constant_pose_like(runner, crouch_calibration_value)
-    # After stand auto-zero, the only target that returns exactly to the
-    # startup crouch/default pose is the inverse of the stand-from-crouch delta.
-    # This keeps c/CROUCH mathematically tied to the zero pose captured at
-    # startup instead of depending on a separately tuned YAML value drifting.
-    return constant_pose_like(runner, stand_calibration_value) - runner.q_stand_when_sit_zero
+    # Startup validation guarantees this is exactly the inverse of the
+    # crouch-zero -> stand delta, so the physical round trip closes at crouch.
+    return (
+        constant_pose_like(runner, stand_calibration_value)
+        + runner.q_sit_when_stand_zero
+    )
 
 
 def shifted_safety_filter(
@@ -2062,6 +2063,11 @@ def run_policy_loop(
             action = np.zeros(action_dim, dtype=np.float32)
 
         elif active_control_mode == "policy":
+            if getattr(estimator, "joint_state_units", None) != "joint_radians":
+                raise RuntimeError(
+                    "Policy joint-state contract violated: expected converted "
+                    "joint radians, not raw motor encoder radians"
+                )
             obs = runner.build_observation(
                 base_lin_vel_b=policy_base_lin_vel_b,
                 base_ang_vel_b=base_ang_vel_b,
@@ -2341,6 +2347,8 @@ def run_policy_loop(
 def run_dry_policy_contract_check(runner, safety, motor_layer, emit=True):
     """Exercise policy-to-MIT conversion without constructing or writing a CAN bus."""
     estimator = FakeStateEstimator(q_initial=runner.q_default)
+    if getattr(estimator, "joint_state_units", None) != "joint_radians":
+        raise RuntimeError("Dry-run estimator does not expose converted joint radians")
     estimator.base_lin_vel_b = np.array([1.25, -0.50, 0.25], dtype=np.float32)
     (
         q_current,
@@ -2398,6 +2406,7 @@ def run_dry_policy_contract_check(runner, safety, motor_layer, emit=True):
         "q_target": q_target,
         "commands": commands,
         "base_lin_vel_zero": True,
+        "joint_radians_to_policy": True,
         "dry_run_no_can": True,
     }
     if emit:
@@ -2419,6 +2428,7 @@ def run_dry_policy_contract_check(runner, safety, motor_layer, emit=True):
             f"{float(np.max(q_target)):+.6f}",
         )
         print("POLICY OBS CHECK base_lin_vel=[0.0, 0.0, 0.0]")
+        print("Policy joint state source: converted joint radians")
         print("MIT commands built:", len(commands), "in policy order")
         print("CAN objects opened: 0")
         print("CAN writes: 0")

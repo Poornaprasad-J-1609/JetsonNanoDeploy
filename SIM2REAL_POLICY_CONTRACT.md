@@ -51,6 +51,27 @@ q_target = q_default + policy_action_scale * action
 `policy_action_scale` is `0.25`. The target then passes through joint position
 and per-step rate safety limits before MIT command packing.
 
+MIT feedback is converted with each joint's configured offset and direction
+before it reaches `q_current`. The policy receives these converted joint radians
+and joint velocities; raw motor encoder radians are retained only as diagnostic
+feedback fields.
+
+## Sit And Stand Frames
+
+The manually calibrated crouch pose is the initial pose-controller zero.
+`stand_pose_when_sit_zero` is the crouch-to-stand delta. After stand is made the
+RL policy zero, `sit_pose_when_stand_zero` must be exactly the negative of that
+delta. Therefore:
+
+```text
+crouch-zero -> stand: +stand_pose_when_sit_zero
+stand-zero -> crouch: -stand_pose_when_sit_zero
+```
+
+Startup validation rejects `default_pose.yaml` if these two relative poses do
+not form an exact round trip. Stand remains zero in policy coordinates while
+sit/stand pose control retains the physical crouch-to-stand displacement.
+
 ## Command Convention
 
 The shared convention is configured in `config/joystick.yaml`:
