@@ -36,24 +36,24 @@ gains:
   startup:
     hip:
       kp: 50.0
-      kd: 3.1
+      kd: 1.8
     thigh:
       kp: 50.0
-      kd: 3.1
+      kd: 1.8
     calf:
       kp: 75.0
-      kd: 3.1
+      kd: 1.8
 
   policy:
     hip:
       kp: 50.0
-      kd: 3.1
+      kd: 1.8
     thigh:
       kp: 50.0
-      kd: 3.1
+      kd: 1.8
     calf:
       kp: 50.0
-      kd: 3.1
+      kd: 1.8
 
 feedforward:
   tau_ff: 0.0
