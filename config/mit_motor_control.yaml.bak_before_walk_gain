@@ -46,13 +46,13 @@ gains:
 
   policy:
     hip:
-      kp: 45.0
-      kd: 1.5
+      kp: 50.0
+      kd: 1.8
     thigh:
-      kp: 65.0
+      kp: 50.0
       kd: 1.8
     calf:
-      kp: 65.0
+      kp: 50.0
       kd: 1.8
 
 feedforward:
