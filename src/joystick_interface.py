@@ -68,6 +68,32 @@ def load_joystick_defaults():
     return load_yaml(ROOT / "config" / "joystick.yaml")
 
 
+def load_command_convention():
+    defaults = load_joystick_defaults()
+    if "command_convention" not in defaults:
+        raise KeyError("Missing command_convention in config/joystick.yaml")
+    cfg = defaults["command_convention"]
+    required = ("vx_forward_positive", "vy_left_positive", "yaw_left_positive")
+    missing = [name for name in required if name not in cfg]
+    if missing:
+        raise KeyError(
+            "Missing command convention field(s) in config/joystick.yaml: "
+            + ", ".join(missing)
+        )
+    invalid_types = [name for name in required if not isinstance(cfg[name], bool)]
+    if invalid_types:
+        raise TypeError(
+            "Command convention fields must be YAML booleans: "
+            + ", ".join(invalid_types)
+        )
+    convention = {name: cfg[name] for name in required}
+    if not convention["vx_forward_positive"]:
+        raise ValueError("Canonical deployment convention requires vx > 0 to mean forward")
+    if not convention["yaw_left_positive"]:
+        raise ValueError("Canonical deployment convention requires yaw > 0 to mean left/CCW")
+    return convention
+
+
 def load_speed_scale_defaults():
     cfg = load_control_limits().get("joystick_speed_scale", {})
     speed = {
@@ -158,8 +184,17 @@ class FixedCommandSource:
         pass
 
 
-def keyboard_motion_command(active_keys, max_vx, max_vy, max_yaw):
+def keyboard_motion_command(
+    active_keys,
+    max_vx,
+    max_vy,
+    max_yaw,
+    vy_left_positive=None,
+):
     """Map terminal keys to the policy command [vx, vy, yaw_rate]."""
+    if vy_left_positive is None:
+        vy_left_positive = load_command_convention()["vy_left_positive"]
+    lateral_sign = 1.0 if bool(vy_left_positive) else -1.0
     active = set(active_keys)
     vx = 0.0
     vy = 0.0
@@ -171,9 +206,9 @@ def keyboard_motion_command(active_keys, max_vx, max_vy, max_yaw):
         vx = -abs(float(max_vx))
 
     if "a" in active and "d" not in active:
-        vy = -abs(float(max_vy))
+        vy = lateral_sign * abs(float(max_vy))
     elif "d" in active and "a" not in active:
-        vy = abs(float(max_vy))
+        vy = -lateral_sign * abs(float(max_vy))
 
     if "q" in active and "e" not in active:
         yaw = abs(float(max_yaw))
@@ -189,7 +224,7 @@ class KeyboardCommandSource:
 
     Keys:
       w/s -> straight forward/back while the key repeats
-      a/d -> -Y/+Y while the key repeats
+      a/d -> +Y/-Y while the key repeats
       q/e -> +Z/-Z yaw rate while the key repeats
       w+a, w+d, s+a, s+d -> diagonal xy movement
       up/down arrows -> increase/decrease speed scale
@@ -209,7 +244,11 @@ class KeyboardCommandSource:
         speed_scale_max=1.0,
         speed_scale_step=0.1,
         command_timeout_s=0.35,
+        vy_left_positive=None,
     ):
+        if vy_left_positive is None:
+            vy_left_positive = load_command_convention()["vy_left_positive"]
+        self.vy_left_positive = bool(vy_left_positive)
         self.max_vx = float(max_vx)
         self.max_vy = float(max_vy)
         self.max_yaw = float(max_yaw)
@@ -245,12 +284,14 @@ class KeyboardCommandSource:
         print("Terminal keyboard command source:")
         print("  w -> straight forward")
         print("  s -> straight backward")
-        print("  a -> -Y")
-        print("  d -> +Y")
+        left_sign = "+Y" if self.vy_left_positive else "-Y"
+        right_sign = "-Y" if self.vy_left_positive else "+Y"
+        print(f"  a -> {left_sign} (left)")
+        print(f"  d -> {right_sign} (right)")
         print("  q -> +Z yaw")
         print("  e -> -Z yaw")
-        print("  w+a -> +X/-Y, w+d -> +X/+Y")
-        print("  s+a -> -X/-Y, s+d -> -X/+Y")
+        print("  w+a -> +X/+Y, w+d -> +X/-Y")
+        print("  s+a -> -X/+Y, s+d -> -X/-Y")
         print("  up/down arrows -> increase/decrease speed scale")
         print("  c -> crouch/sit")
         print("  space -> stand")
@@ -359,6 +400,7 @@ class KeyboardCommandSource:
             max_vx=self.max_vx,
             max_vy=self.max_vy,
             max_yaw=self.max_yaw,
+            vy_left_positive=self.vy_left_positive,
         )
 
     def _clear_motion_command(self):
@@ -482,7 +524,11 @@ class JoystickCommandSource:
         speed_scale_min=0.2,
         speed_scale_max=1.0,
         speed_scale_step=0.1,
+        vy_left_positive=None,
     ):
+        if vy_left_positive is None:
+            vy_left_positive = load_command_convention()["vy_left_positive"]
+        self.vy_left_positive = bool(vy_left_positive)
         self.max_vx = float(max_vx)
         self.max_vy = float(max_vy)
         self.max_yaw = float(max_yaw)
@@ -613,6 +659,10 @@ class JoystickCommandSource:
         )
         print(f"  emergency buttons: {self.emergency_stop_buttons}")
         print(f"  speed scale: {self.speed_scale:.2f}")
+        print(
+            "  lateral convention:",
+            "left=+vy" if self.vy_left_positive else "left=-vy",
+        )
 
     def _axis(self, axis_id):
         if axis_id < 0 or axis_id >= self.joy.get_numaxes():
@@ -715,6 +765,8 @@ class JoystickCommandSource:
             * self.max_vy
             * self.speed_scale
         )
+        if not self.vy_left_positive:
+            vy = -vy
         yaw = (
             expo_curve(apply_deadzone(raw_yaw, self.deadzone), self.expo)
             * self.max_yaw
@@ -809,6 +861,7 @@ class CommandSource:
             )
         elif source == "keyboard":
             defaults = load_joystick_defaults()
+            convention = load_command_convention()
             speed_defaults = load_speed_scale_defaults()
             self.impl = KeyboardCommandSource(
                 max_vx=kwargs.get("max_vx", defaults["speed_limits"]["max_vx"]),
@@ -819,9 +872,14 @@ class CommandSource:
                 speed_scale_max=kwargs.get("speed_scale_max", speed_defaults["max"]),
                 speed_scale_step=kwargs.get("speed_scale_step", speed_defaults["step"]),
                 command_timeout_s=kwargs.get("keyboard_command_timeout", 0.35),
+                vy_left_positive=kwargs.get(
+                    "vy_left_positive",
+                    convention["vy_left_positive"],
+                ),
             )
         elif source == "joystick":
             defaults = load_joystick_defaults()
+            convention = load_command_convention()
             speed_defaults = load_speed_scale_defaults()
             self.impl = JoystickCommandSource(
                 max_vx=kwargs.get("max_vx", defaults["speed_limits"]["max_vx"]),
@@ -896,6 +954,10 @@ class CommandSource:
                 speed_scale_min=kwargs.get("speed_scale_min", speed_defaults["min"]),
                 speed_scale_max=kwargs.get("speed_scale_max", speed_defaults["max"]),
                 speed_scale_step=kwargs.get("speed_scale_step", speed_defaults["step"]),
+                vy_left_positive=kwargs.get(
+                    "vy_left_positive",
+                    convention["vy_left_positive"],
+                ),
             )
         else:
             raise ValueError(f"Unknown command source: {source}")

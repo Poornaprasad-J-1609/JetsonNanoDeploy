@@ -21,9 +21,17 @@ class FakeStateEstimator:
       - base_lin_vel_b from velocity estimator
     """
 
-    def __init__(self, q_initial, imu_sensor=None):
+    def __init__(
+        self,
+        q_initial,
+        imu_sensor=None,
+        dry_follow_alpha=0.10,
+        dry_max_joint_velocity=10.0,
+    ):
         self.q_current = np.asarray(q_initial, dtype=np.float32).copy()
         self.qd_current = np.zeros_like(self.q_current, dtype=np.float32)
+        self.dry_follow_alpha = float(np.clip(dry_follow_alpha, 0.0, 1.0))
+        self.dry_max_joint_velocity = max(0.0, float(dry_max_joint_velocity))
 
         self.base_lin_vel_b = np.zeros(3, dtype=np.float32)
         self.base_ang_vel_b = np.zeros(3, dtype=np.float32)
@@ -108,8 +116,20 @@ class FakeStateEstimator:
 
     def dry_update_as_if_robot_followed(self, q_target, dt):
         q_target = np.asarray(q_target, dtype=np.float32)
-        self.qd_current = (q_target - self.q_current) / float(dt)
-        self.q_current = q_target.copy()
+        dt = float(dt)
+        if dt <= 0.0:
+            raise ValueError("dry-run update dt must be > 0")
+
+        # A position-controlled motor cannot teleport to each new target in one
+        # 20 ms cycle. Doing that made fake feedback report enormous qd values,
+        # which destabilized the recurrent observation even though real encoder
+        # feedback was slow. Use a bounded first-order response for dry runs.
+        dq = self.dry_follow_alpha * (q_target - self.q_current)
+        if self.dry_max_joint_velocity > 0.0:
+            max_step = self.dry_max_joint_velocity * dt
+            dq = np.clip(dq, -max_step, max_step)
+        self.qd_current = (dq / dt).astype(np.float32)
+        self.q_current = (self.q_current + dq).astype(np.float32)
 
 
 class MitFeedbackStateEstimator(FakeStateEstimator):

@@ -13,9 +13,17 @@ from policy_runner import PolicyRunner
 from safety_monitor import SafetyMonitor
 from motor_command_layer import MotorCommandLayer
 from imu_interface import projected_gravity_absolute_xsens
+from main_controller import (
+    filtered_policy_action,
+    rate_limit_policy_command,
+    run_dry_policy_contract_check,
+    smoothstep,
+)
+from state_estimator import FakeStateEstimator
 from joystick_interface import (
     clip_command,
     keyboard_motion_command,
+    load_command_convention,
     load_command_limits,
     load_joystick_defaults,
     load_speed_scale_defaults,
@@ -24,6 +32,20 @@ from joystick_interface import (
 
 ROOT = Path(__file__).resolve().parents[1]
 EPS = 1e-6
+SIMULATION_NATIVE_JOINT_ORDER = [
+    "BL_hip_joint",
+    "BR_hip_joint",
+    "FL_hip_joint",
+    "FR_hip_joint",
+    "BL_thigh_joint",
+    "BR_thigh_joint",
+    "FL_thigh_joint",
+    "FR_thigh_joint",
+    "BL_calf_joint",
+    "BR_calf_joint",
+    "FL_calf_joint",
+    "FR_calf_joint",
+]
 
 
 def load_yaml(path):
@@ -103,6 +125,17 @@ def check_observation_layout(runner):
     return failures
 
 
+def check_simulation_joint_order(runner):
+    print("\nPolicy joint order from simulation telemetry:")
+    for index, joint_name in enumerate(runner.policy_order):
+        print(f"  {index:02d}: {joint_name}")
+    if list(runner.policy_order) != SIMULATION_NATIVE_JOINT_ORDER:
+        return [
+            "policy joint order differs from the native IsaacLab telemetry order"
+        ]
+    return []
+
+
 def check_imu_upright_frame():
     upright = projected_gravity_absolute_xsens(
         np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
@@ -115,18 +148,20 @@ def check_imu_upright_frame():
 
 
 def check_keyboard_mapping():
+    convention = load_command_convention()
+    left_y = 1.2 if convention["vy_left_positive"] else -1.2
     expected = {
-        "W": (["w"], [1.8, 0.0, 0.0]),
-        "S": (["s"], [-1.8, 0.0, 0.0]),
-        "A": (["a"], [0.0, -0.8, 0.0]),
-        "D": (["d"], [0.0, 0.8, 0.0]),
+        "W": (["w"], [2.2, 0.0, 0.0]),
+        "S": (["s"], [-2.2, 0.0, 0.0]),
+        "A": (["a"], [0.0, left_y, 0.0]),
+        "D": (["d"], [0.0, -left_y, 0.0]),
         "Q": (["q"], [0.0, 0.0, 0.7]),
         "E": (["e"], [0.0, 0.0, -0.7]),
-        "W+D": (["w", "d"], [1.8, 0.8, 0.0]),
-        "W+A": (["w", "a"], [1.8, -0.8, 0.0]),
-        "S+A": (["s", "a"], [-1.8, -0.8, 0.0]),
-        "S+D": (["s", "d"], [-1.8, 0.8, 0.0]),
-        "W+Q": (["w", "q"], [1.8, 0.0, 0.7]),
+        "W+D": (["w", "d"], [2.2, -left_y, 0.0]),
+        "W+A": (["w", "a"], [2.2, left_y, 0.0]),
+        "S+A": (["s", "a"], [-2.2, left_y, 0.0]),
+        "S+D": (["s", "d"], [-2.2, -left_y, 0.0]),
+        "W+Q": (["w", "q"], [2.2, 0.0, 0.7]),
         "W+S": (["w", "s"], [0.0, 0.0, 0.0]),
         "A+D": (["a", "d"], [0.0, 0.0, 0.0]),
         "Q+E": (["q", "e"], [0.0, 0.0, 0.0]),
@@ -134,7 +169,13 @@ def check_keyboard_mapping():
     failures = []
     print("\nKeyboard body-frame mapping:")
     for label, (keys, expected_command) in expected.items():
-        command = keyboard_motion_command(keys, 1.8, 0.8, 0.7)
+        command = keyboard_motion_command(
+            keys,
+            2.2,
+            1.2,
+            0.7,
+            vy_left_positive=convention["vy_left_positive"],
+        )
         expected_array = np.asarray(expected_command, dtype=np.float32)
         ok = bool(np.allclose(command, expected_array, atol=1e-7))
         print(f"  {label:3s} -> {command.tolist()} {'OK' if ok else 'WRONG'}")
@@ -315,6 +356,110 @@ def check_extreme_target_enforcement(runner, safety, motor_layer, limits):
     return violations
 
 
+def check_closed_loop_gait_passthrough(runner, safety):
+    """Verify healthy mid-speed rollouts do not touch deployment guards."""
+    cfg = load_yaml(ROOT / "config" / "control_limits.yaml")
+    deployment = cfg.get("policy_deployment", {})
+    speed = cfg.get("joystick_speed_scale", {})
+    joystick = load_joystick_defaults()["speed_limits"]
+    convention = load_command_convention()
+    left_sign = 1.0 if convention["vy_left_positive"] else -1.0
+    scale = float(speed.get("initial", 0.10))
+    cases = {
+        "W": [float(joystick["max_vx"]) * scale, 0.0, 0.0],
+        "S": [-float(joystick["max_vx"]) * scale, 0.0, 0.0],
+        "A": [0.0, left_sign * float(joystick["max_vy"]) * scale, 0.0],
+        "D": [0.0, -left_sign * float(joystick["max_vy"]) * scale, 0.0],
+        "Q": [0.0, 0.0, float(joystick["max_yaw"]) * scale],
+        "E": [0.0, 0.0, -float(joystick["max_yaw"]) * scale],
+        "W+A": [float(joystick["max_vx"]) * scale, left_sign * float(joystick["max_vy"]) * scale, 0.0],
+        "W+D": [float(joystick["max_vx"]) * scale, -left_sign * float(joystick["max_vy"]) * scale, 0.0],
+        "S+A": [-float(joystick["max_vx"]) * scale, left_sign * float(joystick["max_vy"]) * scale, 0.0],
+        "S+D": [-float(joystick["max_vx"]) * scale, -left_sign * float(joystick["max_vy"]) * scale, 0.0],
+    }
+
+    clip_abs = float(deployment.get("action_clip_abs", 0.0))
+    smoothing = float(deployment.get("action_smoothing", 0.0))
+    transition_steps = max(
+        0,
+        int(np.ceil(float(deployment.get("transition_seconds", 0.0)) / runner.control_dt)),
+    )
+    failures = []
+
+    print("\nClosed-loop mid-speed gait guard check:")
+    print("  case  peak_action action_clips hard_clips rate_clips target_abs_max")
+    for label, target_command in cases.items():
+        estimator = FakeStateEstimator(runner.q_default)
+        previous_action = np.zeros(len(runner.policy_order), dtype=np.float32)
+        previous_target = runner.q_default.copy()
+        filtered_command = np.zeros(3, dtype=np.float32)
+        peak_action = 0.0
+        action_clips = 0
+        hard_clips = 0
+        rate_clips = 0
+        target_abs_max = 0.0
+
+        for step in range(300):
+            q_current, qd_current, _, _, _ = estimator.read()
+            filtered_command = rate_limit_policy_command(
+                target=np.asarray(target_command, dtype=np.float32),
+                previous=filtered_command,
+                dt=runner.control_dt,
+                vx_per_s=float(deployment.get("command_slew_vx_per_s", 0.0)),
+                vy_per_s=float(deployment.get("command_slew_vy_per_s", 0.0)),
+                yaw_per_s=float(deployment.get("command_slew_yaw_per_s", 0.0)),
+            )
+            obs = runner.build_observation(
+                base_lin_vel_b=np.zeros(3, dtype=np.float32),
+                base_ang_vel_b=np.zeros(3, dtype=np.float32),
+                projected_gravity_b=np.array([0.0, 0.0, -1.0], dtype=np.float32),
+                command=filtered_command,
+                q_current=q_current,
+                qd_current=qd_current,
+                previous_action=previous_action,
+            )
+            raw_action = runner.infer_action(obs)
+            action = filtered_policy_action(
+                raw_action,
+                previous_action,
+                clip_abs=clip_abs,
+                smoothing=smoothing,
+            )
+            peak_action = max(peak_action, float(np.max(np.abs(raw_action))))
+            action_clips += int(not np.allclose(action, raw_action, atol=EPS))
+
+            q_policy = runner.action_to_q_target(action)
+            if transition_steps > 0 and step < transition_steps:
+                alpha = smoothstep(float(step + 1) / float(transition_steps))
+                q_policy = (alpha * q_policy).astype(np.float32)
+            q_hard = np.clip(q_policy, safety.q_min, safety.q_max)
+            hard_clips += int(not np.allclose(q_hard, q_policy, atol=EPS))
+            q_safe = safety.safety_filter(
+                q_policy,
+                previous_target,
+                rate_profile="policy",
+            )
+            rate_clips += int(not np.allclose(q_safe, q_hard, atol=EPS))
+            target_abs_max = max(target_abs_max, float(np.max(np.abs(q_safe))))
+
+            estimator.dry_update_as_if_robot_followed(q_safe, runner.control_dt)
+            previous_action = action.copy()
+            previous_target = q_safe.copy()
+
+        print(
+            f"  {label:4s} {peak_action:11.3f} {action_clips:12d} "
+            f"{hard_clips:10d} {rate_clips:10d} {target_abs_max:14.3f}"
+        )
+        if action_clips:
+            failures.append(f"{label}: healthy rollout touched policy action cap")
+        if hard_clips:
+            failures.append(f"{label}: healthy rollout touched a hard joint limit")
+        if rate_clips:
+            failures.append(f"{label}: healthy rollout touched policy target-rate limits")
+
+    return failures
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -330,7 +475,7 @@ def main():
     motor_layer = MotorCommandLayer(
         policy_order=runner.policy_order,
         motor_ids=motor_cfg["motor_ids"],
-        active_joints=motor_cfg.get("active_joints", []),
+        active_joints=runner.policy_order,
         joint_can_bus=motor_cfg.get("joint_can_bus", {}),
     )
     limits = load_yaml(ROOT / "config" / "joint_limits.yaml")["joint_limits"]
@@ -343,9 +488,73 @@ def main():
     print("Force zero base linear velocity:", runner.force_zero_base_linear_velocity)
 
     failures = []
+    if not runner.policy_path.exists():
+        failures.append(f"policy path does not exist: {runner.policy_path}")
+    if runner.policy_format not in ("torchscript", "checkpoint_actor"):
+        failures.append(f"unsupported policy format: {runner.policy_format}")
+    if runner.observation_dim != 48:
+        failures.append(f"policy observation dim is {runner.observation_dim}, expected 48")
+    if runner.action_dim != 12:
+        failures.append(f"policy action dim is {runner.action_dim}, expected 12")
+    if len(runner.policy_order) != 12 or len(set(runner.policy_order)) != 12:
+        failures.append("policy order is not exactly 12 unique joints")
+    if runner.q_default.shape != (12,) or not np.all(np.isfinite(runner.q_default)):
+        failures.append("q_default is not a finite 12-value vector")
+    if not np.isfinite(runner.action_scale) or runner.action_scale <= 0.0:
+        failures.append("policy action scale is not finite and positive")
+    if not runner.force_zero_base_linear_velocity:
+        failures.append("policy contract does not force base linear velocity to zero")
+
+    command_sign_failures = check_keyboard_mapping()
+    failures += command_sign_failures
+    motion_cfg = load_yaml(ROOT / "config" / "motion_assist.yaml")
+    motion_assists_default_disabled = not bool(
+        motion_cfg.get("imu_posture", {}).get("enabled", False)
+        or motion_cfg.get("gait_assist", {}).get("enabled", False)
+    )
+    if not motion_assists_default_disabled:
+        failures.append("motion assists are enabled by default")
+
+    can_writes = []
+    motor_layer.send_signal_commands = lambda *args, **kwargs: can_writes.append("mit")
+    motor_layer.send_harmless_frames = lambda *args, **kwargs: can_writes.append("signal")
+    try:
+        dry_result = run_dry_policy_contract_check(
+            runner=runner,
+            safety=safety,
+            motor_layer=motor_layer,
+            emit=False,
+        )
+    except (KeyError, TypeError, ValueError, RuntimeError) as exc:
+        failures.append(f"dry-run policy contract failed: {exc}")
+        dry_result = None
+    dry_run_no_can = bool(
+        dry_result is not None
+        and dry_result["dry_run_no_can"]
+        and not can_writes
+    )
+    if not dry_run_no_can:
+        failures.append("dry-run attempted a CAN write")
+    base_lin_vel_zero = bool(
+        dry_result is not None
+        and np.array_equal(
+            dry_result["observation"][0:3],
+            np.zeros(3, dtype=np.float32),
+        )
+    )
+    if not base_lin_vel_zero:
+        failures.append("dry-run observation base linear velocity is not exactly zero")
+    command_names = (
+        [command["joint_name"] for command in dry_result["commands"]]
+        if dry_result is not None
+        else []
+    )
+    if command_names != list(runner.policy_order) or len(command_names) != 12:
+        failures.append("motor command layer did not receive 12 commands in policy order")
+
     failures += check_observation_layout(runner)
+    failures += check_simulation_joint_order(runner)
     failures += check_imu_upright_frame()
-    failures += check_keyboard_mapping()
     failures += check_pose("default_pose", runner.q_default, runner, limits)
     failures += check_pose("stand_pose", runner.q_stand, runner, limits)
     failures += check_pose("crouch_pose", runner.q_crouch, runner, limits)
@@ -354,6 +563,12 @@ def main():
     print_control_limits()
 
     print("\nRate limits:")
+    print(
+        "  pose profile:",
+        "enabled" if safety.joint_rate_enabled else "disabled",
+        "| policy profile:",
+        "enabled" if safety.policy_joint_rate_enabled else "disabled",
+    )
     for i, joint_name in enumerate(runner.policy_order):
         print(
             f"  {joint_name:16s} pose={safety.dq_max[i]:.3f} rad/step "
@@ -370,10 +585,10 @@ def main():
         ("negative_y", [0.0, -0.25, 0.0]),
         ("positive_yaw", [0.0, 0.0, 0.45]),
         ("negative_yaw", [0.0, 0.0, -0.45]),
-        ("W+A", [0.30, -0.20, 0.0]),
-        ("W+D", [0.30, 0.20, 0.0]),
-        ("S+A", [-0.30, -0.20, 0.0]),
-        ("S+D", [-0.30, 0.20, 0.0]),
+        ("W+A", [0.30, 0.20, 0.0]),
+        ("W+D", [0.30, -0.20, 0.0]),
+        ("S+A", [-0.30, 0.20, 0.0]),
+        ("S+D", [-0.30, -0.20, 0.0]),
         ("too_fast", [3.00, -3.00, 3.00]),
     ]
 
@@ -425,6 +640,7 @@ def main():
                 )
 
     runtime_violations.extend(check_extreme_target_enforcement(runner, safety, motor_layer, limits))
+    runtime_violations.extend(check_closed_loop_gait_passthrough(runner, safety))
 
     if failures:
         print("\nFAIL: pose outside joint limits:", sorted(set(failures)))
@@ -435,9 +651,23 @@ def main():
             print(" ", violation)
         return 1
 
+    print("\nPolicy contract acceptance:")
+    print("PASS observation_dim=48")
+    print("PASS action_dim=12")
+    print(f"PASS base_lin_vel_zero={base_lin_vel_zero}")
+    print("PASS policy_order_12_unique=True")
+    print("PASS q_default_valid=True")
+    print("PASS action_scale_valid=True")
+    print(f"PASS command_signs_consistent={not command_sign_failures}")
+    print(
+        "PASS motion_assists_default_disabled="
+        f"{motion_assists_default_disabled}"
+    )
+    print(f"PASS dry_run_no_can={dry_run_no_can}")
+
     print("\nOK: poses are inside limits.")
     print("OK: velocity commands are clipped to control_limits.yaml before policy observation.")
-    print("OK: safety_filter enforces configured joint position/rate limits when enabled.")
+    print("OK: safety_filter enforces hard positions and each enabled rate profile.")
     print("OK: MotorCommandLayer hard-clips every final MIT q_des to joint_limits.yaml.")
     print("OK: MIT kp/kd/v/tau parameters obey control_limits.yaml when mit_parameters.enabled is true.")
     if position_clip_count > 0:

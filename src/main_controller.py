@@ -19,7 +19,12 @@ except ImportError as exc:
 from policy_runner import PolicyRunner
 from safety_monitor import SafetyMonitor
 from state_estimator import FakeStateEstimator, MitFeedbackStateEstimator
-from joystick_interface import CommandSource, load_joystick_defaults, load_speed_scale_defaults
+from joystick_interface import (
+    CommandSource,
+    load_command_convention,
+    load_joystick_defaults,
+    load_speed_scale_defaults,
+)
 from imu_interface import create_imu_sensor, load_imu_config
 from motor_command_layer import MotorCommandLayer, print_mit_commands
 from can_topology import (
@@ -173,6 +178,22 @@ def load_active_joints():
 
 def load_motion_assist_config():
     return load_yaml(ROOT / "config" / "motion_assist.yaml")
+
+
+def motion_assists_enabled(cfg):
+    imu_cfg = cfg.get("imu_posture", {})
+    gait_cfg = cfg.get("gait_assist", {})
+    return bool(imu_cfg.get("enabled", False) or gait_cfg.get("enabled", False))
+
+
+def policy_imu_is_live(estimator):
+    sensor = getattr(estimator, "imu_sensor", None)
+    if sensor is None:
+        return False
+    if hasattr(estimator, "imu_stale") and estimator.imu_stale():
+        return False
+    status = str(estimator.imu_status()) if hasattr(estimator, "imu_status") else ""
+    return status.endswith(":live") or status == "live"
 
 
 def load_policy_deployment_defaults():
@@ -1351,7 +1372,10 @@ def run_policy_loop(
     walk_command_threshold,
     joystick_debug,
     joint_debug,
+    policy_obs_check_every,
     base_lin_vel_source,
+    require_live_imu_for_policy,
+    vy_left_positive,
     motion_assist_cfg,
     initial_zero_frame,
     initial_zero_calibrated,
@@ -1423,15 +1447,18 @@ def run_policy_loop(
     print("  left stick X  -> left/right vy")
     print("  right stick X -> turn/yaw")
     print("Terminal keys:")
-    print("  w/s -> +X/-X, a/d -> -Y/+Y, q/e -> +Z/-Z yaw")
-    print("  w+a -> +X/-Y, w+d -> +X/+Y")
-    print("  s+a -> -X/-Y, s+d -> -X/+Y")
+    left_y = "+Y" if vy_left_positive else "-Y"
+    right_y = "-Y" if vy_left_positive else "+Y"
+    print(f"  w/s -> +X/-X, a/d -> {left_y}/{right_y}, q/e -> +Z/-Z yaw")
+    print(f"  w+a -> +X/{left_y}, w+d -> +X/{right_y}")
+    print(f"  s+a -> -X/{left_y}, s+d -> -X/{right_y}")
     print("  c -> SIT/CROUCH, space -> STAND")
     print("  up/down arrows -> increase/decrease speed scale")
     print("  h -> HOLD current position, x -> EMERGENCY STOP")
     print("start_control_mode:", control_mode)
     print("walk_command_threshold:", walk_command_threshold)
     print("base_lin_vel_source:", base_lin_vel_source)
+    print("require_live_imu_for_policy:", bool(require_live_imu_for_policy))
     print("zero_frame:", zero_frame)
     print("zero_calibrated:", bool(zero_calibrated))
     if has_motion_target and control_mode == "hold" and zero_frame == "crouch":
@@ -1902,6 +1929,13 @@ def run_policy_loop(
             policy_command,
         )
         walk_requested = joystick_walk_requested(command, walk_command_threshold)
+        if walk_requested and require_live_imu_for_policy and not policy_imu_is_live(estimator):
+            walk_requested = False
+            if step % max(1, log_every) == 0:
+                print(
+                    "[IMU] walking blocked: real policy motion requires live IMU "
+                    "data. Use --imu-source fake only for an explicit suspended dry test."
+                )
         if zero_frame != "stand" and walk_requested:
             walk_requested = False
             if step % max(1, log_every) == 0:
@@ -2037,6 +2071,15 @@ def run_policy_loop(
                 qd_current=qd_current,
                 previous_action=previous_action,
             )
+            if (
+                int(policy_obs_check_every) > 0
+                and step % int(policy_obs_check_every) == 0
+            ):
+                runner.assert_observation_contract(obs)
+                print(
+                    "POLICY OBS CHECK base_lin_vel="
+                    f"{[float(value) for value in obs[0:3]]}"
+                )
             if not policy_input_announced:
                 print("\n[POLICY INPUT]", runner.observation_summary(obs))
                 print(
@@ -2295,8 +2338,97 @@ def run_policy_loop(
     print("\nPolicy / pose phase completed.")
 
 
+def run_dry_policy_contract_check(runner, safety, motor_layer, emit=True):
+    """Exercise policy-to-MIT conversion without constructing or writing a CAN bus."""
+    estimator = FakeStateEstimator(q_initial=runner.q_default)
+    estimator.base_lin_vel_b = np.array([1.25, -0.50, 0.25], dtype=np.float32)
+    (
+        q_current,
+        qd_current,
+        base_lin_vel_b,
+        base_ang_vel_b,
+        projected_gravity_b,
+    ) = estimator.read()
+    obs = runner.build_observation(
+        base_lin_vel_b=base_lin_vel_b,
+        base_ang_vel_b=base_ang_vel_b,
+        projected_gravity_b=projected_gravity_b,
+        command=np.zeros(3, dtype=np.float32),
+        q_current=q_current,
+        qd_current=qd_current,
+        previous_action=np.zeros(runner.action_dim, dtype=np.float32),
+    )
+    runner.assert_observation_contract(obs)
+    if obs.shape != (48,):
+        raise RuntimeError(f"Dry-run observation shape is {obs.shape}, expected (48,)")
+    if not np.array_equal(obs[0:3], np.zeros(3, dtype=np.float32)):
+        raise RuntimeError(f"Dry-run base_lin_vel is not exactly zero: {obs[0:3]}")
+
+    action = runner.infer_action(obs)
+    if action.shape != (12,):
+        raise RuntimeError(f"Dry-run policy action shape is {action.shape}, expected (12,)")
+    q_target = runner.action_to_q_target(action)
+    expected_target = runner.q_default + runner.action_scale * action
+    if not np.array_equal(q_target, expected_target.astype(np.float32)):
+        raise RuntimeError("Policy target conversion is not q_default + action_scale * action")
+    if not np.all((q_target >= safety.q_min) & (q_target <= safety.q_max)):
+        bad = [
+            runner.policy_order[index]
+            for index in np.flatnonzero(
+                (q_target < safety.q_min) | (q_target > safety.q_max)
+            )
+        ]
+        raise RuntimeError(
+            "Dry-run policy q_target is outside joint limits for: " + ", ".join(bad)
+        )
+
+    commands = motor_layer.build_mit_commands(q_target, phase="policy")
+    command_names = [command["joint_name"] for command in commands]
+    if command_names != list(runner.policy_order):
+        raise RuntimeError(
+            "Dry-run MIT command order does not match policy order: "
+            f"{command_names}"
+        )
+    if len(commands) != 12:
+        raise RuntimeError(f"Dry-run generated {len(commands)} MIT commands, expected 12")
+
+    result = {
+        "observation": obs,
+        "action": action,
+        "q_target": q_target,
+        "commands": commands,
+        "base_lin_vel_zero": True,
+        "dry_run_no_can": True,
+    }
+    if emit:
+        print("==== DRY RUN POLICY CONTRACT CHECK ====")
+        print("Policy:", runner.policy_path)
+        print("Policy format:", runner.policy_format)
+        print("observation_dim:", runner.observation_dim)
+        print("action_dim:", runner.action_dim)
+        print("q_default:", runner.q_default.tolist())
+        print("action_scale:", runner.action_scale)
+        print(
+            "action min/max:",
+            f"{float(np.min(action)):+.6f}",
+            f"{float(np.max(action)):+.6f}",
+        )
+        print(
+            "q_target min/max:",
+            f"{float(np.min(q_target)):+.6f}",
+            f"{float(np.max(q_target)):+.6f}",
+        )
+        print("POLICY OBS CHECK base_lin_vel=[0.0, 0.0, 0.0]")
+        print("MIT commands built:", len(commands), "in policy order")
+        print("CAN objects opened: 0")
+        print("CAN writes: 0")
+        print("PASS dry_run_no_can=True")
+    return result
+
+
 def main():
     joystick_defaults = load_joystick_defaults()
+    command_convention = load_command_convention()
     speed_defaults = load_speed_scale_defaults()
     imu_defaults = load_imu_config()
     motion_assist_defaults = load_motion_assist_config()
@@ -2309,6 +2441,16 @@ def main():
         choices=["print", "signal", "mit-signal", "motors"],
         default="print",
         help="print=no serial, signal=harmless empty CAN frames, mit-signal=sends MIT packets, motors=blocked",
+    )
+    parser.add_argument(
+        "--dry-run-policy-check",
+        action="store_true",
+        help="validate one complete 48-observation -> 12-action -> MIT conversion without opening CAN",
+    )
+    parser.add_argument(
+        "--motors-disabled",
+        action="store_true",
+        help="run the normal control loop and print would-be MIT commands without opening or writing CAN",
     )
 
     add_can_topology_args(parser, default_port="/dev/ttyUSB0", default_can_count=2)
@@ -2454,6 +2596,12 @@ def main():
     parser.add_argument("--standup-seconds", type=float, default=None)
     parser.add_argument("--log-every", type=int, default=25)
     parser.add_argument("--show-hex", action="store_true")
+    parser.add_argument(
+        "--policy-obs-check-every",
+        type=int,
+        default=0,
+        help="print and assert the policy base_lin_vel observation every N policy steps; 0 disables prints",
+    )
     parser.add_argument("--start-control-mode", choices=["idle", "hold", "stand", "sit", "policy"], default="idle")
     parser.add_argument("--startup-action", choices=["hold", "stand"], default="hold")
     parser.add_argument(
@@ -2564,7 +2712,10 @@ def main():
         "--base-lin-vel-source",
         choices=["command", "imu", "zero"],
         default=str(imu_defaults.get("base_linear_velocity_source", "zero")),
-        help="policy base linear velocity input: command=[vx,vy,0], imu=sensor/estimator value, zero=[0,0,0]",
+        help=(
+            "policy base linear velocity input; policy.pt forces this to zero "
+            "and overrides command/imu selections"
+        ),
     )
     parser.add_argument(
         "--imu-stabilization",
@@ -2691,6 +2842,24 @@ def main():
     args.policy_command_slew_vy = max(0.0, float(args.policy_command_slew_vy))
     args.policy_command_slew_yaw = max(0.0, float(args.policy_command_slew_yaw))
     args.policy_transition_seconds = max(0.0, float(args.policy_transition_seconds))
+    args.policy_obs_check_every = max(0, int(args.policy_obs_check_every))
+
+    if args.motors_disabled:
+        if args.mode != "print":
+            print(
+                "WARNING: --motors-disabled overrides --mode "
+                f"{args.mode} to print; CAN will not be opened."
+            )
+        args.mode = "print"
+        if args.feedback_source == "mit":
+            print(
+                "WARNING: --motors-disabled overrides --feedback-source mit "
+                "to fake because no CAN feedback can be read."
+            )
+        args.feedback_source = "fake"
+        args.show_hex = True
+        if args.policy_obs_check_every <= 0:
+            args.policy_obs_check_every = args.log_every
 
     try:
         port_by_bus = resolve_port_by_bus(args)
@@ -2706,10 +2875,14 @@ def main():
     active_imu_source = imu_source_name(args.imu_source, imu_defaults)
     active_imu_port = args.imu_port if args.imu_port is not None else imu_defaults.get("port")
 
-    runner = PolicyRunner(
-        policy_path=args.policy_path,
-        policy_activation=args.policy_activation,
-    )
+    try:
+        runner = PolicyRunner(
+            policy_path=args.policy_path,
+            policy_activation=args.policy_activation,
+        )
+    except (FileNotFoundError, KeyError, TypeError, ValueError, RuntimeError) as exc:
+        print("ERROR: policy deployment contract validation failed:", exc)
+        return 1
     if runner.force_zero_base_linear_velocity and args.base_lin_vel_source != "zero":
         print(
             "WARNING: policy contract forces base linear velocity observations "
@@ -2721,6 +2894,11 @@ def main():
         motion_assist_cfg.setdefault("imu_posture", {})["enabled"] = bool(args.imu_stabilization)
     if args.gait_assist is not None:
         motion_assist_cfg.setdefault("gait_assist", {})["enabled"] = bool(args.gait_assist)
+    if motion_assists_enabled(motion_assist_cfg):
+        print(
+            "WARNING: motion assist modifies learned RL action; use only after "
+            "pure-policy validation."
+        )
 
     safety = SafetyMonitor(runner.policy_order)
     motor_ids = load_motor_ids()
@@ -2739,6 +2917,19 @@ def main():
     )
     if not active_port_by_bus:
         active_port_by_bus = port_by_bus
+
+    if args.dry_run_policy_check:
+        try:
+            run_dry_policy_contract_check(
+                runner=runner,
+                safety=safety,
+                motor_layer=motor_layer,
+                emit=True,
+            )
+        except (KeyError, TypeError, ValueError, RuntimeError) as exc:
+            print("FAIL dry-run policy contract:", exc)
+            return 1
+        return 0
     if (
         args.mode in ("signal", "mit-signal")
         and active_imu_source in ("xsens", "xsens_binary", "mtdata2", "serial_json", "serial_csv")
@@ -2792,6 +2983,7 @@ def main():
             speed_scale_max=args.speed_scale_max,
             speed_scale_step=args.speed_scale_step,
             keyboard_command_timeout=args.keyboard_command_timeout,
+            vy_left_positive=command_convention["vy_left_positive"],
             deadzone=args.deadzone,
             expo=args.expo,
             smoothing=args.smoothing,
@@ -2833,6 +3025,12 @@ def main():
         else args.base_lin_vel_source,
     )
     print("Policy observation scales:", runner.observation_scales)
+    print(
+        "Command convention:",
+        "vx>0 forward,",
+        "vy>0 left," if command_convention["vy_left_positive"] else "vy<0 left,",
+        "yaw>0 left/CCW",
+    )
     print("Control dt:", runner.control_dt)
     for line in topology_lines(args.can_count, port_by_bus):
         print(line)
@@ -2846,6 +3044,8 @@ def main():
         else "all",
     )
     print("Fallback fake start pose:", args.fake_start)
+    if args.motors_disabled:
+        print("MOTORS DISABLED: no CAN adapters will be opened and no frames will be written.")
     print()
 
     print("Joint order and motor IDs:")
@@ -3081,7 +3281,12 @@ def main():
             walk_command_threshold=args.walk_command_threshold,
             joystick_debug=args.joystick_debug,
             joint_debug=args.joint_debug,
+            policy_obs_check_every=args.policy_obs_check_every,
             base_lin_vel_source=args.base_lin_vel_source,
+            require_live_imu_for_policy=bool(
+                args.mode == "mit-signal" and active_imu_source != "fake"
+            ),
+            vy_left_positive=command_convention["vy_left_positive"],
             motion_assist_cfg=motion_assist_cfg,
             initial_zero_frame=args.initial_zero_frame,
             initial_zero_calibrated=startup_zero_calibrated,

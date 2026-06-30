@@ -415,11 +415,13 @@ class MotorCommandLayer:
 
     def build_mit_commands(self, q_target, phase="policy", feedback_by_joint=None):
         q_target = np.asarray(q_target, dtype=np.float32)
-        if q_target.shape[0] != len(self.policy_order):
+        if q_target.shape != (len(self.policy_order),):
             raise ValueError(
-                f"q_target has {q_target.shape[0]} values, "
-                f"expected {len(self.policy_order)}"
+                f"q_target must have shape ({len(self.policy_order)},), "
+                f"got {q_target.shape}"
             )
+        if not np.all(np.isfinite(q_target)):
+            raise ValueError(f"q_target contains NaN or infinite values: {q_target}")
 
         commands = []
         feedback_by_joint = feedback_by_joint or {}
@@ -491,6 +493,27 @@ class MotorCommandLayer:
                 "data": data,
             })
 
+        command_names = [cmd["joint_name"] for cmd in commands]
+        if command_names != list(self.active_joints):
+            raise RuntimeError(
+                "MIT command order differs from active joint order: "
+                f"commands={command_names}, active={self.active_joints}"
+            )
+        if len(set(command_names)) != len(command_names):
+            raise RuntimeError("MIT command list contains duplicate joint commands")
+        for cmd in commands:
+            q_min, q_max = self.hard_joint_limits[cmd["joint_name"]]
+            shift = float(self.joint_coordinate_shifts.get(cmd["joint_name"], 0.0))
+            q_des = float(cmd["q_des"])
+            if not np.isfinite(q_des) or not (q_min + shift <= q_des <= q_max + shift):
+                raise RuntimeError(
+                    f"Unsafe MIT target for {cmd['joint_name']}: q_des={q_des}, "
+                    f"allowed=[{q_min + shift}, {q_max + shift}]"
+                )
+            if len(cmd["data"]) != 8:
+                raise RuntimeError(
+                    f"MIT payload for {cmd['joint_name']} must contain 8 bytes"
+                )
         return commands
 
     @staticmethod

@@ -34,6 +34,7 @@ class SafetyMonitor:
         self.dq_max_policy = None
         self.joint_position_enabled = True
         self.joint_rate_enabled = True
+        self.policy_joint_rate_enabled = True
         self.encoder_sanity_enabled = True
         self.require_feedback_for_motion = True
         self.max_abs_encoder_position_rad = 3.5
@@ -107,6 +108,9 @@ class SafetyMonitor:
         self.joint_rate_enabled = bool(
             cfg.get("joint_rate", {}).get("enabled", True)
         )
+        self.policy_joint_rate_enabled = bool(
+            cfg.get("joint_rate", {}).get("policy_enabled", self.joint_rate_enabled)
+        )
         self.control_limit_mtime_ns = mtime_ns
         return True
 
@@ -151,6 +155,13 @@ class SafetyMonitor:
 
     def clip_q_target(self, q_target):
         q_target = np.asarray(q_target, dtype=np.float32)
+        if q_target.shape != (len(self.policy_order),):
+            raise ValueError(
+                f"q_target must have shape ({len(self.policy_order)},), "
+                f"got {q_target.shape}"
+            )
+        if not np.all(np.isfinite(q_target)):
+            raise ValueError(f"q_target contains NaN or infinite values: {q_target}")
         if not self.joint_position_enabled:
             return q_target
 
@@ -159,7 +170,17 @@ class SafetyMonitor:
     def rate_limit_q_target(self, q_desired, q_previous, rate_profile="pose"):
         q_desired = np.asarray(q_desired, dtype=np.float32)
         q_previous = np.asarray(q_previous, dtype=np.float32)
+        expected_shape = (len(self.policy_order),)
+        if q_desired.shape != expected_shape or q_previous.shape != expected_shape:
+            raise ValueError(
+                "q_desired and q_previous must both have shape "
+                f"{expected_shape}; got {q_desired.shape} and {q_previous.shape}"
+            )
+        if not np.all(np.isfinite(q_desired)) or not np.all(np.isfinite(q_previous)):
+            raise ValueError("q_desired/q_previous contains NaN or infinite values")
         if not self.joint_rate_enabled:
+            return q_desired
+        if rate_profile == "policy" and not self.policy_joint_rate_enabled:
             return q_desired
 
         dq_limit = self.dq_max_policy if rate_profile == "policy" else self.dq_max
@@ -231,6 +252,27 @@ class SafetyMonitor:
             active_indices.append((joint_name, self.policy_order.index(joint_name)))
 
         feedback_names = set(feedback_by_joint or {})
+        encoder_faults = []
+        for name, _ in active_indices:
+            feedback = (feedback_by_joint or {}).get(name)
+            if not isinstance(feedback, dict):
+                continue
+            try:
+                fault_bits = int(feedback.get("fault_bits", 0))
+            except (TypeError, ValueError):
+                fault_bits = -1
+            if fault_bits != 0:
+                encoder_faults.append(f"{name}=0x{fault_bits & 0xFF:02X}")
+        if encoder_faults:
+            shown = ", ".join(encoder_faults[:self.encoder_report_max_joints])
+            if len(encoder_faults) > self.encoder_report_max_joints:
+                shown += f", +{len(encoder_faults) - self.encoder_report_max_joints} more"
+            return (
+                True,
+                "MOTOR FAULT: nonzero MIT feedback fault bits for active joint(s): "
+                + shown,
+            )
+
         require_feedback = bool(require_feedback and self.require_feedback_for_motion)
         if require_feedback:
             missing = [name for name, _ in active_indices if name not in feedback_names]

@@ -137,13 +137,19 @@ class PolicyRunner:
         self.joint_cfg = load_yaml(self.root / "config" / "joint_map.yaml")
         self.pose_cfg = load_yaml(self.root / "config" / "default_pose.yaml")
 
-        self.policy_order = self.joint_cfg["policy_to_real_order"]
-        self.action_scale = float(self.joint_cfg["policy_action_scale"])
+        self.policy_order = list(self.joint_cfg["policy_to_real_order"])
+        action_scale_value = self.joint_cfg["policy_action_scale"]
+        if isinstance(action_scale_value, bool):
+            raise TypeError("policy_action_scale must be numeric, not boolean")
+        self.action_scale = float(action_scale_value)
         self.control_dt = float(self.joint_cfg["control_dt"])
-        self.policy_contract = dict(self.joint_cfg.get("policy_contract", {}))
-        self.force_zero_base_linear_velocity = bool(
-            self.policy_contract.get("force_zero_base_linear_velocity", False)
-        )
+        self.policy_contract = dict(self.joint_cfg["policy_contract"])
+        force_zero_value = self.policy_contract["force_zero_base_linear_velocity"]
+        if not isinstance(force_zero_value, bool):
+            raise TypeError(
+                "policy_contract.force_zero_base_linear_velocity must be a YAML boolean"
+            )
+        self.force_zero_base_linear_velocity = force_zero_value
         self.normalize_projected_gravity = bool(
             self.policy_contract.get("normalize_projected_gravity", True)
         )
@@ -151,18 +157,24 @@ class PolicyRunner:
             self.policy_contract.get("observation_scales", {})
         )
 
-        self.q_default = self.pose_to_array(self.pose_cfg["default_pose"])
-        self.q_stand = self.pose_to_array(self.pose_cfg["stand_pose"])
-        self.q_crouch = self.pose_to_array(self.pose_cfg["crouch_pose"])
-        self.q_sit_when_stand_zero = self.pose_to_array(
-            self.pose_cfg.get("sit_pose_when_stand_zero", self.pose_cfg["crouch_pose"])
+        self._validate_static_config()
+        self.q_default = self.pose_to_array(
+            self.pose_cfg["default_pose"], "default_pose"
         )
-        if "stand_pose_when_sit_zero" in self.pose_cfg:
-            self.q_stand_when_sit_zero = self.pose_to_array(
-                self.pose_cfg["stand_pose_when_sit_zero"]
-            )
-        else:
-            self.q_stand_when_sit_zero = -self.q_sit_when_stand_zero
+        self.q_stand = self.pose_to_array(
+            self.pose_cfg["stand_pose"], "stand_pose"
+        )
+        self.q_crouch = self.pose_to_array(
+            self.pose_cfg["crouch_pose"], "crouch_pose"
+        )
+        self.q_sit_when_stand_zero = self.pose_to_array(
+            self.pose_cfg["sit_pose_when_stand_zero"],
+            "sit_pose_when_stand_zero",
+        )
+        self.q_stand_when_sit_zero = self.pose_to_array(
+            self.pose_cfg["stand_pose_when_sit_zero"],
+            "stand_pose_when_sit_zero",
+        )
 
         self.observation_layout = self.joint_cfg["observation_layout"]
         self.policy_path = resolve_policy_path(self.root, policy_path=policy_path)
@@ -186,13 +198,63 @@ class PolicyRunner:
             )
         self._validate_policy_contract()
 
+    def _validate_static_config(self):
+        if len(self.policy_order) != 12:
+            raise ValueError(
+                "policy_to_real_order must contain exactly 12 joints; "
+                f"got {len(self.policy_order)}"
+            )
+        if len(set(self.policy_order)) != 12:
+            raise ValueError("policy_to_real_order must contain 12 unique joint names")
+        if not all(isinstance(name, str) and name for name in self.policy_order):
+            raise ValueError("policy_to_real_order contains an invalid joint name")
+        if not np.isfinite(self.action_scale) or self.action_scale <= 0.0:
+            raise ValueError(
+                "policy_action_scale must exist and be a finite value greater than zero"
+            )
+        if not np.isfinite(self.control_dt) or self.control_dt <= 0.0:
+            raise ValueError("control_dt must be a finite value greater than zero")
+        if not self.force_zero_base_linear_velocity:
+            raise ValueError(
+                "policy_contract.force_zero_base_linear_velocity must be true "
+                "for policy/policy.pt"
+            )
+
+        required_poses = (
+            "default_pose",
+            "stand_pose",
+            "crouch_pose",
+            "sit_pose_when_stand_zero",
+            "stand_pose_when_sit_zero",
+        )
+        expected_joints = set(self.policy_order)
+        for pose_name in required_poses:
+            if pose_name not in self.pose_cfg:
+                raise KeyError(f"Missing required pose '{pose_name}' in default_pose.yaml")
+            pose = self.pose_cfg[pose_name]
+            if not isinstance(pose, dict):
+                raise TypeError(f"{pose_name} must be a YAML mapping")
+            actual_joints = set(pose)
+            missing = sorted(expected_joints - actual_joints)
+            extra = sorted(actual_joints - expected_joints)
+            if missing or extra or len(pose) != 12:
+                raise ValueError(
+                    f"{pose_name} must contain exactly the 12 policy joints; "
+                    f"missing={missing}, extra={extra}"
+                )
+            for joint_name in self.policy_order:
+                try:
+                    value = float(pose[joint_name])
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(
+                        f"{pose_name}.{joint_name} must be numeric"
+                    ) from exc
+                if not np.isfinite(value):
+                    raise ValueError(f"{pose_name}.{joint_name} must be finite")
+
     def _validate_policy_contract(self):
-        expected_observation_dim = int(
-            self.policy_contract.get("observation_dim", self.observation_dim)
-        )
-        expected_action_dim = int(
-            self.policy_contract.get("action_dim", len(self.policy_order))
-        )
+        expected_observation_dim = int(self.policy_contract["observation_dim"])
+        expected_action_dim = int(self.policy_contract["action_dim"])
         if self.observation_dim != expected_observation_dim:
             raise ValueError(
                 f"Policy expects {self.observation_dim} observations, but the "
@@ -203,9 +265,7 @@ class PolicyRunner:
                 f"Policy outputs {self.action_dim} actions, but the deployment "
                 f"contract requires {expected_action_dim}"
             )
-        expected_joint_order = list(
-            self.policy_contract.get("action_joint_order", self.policy_order)
-        )
+        expected_joint_order = list(self.policy_contract["action_joint_order"])
         if self.policy_order != expected_joint_order:
             raise ValueError(
                 "policy_to_real_order does not match policy.pt action order: "
@@ -284,8 +344,23 @@ class PolicyRunner:
                 pass
         raise ValueError("Could not infer policy observation dimension")
 
-    def pose_to_array(self, pose_dict):
-        return np.array([pose_dict[name] for name in self.policy_order], dtype=np.float32)
+    def pose_to_array(self, pose_dict, pose_name="pose"):
+        values = np.array(
+            [float(pose_dict[name]) for name in self.policy_order],
+            dtype=np.float32,
+        )
+        return self._finite_vector(values, len(self.policy_order), pose_name)
+
+    def assert_observation_contract(self, obs):
+        obs = self._finite_vector(obs, self.observation_dim, "policy observation")
+        if self.force_zero_base_linear_velocity and not np.array_equal(
+            obs[0:3], np.zeros(3, dtype=np.float32)
+        ):
+            raise ValueError(
+                "Policy observation contract violated: indices 0:3 must be "
+                f"exactly [0, 0, 0], got {obs[0:3].tolist()}"
+            )
+        return obs
 
     def build_observation(
         self,
@@ -354,10 +429,10 @@ class PolicyRunner:
                 )
             obs[indices] = values
 
-        return obs
+        return self.assert_observation_contract(obs)
 
     def infer_action(self, obs):
-        obs = self._finite_vector(obs, self.observation_dim, "policy observation")
+        obs = self.assert_observation_contract(obs)
         obs_t = torch.tensor(obs, dtype=torch.float32).unsqueeze(0)
         with torch.no_grad():
             action = self.policy(obs_t).squeeze(0).cpu().numpy()
@@ -383,8 +458,13 @@ class PolicyRunner:
         )
 
     def action_to_q_target(self, action):
-        action = np.asarray(action, dtype=np.float32)
-        return self.q_default + self.action_scale * action
+        action = self._finite_vector(action, self.action_dim, "policy action")
+        q_target = self.q_default + self.action_scale * action
+        return self._finite_vector(
+            q_target,
+            len(self.policy_order),
+            "policy q_target",
+        )
 
     def array_to_joint_dict(self, q):
         q = np.asarray(q, dtype=np.float32)
