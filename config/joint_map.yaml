@@ -4,16 +4,43 @@ control_dt: 0.02
 # intentionally softened first-contact tests.
 policy_action_scale: 0.25
 
+# Deployment contract for policy/policy.pt. The exported TorchScript module has
+# an Identity observation normalizer, so these values are fed directly to the
+# actor. Keep the scales at 1.0 unless the training environment explicitly set
+# an ObsTerm scale.
+policy_contract:
+  observation_dim: 48
+  action_dim: 12
+  action_joint_order:
+    - FR_hip_joint
+    - FR_thigh_joint
+    - FR_calf_joint
+    - FL_hip_joint
+    - FL_thigh_joint
+    - FL_calf_joint
+    - BR_hip_joint
+    - BR_thigh_joint
+    - BR_calf_joint
+    - BL_hip_joint
+    - BL_thigh_joint
+    - BL_calf_joint
+  force_zero_base_linear_velocity: true
+  normalize_projected_gravity: true
+  observation_scales:
+    base_lin_vel: 1.0
+    base_ang_vel: 1.0
+    projected_gravity: 1.0
+    command: 1.0
+    joint_pos_relative: 1.0
+    joint_vel: 1.0
+    previous_action: 1.0
+
 # Policy output/observation joint order.
 #
-# The trained IsaacLab asset was created from grallator_quadruped_isaac and its
-# articulation order is leg-grouped:
-#   FR hip/thigh/calf, FL hip/thigh/calf, RR hip/thigh/calf, RL hip/thigh/calf.
-#
-# The deploy URDF/config names the rear legs BR/BL instead of RR/RL, so the last
-# two policy legs are mapped by position:
-#   policy RR_* -> real BR_*
-#   policy RL_* -> real BL_*
+# The trained grallator_final IsaacLab asset and deployment URDF are both
+# leg-grouped in this order:
+#   FR hip/thigh/calf, FL hip/thigh/calf, BR hip/thigh/calf, BL hip/thigh/calf.
+# Older asset copies called the rear legs RR/RL; those positions map to BR/BL.
 policy_to_real_order:
   - FR_hip_joint
   - FR_thigh_joint

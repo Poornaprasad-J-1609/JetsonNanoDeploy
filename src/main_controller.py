@@ -231,6 +231,31 @@ def scaled_policy_command(command, gain=1.0, vx_abs_max=0.0, vy_abs_max=0.0, yaw
     return cmd.astype(np.float32)
 
 
+def rate_limit_policy_command(target, previous, dt, vx_per_s, vy_per_s, yaw_per_s):
+    """Slew-limit body commands before they enter the policy observation."""
+    target = np.asarray(target, dtype=np.float32)
+    previous = np.asarray(previous, dtype=np.float32)
+    if target.shape != (3,) or previous.shape != (3,):
+        raise ValueError("policy command target and previous value must have shape (3,)")
+
+    rates = np.asarray([vx_per_s, vy_per_s, yaw_per_s], dtype=np.float32)
+    if not np.all(np.isfinite(rates)) or np.any(rates < 0.0):
+        raise ValueError("policy command slew rates must be finite and >= 0")
+    if not np.isfinite(dt) or float(dt) <= 0.0:
+        raise ValueError("policy command slew dt must be finite and > 0")
+
+    max_delta = rates * float(dt)
+    # A zero rate intentionally disables slew limiting for that axis.
+    enabled = rates > 0.0
+    delta = target - previous
+    limited_delta = np.where(
+        enabled,
+        np.clip(delta, -max_delta, max_delta),
+        delta,
+    )
+    return (previous + limited_delta).astype(np.float32)
+
+
 def filtered_policy_action(raw_action, previous_action, clip_abs=0.0, smoothing=0.0):
     action = np.asarray(raw_action, dtype=np.float32).copy()
     clip_abs = float(clip_abs)
@@ -1007,13 +1032,24 @@ def sit_pose_for_zero_frame(runner, zero_frame, crouch_calibration_value, stand_
     return constant_pose_like(runner, stand_calibration_value) - runner.q_stand_when_sit_zero
 
 
-def shifted_safety_filter(safety, q_target, q_previous, q_shift):
+def shifted_safety_filter(
+    safety,
+    q_target,
+    q_previous,
+    q_shift,
+    rate_profile="pose",
+):
     q_shift = np.asarray(q_shift, dtype=np.float32)
     if not np.any(np.abs(q_shift) > 1e-8):
-        return safety.safety_filter(q_target, q_previous)
+        return safety.safety_filter(
+            q_target,
+            q_previous,
+            rate_profile=rate_profile,
+        )
     filtered = safety.safety_filter(
         np.asarray(q_target, dtype=np.float32) - q_shift,
         np.asarray(q_previous, dtype=np.float32) - q_shift,
+        rate_profile=rate_profile,
     )
     return (filtered + q_shift).astype(np.float32)
 
@@ -1328,8 +1364,12 @@ def run_policy_loop(
     policy_command_vx_max,
     policy_command_vy_max,
     policy_command_yaw_max,
+    policy_command_slew_vx,
+    policy_command_slew_vy,
+    policy_command_slew_yaw,
     policy_action_clip,
     policy_action_smoothing,
+    policy_transition_seconds,
     stand_policy_stabilization,
     hold_capture_seconds,
     hold_command_repeats,
@@ -1341,6 +1381,15 @@ def run_policy_loop(
     dt = runner.control_dt
     action_dim = len(runner.policy_order)
     previous_action = np.zeros(action_dim, dtype=np.float32)
+    filtered_command = np.zeros(3, dtype=np.float32)
+    policy_input_announced = False
+    previous_active_control_mode = None
+    policy_entry_target = np.asarray(q_previous_target, dtype=np.float32).copy()
+    policy_transition_step = 0
+    policy_transition_steps = max(
+        0,
+        int(np.ceil(max(0.0, float(policy_transition_seconds)) / float(dt))),
+    )
 
     control_mode = start_control_mode  # options: idle, hold, policy, stand, sit
     zero_frame = str(initial_zero_frame).lower()
@@ -1374,7 +1423,9 @@ def run_policy_loop(
     print("  left stick X  -> left/right vy")
     print("  right stick X -> turn/yaw")
     print("Terminal keys:")
-    print("  w/s -> straight vx, a/d -> lateral vy, combine for xy diagonal")
+    print("  w/s -> +X/-X, a/d -> -Y/+Y, q/e -> +Z/-Z yaw")
+    print("  w+a -> +X/-Y, w+d -> +X/+Y")
+    print("  s+a -> -X/-Y, s+d -> -X/+Y")
     print("  c -> SIT/CROUCH, space -> STAND")
     print("  up/down arrows -> increase/decrease speed scale")
     print("  h -> HOLD current position, x -> EMERGENCY STOP")
@@ -1401,6 +1452,14 @@ def run_policy_loop(
     )
     print("policy_action_clip:", float(policy_action_clip), "(0 disables)")
     print("policy_action_smoothing:", float(policy_action_smoothing), "(0 disables)")
+    print(
+        "policy_command_slew:",
+        f"vx={float(policy_command_slew_vx):.3f}/s",
+        f"vy={float(policy_command_slew_vy):.3f}/s",
+        f"yaw={float(policy_command_slew_yaw):.3f}/s",
+        "(0 disables each axis)",
+    )
+    print("policy_transition_seconds:", float(policy_transition_seconds))
     print("stand_policy_stabilization:", bool(stand_policy_stabilization))
     print("hold_capture_seconds:", float(hold_capture_seconds))
     print("hold_command_repeats:", int(hold_command_repeats))
@@ -1821,13 +1880,22 @@ def run_policy_loop(
         command = command_source.read()
         if step < calibration_hold_until_step:
             command = np.zeros(3, dtype=np.float32)
-        policy_command = scaled_policy_command(
+        policy_command_target = scaled_policy_command(
             command=command,
             gain=policy_command_gain,
             vx_abs_max=policy_command_vx_max,
             vy_abs_max=policy_command_vy_max,
             yaw_abs_max=policy_command_yaw_max,
         )
+        filtered_command = rate_limit_policy_command(
+            target=policy_command_target,
+            previous=filtered_command,
+            dt=dt,
+            vx_per_s=policy_command_slew_vx,
+            vy_per_s=policy_command_slew_vy,
+            yaw_per_s=policy_command_slew_yaw,
+        )
+        policy_command = filtered_command.copy()
         policy_base_lin_vel_b = select_policy_base_lin_vel(
             base_lin_vel_source,
             base_lin_vel_b,
@@ -1878,8 +1946,16 @@ def run_policy_loop(
         else:
             active_control_mode = control_mode
 
+        if active_control_mode == "policy" and previous_active_control_mode != "policy":
+            policy_entry_target = np.asarray(q_previous_target, dtype=np.float32).copy()
+            policy_transition_step = 0
+            previous_action = np.zeros(action_dim, dtype=np.float32)
+
         if walk_requested:
             has_motion_target = True
+
+        if active_control_mode != "policy":
+            policy_input_announced = False
 
         if active_control_mode == "idle":
             q_safe_target = q_previous_target.copy()
@@ -1961,6 +2037,14 @@ def run_policy_loop(
                 qd_current=qd_current,
                 previous_action=previous_action,
             )
+            if not policy_input_announced:
+                print("\n[POLICY INPUT]", runner.observation_summary(obs))
+                print(
+                    "[POLICY INPUT] indices: base_lin=0:3 gyro=3:6 "
+                    "gravity=6:9 command=9:12 q_rel=12:24 "
+                    "joint_vel=24:36 previous_action=36:48"
+                )
+                policy_input_announced = True
 
             raw_action = runner.infer_action(obs)
             action = filtered_policy_action(
@@ -1981,11 +2065,21 @@ def run_policy_loop(
                 use_gait=True,
                 use_imu_posture=bool(imu_cfg.get("apply_during_policy", False)),
             )
+            if policy_transition_steps > 0 and policy_transition_step < policy_transition_steps:
+                alpha = smoothstep(
+                    float(policy_transition_step + 1) / float(policy_transition_steps)
+                )
+                q_policy_target = (
+                    (1.0 - alpha) * policy_entry_target
+                    + alpha * np.asarray(q_policy_target, dtype=np.float32)
+                ).astype(np.float32)
+                policy_transition_step += 1
             q_safe_target = shifted_safety_filter(
                 safety,
                 q_policy_target,
                 q_previous_target,
                 q_coordinate_shift,
+                rate_profile="policy",
             )
             commands = motor_layer.build_mit_commands(
                 q_safe_target,
@@ -2180,6 +2274,8 @@ def run_policy_loop(
 
         if advance_target:
             q_previous_target = q_safe_target.copy()
+
+        previous_active_control_mode = active_control_mode
 
         if telemetry is not None and step % 2 == 0:
             telemetry.send(
@@ -2525,6 +2621,30 @@ def main():
         help="blend current policy action with previous sent action; 0 disables, larger is smoother/slower",
     )
     parser.add_argument(
+        "--policy-command-slew-vx",
+        type=float,
+        default=float(policy_deploy_defaults.get("command_slew_vx_per_s", 0.0)),
+        help="maximum vx command change per second before policy observation; 0 disables",
+    )
+    parser.add_argument(
+        "--policy-command-slew-vy",
+        type=float,
+        default=float(policy_deploy_defaults.get("command_slew_vy_per_s", 0.0)),
+        help="maximum vy command change per second before policy observation; 0 disables",
+    )
+    parser.add_argument(
+        "--policy-command-slew-yaw",
+        type=float,
+        default=float(policy_deploy_defaults.get("command_slew_yaw_per_s", 0.0)),
+        help="maximum yaw command change per second before policy observation; 0 disables",
+    )
+    parser.add_argument(
+        "--policy-transition-seconds",
+        type=float,
+        default=float(policy_deploy_defaults.get("transition_seconds", 0.0)),
+        help="smooth blend time from hold/stand target into policy targets; 0 disables",
+    )
+    parser.add_argument(
         "--fake-start",
         choices=["stand", "crouch", "random_small"],
         default="stand",
@@ -2567,6 +2687,10 @@ def main():
     args.policy_command_yaw_max = max(0.0, float(args.policy_command_yaw_max))
     args.policy_action_clip = max(0.0, float(args.policy_action_clip))
     args.policy_action_smoothing = float(np.clip(args.policy_action_smoothing, 0.0, 0.98))
+    args.policy_command_slew_vx = max(0.0, float(args.policy_command_slew_vx))
+    args.policy_command_slew_vy = max(0.0, float(args.policy_command_slew_vy))
+    args.policy_command_slew_yaw = max(0.0, float(args.policy_command_slew_yaw))
+    args.policy_transition_seconds = max(0.0, float(args.policy_transition_seconds))
 
     try:
         port_by_bus = resolve_port_by_bus(args)
@@ -2586,6 +2710,12 @@ def main():
         policy_path=args.policy_path,
         policy_activation=args.policy_activation,
     )
+    if runner.force_zero_base_linear_velocity and args.base_lin_vel_source != "zero":
+        print(
+            "WARNING: policy contract forces base linear velocity observations "
+            "0:3 to [0, 0, 0]; overriding --base-lin-vel-source to zero."
+        )
+        args.base_lin_vel_source = "zero"
     motion_assist_cfg = motion_assist_defaults
     if args.imu_stabilization is not None:
         motion_assist_cfg.setdefault("imu_posture", {})["enabled"] = bool(args.imu_stabilization)
@@ -2693,8 +2823,16 @@ def main():
     print("Start control mode:", args.start_control_mode)
     print("Startup action:", args.startup_action)
     print("Policy:", runner.policy_path)
+    print("Policy SHA256:", runner.policy_sha256)
     print("Policy format:", runner.policy_format)
     print("Policy obs/actions:", runner.observation_dim, runner.action_dim)
+    print(
+        "Policy base linear velocity:",
+        "forced [0, 0, 0]"
+        if runner.force_zero_base_linear_velocity
+        else args.base_lin_vel_source,
+    )
+    print("Policy observation scales:", runner.observation_scales)
     print("Control dt:", runner.control_dt)
     for line in topology_lines(args.can_count, port_by_bus):
         print(line)
@@ -2744,6 +2882,17 @@ def main():
                 "port:",
                 getattr(imu_sensor, "port", "none"),
             )
+            if getattr(imu_sensor, "source_name", "") == "xsens":
+                print(
+                    "Xsens policy mapping: gyro_units=",
+                    getattr(imu_sensor, "gyro_units", "unknown"),
+                    "gyro_axis_signs=",
+                    getattr(imu_sensor, "gyro_axis_signs", "unknown"),
+                )
+                print(
+                    "Xsens sensor_to_base_rotation:\n",
+                    getattr(imu_sensor, "sensor_to_base_rotation", "unknown"),
+                )
 
         if args.mode in ["signal", "mit-signal"]:
             if args.mode == "signal":
@@ -2945,8 +3094,12 @@ def main():
             policy_command_vx_max=args.policy_command_vx_max,
             policy_command_vy_max=args.policy_command_vy_max,
             policy_command_yaw_max=args.policy_command_yaw_max,
+            policy_command_slew_vx=args.policy_command_slew_vx,
+            policy_command_slew_vy=args.policy_command_slew_vy,
+            policy_command_slew_yaw=args.policy_command_slew_yaw,
             policy_action_clip=args.policy_action_clip,
             policy_action_smoothing=args.policy_action_smoothing,
+            policy_transition_seconds=args.policy_transition_seconds,
             stand_policy_stabilization=bool(args.stand_policy_stabilization),
             hold_capture_seconds=max(0.02, args.hold_capture_seconds),
             hold_command_repeats=max(1, args.hold_command_repeats),

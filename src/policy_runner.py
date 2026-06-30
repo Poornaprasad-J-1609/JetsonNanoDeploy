@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import hashlib
 from pathlib import Path
 import numpy as np
 import torch
@@ -32,11 +33,16 @@ def activation_from_name(name):
 
 def resolve_policy_path(root, policy_path=None):
     if policy_path is not None:
-        return Path(policy_path)
+        candidate = Path(policy_path).expanduser()
+        if not candidate.is_absolute() and not candidate.exists():
+            candidate = root / candidate
+        if not candidate.exists():
+            raise FileNotFoundError(f"Policy file not found: {candidate}")
+        return candidate.resolve()
 
     preferred = root / "policy" / "policy.pt"
     if preferred.exists():
-        return preferred
+        return preferred.resolve()
 
     candidates = sorted(
         (root / "policy").glob("*.pt"),
@@ -45,7 +51,7 @@ def resolve_policy_path(root, policy_path=None):
     )
     if not candidates:
         raise FileNotFoundError(f"No .pt policy found in {root / 'policy'}")
-    return candidates[0]
+    return candidates[0].resolve()
 
 
 def build_actor_from_state_dict(state_dict, activation="elu"):
@@ -134,6 +140,16 @@ class PolicyRunner:
         self.policy_order = self.joint_cfg["policy_to_real_order"]
         self.action_scale = float(self.joint_cfg["policy_action_scale"])
         self.control_dt = float(self.joint_cfg["control_dt"])
+        self.policy_contract = dict(self.joint_cfg.get("policy_contract", {}))
+        self.force_zero_base_linear_velocity = bool(
+            self.policy_contract.get("force_zero_base_linear_velocity", False)
+        )
+        self.normalize_projected_gravity = bool(
+            self.policy_contract.get("normalize_projected_gravity", True)
+        )
+        self.observation_scales = dict(
+            self.policy_contract.get("observation_scales", {})
+        )
 
         self.q_default = self.pose_to_array(self.pose_cfg["default_pose"])
         self.q_stand = self.pose_to_array(self.pose_cfg["stand_pose"])
@@ -150,6 +166,7 @@ class PolicyRunner:
 
         self.observation_layout = self.joint_cfg["observation_layout"]
         self.policy_path = resolve_policy_path(self.root, policy_path=policy_path)
+        self.policy_sha256 = hashlib.sha256(self.policy_path.read_bytes()).hexdigest()
         self.policy, self.policy_format = load_policy_model(
             self.policy_path,
             activation=policy_activation,
@@ -167,6 +184,94 @@ class PolicyRunner:
                 f"Policy outputs {self.action_dim} actions, "
                 f"but policy_order has {len(self.policy_order)} joints"
             )
+        self._validate_policy_contract()
+
+    def _validate_policy_contract(self):
+        expected_observation_dim = int(
+            self.policy_contract.get("observation_dim", self.observation_dim)
+        )
+        expected_action_dim = int(
+            self.policy_contract.get("action_dim", len(self.policy_order))
+        )
+        if self.observation_dim != expected_observation_dim:
+            raise ValueError(
+                f"Policy expects {self.observation_dim} observations, but the "
+                f"deployment contract requires {expected_observation_dim}"
+            )
+        if self.action_dim != expected_action_dim:
+            raise ValueError(
+                f"Policy outputs {self.action_dim} actions, but the deployment "
+                f"contract requires {expected_action_dim}"
+            )
+        expected_joint_order = list(
+            self.policy_contract.get("action_joint_order", self.policy_order)
+        )
+        if self.policy_order != expected_joint_order:
+            raise ValueError(
+                "policy_to_real_order does not match policy.pt action order: "
+                f"configured={self.policy_order}, expected={expected_joint_order}"
+            )
+
+        expected_layout = {
+            "base_lin_vel": [0, 1, 2],
+            "base_ang_vel": [3, 4, 5],
+            "projected_gravity": [6, 7, 8],
+            "command": [9, 10, 11],
+            "joint_pos_relative": list(range(12, 24)),
+            "joint_vel": list(range(24, 36)),
+            "previous_action": list(range(36, 48)),
+        }
+        value_lengths = {
+            "base_lin_vel": 3,
+            "base_ang_vel": 3,
+            "projected_gravity": 3,
+            "command": 3,
+            "joint_pos_relative": len(self.policy_order),
+            "joint_vel": len(self.policy_order),
+            "previous_action": len(self.policy_order),
+        }
+        occupied = []
+        for field_name, expected_indices in expected_layout.items():
+            if field_name not in self.observation_layout:
+                raise ValueError(f"Missing policy observation field: {field_name}")
+            actual_indices = layout_indices(
+                self.observation_layout[field_name],
+                value_lengths[field_name],
+            )
+            if actual_indices != expected_indices:
+                raise ValueError(
+                    f"Observation field {field_name} uses indices {actual_indices}; "
+                    f"policy.pt requires {expected_indices}"
+                )
+            occupied.extend(actual_indices)
+
+        if sorted(occupied) != list(range(self.observation_dim)):
+            raise ValueError("Policy observation layout must cover indices 0..47 exactly once")
+
+    @staticmethod
+    def _finite_vector(values, expected_length, field_name):
+        values = np.asarray(values, dtype=np.float32)
+        if values.shape != (expected_length,):
+            raise ValueError(
+                f"{field_name} must have shape ({expected_length},), got {values.shape}"
+            )
+        if not np.all(np.isfinite(values)):
+            raise ValueError(f"{field_name} contains NaN or infinite values: {values}")
+        return values
+
+    def _scale_observation_field(self, field_name, values):
+        scale = np.asarray(
+            self.observation_scales.get(field_name, 1.0),
+            dtype=np.float32,
+        )
+        if scale.ndim == 0:
+            return values * float(scale)
+        if scale.shape != values.shape:
+            raise ValueError(
+                f"Observation scale for {field_name} has shape {scale.shape}, "
+                f"expected {values.shape}"
+            )
+        return values * scale
 
     def _probe_observation_dim(self):
         for obs_dim in (48, 45, 51, 60, 63, 66, 69, 72, 235, 240, 252):
@@ -194,19 +299,53 @@ class PolicyRunner:
     ):
         obs = np.zeros(self.observation_dim, dtype=np.float32)
 
+        base_lin_vel_b = self._finite_vector(base_lin_vel_b, 3, "base_lin_vel")
+        if self.force_zero_base_linear_velocity:
+            base_lin_vel_b = np.zeros(3, dtype=np.float32)
+
+        base_ang_vel_b = self._finite_vector(base_ang_vel_b, 3, "base_ang_vel")
+        projected_gravity_b = self._finite_vector(
+            projected_gravity_b,
+            3,
+            "projected_gravity",
+        )
+        if self.normalize_projected_gravity:
+            gravity_norm = float(np.linalg.norm(projected_gravity_b))
+            if gravity_norm < 1e-6:
+                raise ValueError("projected_gravity norm is zero; IMU orientation is invalid")
+            projected_gravity_b = projected_gravity_b / gravity_norm
+
+        command = self._finite_vector(command, 3, "command")
+        q_current = self._finite_vector(
+            q_current,
+            len(self.policy_order),
+            "joint_pos",
+        )
+        qd_current = self._finite_vector(
+            qd_current,
+            len(self.policy_order),
+            "joint_vel",
+        )
+        previous_action = self._finite_vector(
+            previous_action,
+            len(self.policy_order),
+            "previous_action",
+        )
+
         fields = {
-            "base_lin_vel": np.asarray(base_lin_vel_b, dtype=np.float32),
-            "base_ang_vel": np.asarray(base_ang_vel_b, dtype=np.float32),
-            "projected_gravity": np.asarray(projected_gravity_b, dtype=np.float32),
-            "command": np.asarray(command, dtype=np.float32),
-            "joint_pos_relative": np.asarray(q_current, dtype=np.float32) - self.q_default,
-            "joint_vel": np.asarray(qd_current, dtype=np.float32),
-            "previous_action": np.asarray(previous_action, dtype=np.float32),
+            "base_lin_vel": base_lin_vel_b,
+            "base_ang_vel": base_ang_vel_b,
+            "projected_gravity": projected_gravity_b,
+            "command": command,
+            "joint_pos_relative": q_current - self.q_default,
+            "joint_vel": qd_current,
+            "previous_action": previous_action,
         }
 
         for field_name, values in fields.items():
             if field_name not in self.observation_layout:
                 continue
+            values = self._scale_observation_field(field_name, values)
             indices = layout_indices(self.observation_layout[field_name], len(values))
             if max(indices) >= self.observation_dim:
                 raise ValueError(
@@ -218,6 +357,7 @@ class PolicyRunner:
         return obs
 
     def infer_action(self, obs):
+        obs = self._finite_vector(obs, self.observation_dim, "policy observation")
         obs_t = torch.tensor(obs, dtype=torch.float32).unsqueeze(0)
         with torch.no_grad():
             action = self.policy(obs_t).squeeze(0).cpu().numpy()
@@ -227,7 +367,20 @@ class PolicyRunner:
                 f"Policy returned {action.shape[0]} actions, "
                 f"expected {len(self.policy_order)}"
             )
+        if not np.all(np.isfinite(action)):
+            raise ValueError(f"Policy returned NaN or infinite action values: {action}")
         return action
+
+    def observation_summary(self, obs):
+        obs = self._finite_vector(obs, self.observation_dim, "policy observation")
+        return (
+            f"base_lin={obs[0:3].tolist()} "
+            f"gyro={np.round(obs[3:6], 4).tolist()} "
+            f"gravity={np.round(obs[6:9], 4).tolist()} "
+            f"command={np.round(obs[9:12], 4).tolist()} "
+            f"q_rel_max={float(np.max(np.abs(obs[12:24]))):.4f} "
+            f"qd_max={float(np.max(np.abs(obs[24:36]))):.4f}"
+        )
 
     def action_to_q_target(self, action):
         action = np.asarray(action, dtype=np.float32)
@@ -242,10 +395,12 @@ if __name__ == "__main__":
     runner = PolicyRunner()
     print("Loaded policy:", runner.policy_path)
     print("Policy format:", runner.policy_format)
+    print("Policy SHA256:", runner.policy_sha256)
     print("Observation dim:", runner.observation_dim)
     print("Action dim:", runner.action_dim)
     print("Control dt:", runner.control_dt)
     print("Action scale:", runner.action_scale)
+    print("Force zero base linear velocity:", runner.force_zero_base_linear_velocity)
     print("Joint order:")
     for i, name in enumerate(runner.policy_order):
         print(f"{i:02d}: {name}")

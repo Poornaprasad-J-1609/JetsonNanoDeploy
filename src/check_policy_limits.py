@@ -15,6 +15,7 @@ from motor_command_layer import MotorCommandLayer
 from imu_interface import projected_gravity_absolute_xsens
 from joystick_interface import (
     clip_command,
+    keyboard_motion_command,
     load_command_limits,
     load_joystick_defaults,
     load_speed_scale_defaults,
@@ -113,6 +114,37 @@ def check_imu_upright_frame():
     return []
 
 
+def check_keyboard_mapping():
+    expected = {
+        "W": (["w"], [1.8, 0.0, 0.0]),
+        "S": (["s"], [-1.8, 0.0, 0.0]),
+        "A": (["a"], [0.0, -0.8, 0.0]),
+        "D": (["d"], [0.0, 0.8, 0.0]),
+        "Q": (["q"], [0.0, 0.0, 0.7]),
+        "E": (["e"], [0.0, 0.0, -0.7]),
+        "W+D": (["w", "d"], [1.8, 0.8, 0.0]),
+        "W+A": (["w", "a"], [1.8, -0.8, 0.0]),
+        "S+A": (["s", "a"], [-1.8, -0.8, 0.0]),
+        "S+D": (["s", "d"], [-1.8, 0.8, 0.0]),
+        "W+Q": (["w", "q"], [1.8, 0.0, 0.7]),
+        "W+S": (["w", "s"], [0.0, 0.0, 0.0]),
+        "A+D": (["a", "d"], [0.0, 0.0, 0.0]),
+        "Q+E": (["q", "e"], [0.0, 0.0, 0.0]),
+    }
+    failures = []
+    print("\nKeyboard body-frame mapping:")
+    for label, (keys, expected_command) in expected.items():
+        command = keyboard_motion_command(keys, 1.8, 0.8, 0.7)
+        expected_array = np.asarray(expected_command, dtype=np.float32)
+        ok = bool(np.allclose(command, expected_array, atol=1e-7))
+        print(f"  {label:3s} -> {command.tolist()} {'OK' if ok else 'WRONG'}")
+        if not ok:
+            failures.append(
+                f"keyboard {label}: got {command.tolist()}, expected {expected_command}"
+            )
+    return failures
+
+
 def within_limits(q, q_min, q_max, eps=EPS):
     q = np.asarray(q, dtype=np.float32)
     return np.logical_and(q >= q_min - eps, q <= q_max + eps)
@@ -167,8 +199,12 @@ def sample_policy(command, runner, safety, base_lin_vel_source):
     action = runner.infer_action(obs)
     q_raw = runner.action_to_q_target(action)
     q_hard = np.clip(q_raw, safety.q_min, safety.q_max)
-    q_safe = safety.safety_filter(q_raw, runner.q_default)
-    return command_clipped, action, q_raw, q_hard, q_safe
+    q_safe = safety.safety_filter(
+        q_raw,
+        runner.q_default,
+        rate_profile="policy",
+    )
+    return command_clipped, obs, action, q_raw, q_hard, q_safe
 
 
 def check_motor_commands(label, q_target, runner, motor_layer, limits, phase="policy", verbose=False):
@@ -300,13 +336,16 @@ def main():
     limits = load_yaml(ROOT / "config" / "joint_limits.yaml")["joint_limits"]
 
     print("Policy:", runner.policy_path)
+    print("Policy SHA256:", runner.policy_sha256)
     print("Observation/action dim:", runner.observation_dim, runner.action_dim)
     print("Action scale:", runner.action_scale)
     print("Control dt:", runner.control_dt)
+    print("Force zero base linear velocity:", runner.force_zero_base_linear_velocity)
 
     failures = []
     failures += check_observation_layout(runner)
     failures += check_imu_upright_frame()
+    failures += check_keyboard_mapping()
     failures += check_pose("default_pose", runner.q_default, runner, limits)
     failures += check_pose("stand_pose", runner.q_stand, runner, limits)
     failures += check_pose("crouch_pose", runner.q_crouch, runner, limits)
@@ -317,19 +356,24 @@ def main():
     print("\nRate limits:")
     for i, joint_name in enumerate(runner.policy_order):
         print(
-            f"  {joint_name:16s} {safety.dq_max[i]:.3f} rad/step "
-            f"= {safety.dq_max[i] / runner.control_dt:.2f} rad/s"
+            f"  {joint_name:16s} pose={safety.dq_max[i]:.3f} rad/step "
+            f"({safety.dq_max[i] / runner.control_dt:.2f} rad/s) "
+            f"policy={safety.dq_max_policy[i]:.3f} rad/step "
+            f"({safety.dq_max_policy[i] / runner.control_dt:.2f} rad/s)"
         )
 
     sample_commands = [
         ("forward", [0.30, 0.0, 0.0]),
         ("fast_fwd", [0.45, 0.0, 0.0]),
         ("backward", [-0.30, 0.0, 0.0]),
-        ("left", [0.0, 0.25, 0.0]),
-        ("right", [0.0, -0.25, 0.0]),
-        ("yaw_left", [0.0, 0.0, 0.45]),
-        ("yaw_right", [0.0, 0.0, -0.45]),
-        ("diagonal", [0.30, 0.20, 0.30]),
+        ("positive_y", [0.0, 0.25, 0.0]),
+        ("negative_y", [0.0, -0.25, 0.0]),
+        ("positive_yaw", [0.0, 0.0, 0.45]),
+        ("negative_yaw", [0.0, 0.0, -0.45]),
+        ("W+A", [0.30, -0.20, 0.0]),
+        ("W+D", [0.30, 0.20, 0.0]),
+        ("S+A", [-0.30, -0.20, 0.0]),
+        ("S+D", [-0.30, 0.20, 0.0]),
         ("too_fast", [3.00, -3.00, 3.00]),
     ]
 
@@ -338,12 +382,19 @@ def main():
     runtime_violations = []
     for label, command in sample_commands:
         command = np.asarray(command, dtype=np.float32)
-        command_clipped, action, q_raw, q_hard, q_safe = sample_policy(
+        command_clipped, obs, action, q_raw, q_hard, q_safe = sample_policy(
             command,
             runner,
             safety,
             args.base_lin_vel_source,
         )
+        if runner.force_zero_base_linear_velocity and not np.allclose(
+            obs[0:3],
+            np.zeros(3, dtype=np.float32),
+        ):
+            runtime_violations.append(
+                f"{label}: base linear velocity observation is not forced to zero"
+            )
         pos_clipped = np.abs(q_hard - q_raw) > 1e-6
         rate_clipped = np.abs(q_safe - q_hard) > 1e-6
         command_was_clipped = np.any(np.abs(command_clipped - command) > 1e-6)

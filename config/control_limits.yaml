@@ -19,11 +19,12 @@ velocity_command:
   yaw_max: 0.70
 
 joystick_speed_scale:
-  # Slow normal-walk defaults for first hardware tests.
-  # With keyboard W and max_vx=1.8, initial 0.08 gives ~0.14 m/s.
-  initial: 0.08
-  min: 0.04
-  max: 0.18
+  # Restrained mid-speed defaults. With keyboard W and max_vx=1.8, the
+  # initial scale commands 0.18 m/s. Arrow keys may tune only inside this
+  # deliberately narrow hardware-test envelope.
+  initial: 0.10
+  min: 0.06
+  max: 0.16
   step: 0.02
 
 policy_deployment:
@@ -36,11 +37,20 @@ policy_deployment:
   command_vx_abs_max: 0.0
   command_vy_abs_max: 0.0
   command_yaw_abs_max: 0.0
-  # 0.0 matches IsaacSim RSL-RL default no action clipping. For suspended tests,
-  # pass --policy-action-clip on the command line if you want a softer preview.
-  action_clip_abs: 0.0
-  # 0.0 matches IsaacSim. For first hanging tests, 0.20-0.35 makes motion slower.
-  action_smoothing: 0.0
+  # Normal policy outputs are below this value in the deployment preflight.
+  # This catches an abnormal actor spike without clipping the checked gait.
+  action_clip_abs: 4.0
+  # Light recurrent smoothing damps one-frame action discontinuities while
+  # retaining most of the current policy output on every 20 ms step.
+  action_smoothing: 0.20
+  # Ramp body commands before placing them in observations 9:12. These are
+  # body-frame acceleration/yaw-acceleration limits per second.
+  command_slew_vx_per_s: 0.60
+  command_slew_vy_per_s: 0.40
+  command_slew_yaw_per_s: 0.60
+  # Blend from the held/standing target into the learned gait on every policy
+  # entry. This prevents a key press from becoming a one-cycle target jump.
+  transition_seconds: 0.40
 
 joint_position:
   enabled: true

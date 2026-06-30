@@ -31,6 +31,7 @@ class SafetyMonitor:
         self.q_min = None
         self.q_max = None
         self.dq_max = None
+        self.dq_max_policy = None
         self.joint_position_enabled = True
         self.joint_rate_enabled = True
         self.encoder_sanity_enabled = True
@@ -59,6 +60,7 @@ class SafetyMonitor:
         q_min = []
         q_max = []
         dq_max = []
+        dq_max_policy = []
 
         for joint_name in self.policy_order:
             if joint_name not in limits:
@@ -68,19 +70,28 @@ class SafetyMonitor:
             q_lo = float(joint_limit["min"])
             q_hi = float(joint_limit["max"])
             dq_step = float(joint_limit["dq_max_per_step"])
+            dq_step_policy = float(
+                joint_limit.get("dq_max_per_step_policy", dq_step)
+            )
 
             if q_lo > q_hi:
                 raise ValueError(f"{joint_name}: min {q_lo} is greater than max {q_hi}")
             if dq_step < 0.0:
                 raise ValueError(f"{joint_name}: dq_max_per_step must be >= 0")
+            if dq_step_policy < 0.0:
+                raise ValueError(
+                    f"{joint_name}: dq_max_per_step_policy must be >= 0"
+                )
 
             q_min.append(q_lo)
             q_max.append(q_hi)
             dq_max.append(dq_step)
+            dq_max_policy.append(dq_step_policy)
 
         self.q_min = np.asarray(q_min, dtype=np.float32)
         self.q_max = np.asarray(q_max, dtype=np.float32)
         self.dq_max = np.asarray(dq_max, dtype=np.float32)
+        self.dq_max_policy = np.asarray(dq_max_policy, dtype=np.float32)
         self.limit_mtime_ns = mtime_ns
         return True
 
@@ -145,24 +156,29 @@ class SafetyMonitor:
 
         return np.clip(q_target, self.q_min, self.q_max)
 
-    def rate_limit_q_target(self, q_desired, q_previous):
+    def rate_limit_q_target(self, q_desired, q_previous, rate_profile="pose"):
         q_desired = np.asarray(q_desired, dtype=np.float32)
         q_previous = np.asarray(q_previous, dtype=np.float32)
         if not self.joint_rate_enabled:
             return q_desired
 
+        dq_limit = self.dq_max_policy if rate_profile == "policy" else self.dq_max
         dq = q_desired - q_previous
-        dq = np.clip(dq, -self.dq_max, self.dq_max)
+        dq = np.clip(dq, -dq_limit, dq_limit)
         return q_previous + dq
 
-    def safety_filter(self, q_policy_target, q_previous_target):
+    def safety_filter(self, q_policy_target, q_previous_target, rate_profile="pose"):
         self.reload_control_limits()
         self.reload_joint_limits()
 
         q_previous_target = np.asarray(q_previous_target, dtype=np.float32)
 
         q = self.clip_q_target(q_policy_target)
-        q = self.rate_limit_q_target(q, q_previous_target)
+        q = self.rate_limit_q_target(
+            q,
+            q_previous_target,
+            rate_profile=rate_profile,
+        )
         q = self.clip_q_target(q)
         return q.astype(np.float32)
 
@@ -303,5 +319,6 @@ if __name__ == "__main__":
             f"{i:02d} {name:16s} "
             f"min={safety.q_min[i]: .3f} "
             f"max={safety.q_max[i]: .3f} "
-            f"dq_step={safety.dq_max[i]: .3f}"
+            f"dq_pose={safety.dq_max[i]: .3f} "
+            f"dq_policy={safety.dq_max_policy[i]: .3f}"
         )

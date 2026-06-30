@@ -158,13 +158,39 @@ class FixedCommandSource:
         pass
 
 
+def keyboard_motion_command(active_keys, max_vx, max_vy, max_yaw):
+    """Map terminal keys to the policy command [vx, vy, yaw_rate]."""
+    active = set(active_keys)
+    vx = 0.0
+    vy = 0.0
+    yaw = 0.0
+
+    if "w" in active and "s" not in active:
+        vx = abs(float(max_vx))
+    elif "s" in active and "w" not in active:
+        vx = -abs(float(max_vx))
+
+    if "a" in active and "d" not in active:
+        vy = -abs(float(max_vy))
+    elif "d" in active and "a" not in active:
+        vy = abs(float(max_vy))
+
+    if "q" in active and "e" not in active:
+        yaw = abs(float(max_yaw))
+    elif "e" in active and "q" not in active:
+        yaw = -abs(float(max_yaw))
+
+    return np.array([vx, vy, yaw], dtype=np.float32)
+
+
 class KeyboardCommandSource:
     """
     Non-blocking terminal keyboard drive source.
 
     Keys:
       w/s -> straight forward/back while the key repeats
-      a/d -> left/right while the key repeats
+      a/d -> -Y/+Y while the key repeats
+      q/e -> +Z/-Z yaw rate while the key repeats
       w+a, w+d, s+a, s+d -> diagonal xy movement
       up/down arrows -> increase/decrease speed scale
       c -> sit/crouch
@@ -199,7 +225,10 @@ class KeyboardCommandSource:
             "s": -1.0,
             "a": -1.0,
             "d": -1.0,
+            "q": -1.0,
+            "e": -1.0,
         }
+        self.motion_chord = set()
         self.command = np.zeros(3, dtype=np.float32)
         self.command_limits = load_command_limits()
         self.key_queue = deque()
@@ -216,9 +245,12 @@ class KeyboardCommandSource:
         print("Terminal keyboard command source:")
         print("  w -> straight forward")
         print("  s -> straight backward")
-        print("  a -> left")
-        print("  d -> right")
-        print("  w+a/w+d/s+a/s+d -> diagonal xy movement")
+        print("  a -> -Y")
+        print("  d -> +Y")
+        print("  q -> +Z yaw")
+        print("  e -> -Z yaw")
+        print("  w+a -> +X/-Y, w+d -> +X/+Y")
+        print("  s+a -> -X/-Y, s+d -> -X/+Y")
         print("  up/down arrows -> increase/decrease speed scale")
         print("  c -> crouch/sit")
         print("  space -> stand")
@@ -274,12 +306,35 @@ class KeyboardCommandSource:
         self._poll_keys()
 
         now = time.monotonic()
+        active_before_events = {
+            key for key, deadline in self.movement_key_deadlines.items()
+            if now <= float(deadline)
+        }
+        self.motion_chord.intersection_update(active_before_events)
+        opposite_key = {
+            "w": "s",
+            "s": "w",
+            "a": "d",
+            "d": "a",
+            "q": "e",
+            "e": "q",
+        }
         kept = deque()
         while self.key_queue:
             key = self.key_queue.popleft()
             consumed = True
             if key in self.movement_key_deadlines:
-                self.movement_key_deadlines[key] = now + self.command_timeout_s
+                opposite = opposite_key[key]
+                self.motion_chord.discard(opposite)
+                self.movement_key_deadlines[opposite] = -1.0
+                self.motion_chord.add(key)
+                # Terminals generally repeat only the newest key and do not send
+                # key-release events. Refresh the full detected chord whenever
+                # any member repeats so W+A/W+D/S+A/S+D remain diagonal.
+                for chord_key in self.motion_chord:
+                    self.movement_key_deadlines[chord_key] = (
+                        now + self.command_timeout_s
+                    )
             elif key == "arrow_up":
                 self._change_speed_scale(self.speed_scale_step)
             elif key == "arrow_down":
@@ -299,22 +354,16 @@ class KeyboardCommandSource:
             if now <= float(deadline)
         }
 
-        vx = 0.0
-        vy = 0.0
-        if "w" in active and "s" not in active:
-            vx = self.max_vx
-        elif "s" in active and "w" not in active:
-            vx = -self.max_vx
-
-        if "a" in active and "d" not in active:
-            vy = self.max_vy
-        elif "d" in active and "a" not in active:
-            vy = -self.max_vy
-
-        self.command = np.array([vx, vy, 0.0], dtype=np.float32)
+        self.command = keyboard_motion_command(
+            active_keys=active,
+            max_vx=self.max_vx,
+            max_vy=self.max_vy,
+            max_yaw=self.max_yaw,
+        )
 
     def _clear_motion_command(self):
         self.command = np.zeros(3, dtype=np.float32)
+        self.motion_chord.clear()
         for key in self.movement_key_deadlines:
             self.movement_key_deadlines[key] = -1.0
 

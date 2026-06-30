@@ -32,14 +32,20 @@ imu:
 
   # Used by source: xsens. The MTData2 parser is built into src/imu_interface.py,
   # so this deploy folder has no dependency on an external absolute path.
+  # Maps sensor-frame vectors into the IsaacLab robot body frame:
+  # +X forward, +Y left, +Z up. Identity is correct only when the Xsens is
+  # mounted with those axes aligned to the trunk.
   sensor_to_base_rotation:
     - [1.0, 0.0, 0.0]
     - [0.0, 1.0, 0.0]
     - [0.0, 0.0, 1.0]
-  flip_gravity: true
+  # projected_gravity_absolute_xsens already computes world-down in the sensor
+  # frame. Leave this false for the IsaacLab convention: upright=[0, 0, -1].
+  flip_gravity: false
 
   # Use rad_s if your IMU already outputs rad/s, or deg_s to convert to rad/s.
   gyro_units: rad_s
+  # Applied in body coordinates after sensor_to_base_rotation.
   gyro_axis_signs: [1.0, 1.0, 1.0]
   gravity_axis_signs: [1.0, 1.0, 1.0]
 

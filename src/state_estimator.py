@@ -41,14 +41,31 @@ class FakeStateEstimator:
         if reading is None:
             return False
 
+        base_ang_vel_b = np.asarray(reading.base_ang_vel_b, dtype=np.float32)
+        projected_gravity_b = np.asarray(
+            reading.projected_gravity_b,
+            dtype=np.float32,
+        )
+        if base_ang_vel_b.shape != (3,) or not np.all(np.isfinite(base_ang_vel_b)):
+            raise ValueError(f"Invalid IMU angular velocity: {base_ang_vel_b}")
+        if projected_gravity_b.shape != (3,) or not np.all(np.isfinite(projected_gravity_b)):
+            raise ValueError(f"Invalid IMU projected gravity: {projected_gravity_b}")
+        gravity_norm = float(np.linalg.norm(projected_gravity_b))
+        if gravity_norm < 1e-6:
+            raise ValueError("Invalid IMU projected gravity: zero-length vector")
+
         # The deployed policy is run with base linear velocity fixed at zero.
         # Keep this observation term identical even when an IMU helper can
         # estimate velocity from acceleration.
         self.base_lin_vel_b = np.zeros(3, dtype=np.float32)
-        self.base_ang_vel_b = np.asarray(reading.base_ang_vel_b, dtype=np.float32).copy()
-        self.projected_gravity_b = np.asarray(reading.projected_gravity_b, dtype=np.float32).copy()
+        self.base_ang_vel_b = base_ang_vel_b.copy()
+        self.projected_gravity_b = (
+            projected_gravity_b / gravity_norm
+        ).astype(np.float32)
         self.last_imu_timestamp = float(reading.timestamp)
-        self.last_imu_update_time = time.monotonic()
+        # Use the sensor packet timestamp, not the time at which cached data was
+        # read. Otherwise an unplugged Xsens can appear live forever.
+        self.last_imu_update_time = float(reading.timestamp)
         self.last_imu_reading = reading
         return True
 

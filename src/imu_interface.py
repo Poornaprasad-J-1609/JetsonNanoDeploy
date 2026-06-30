@@ -374,6 +374,30 @@ class XsensBinaryImuSensor:
         )
         if self.sensor_to_base_rotation.shape != (3, 3):
             raise ValueError("sensor_to_base_rotation must be a 3x3 matrix")
+        if not np.all(np.isfinite(self.sensor_to_base_rotation)):
+            raise ValueError("sensor_to_base_rotation contains non-finite values")
+        orthogonality_error = float(
+            np.linalg.norm(
+                self.sensor_to_base_rotation @ self.sensor_to_base_rotation.T
+                - np.eye(3, dtype=np.float32)
+            )
+        )
+        determinant = float(np.linalg.det(self.sensor_to_base_rotation))
+        if orthogonality_error > 1e-4 or abs(determinant - 1.0) > 1e-4:
+            raise ValueError(
+                "sensor_to_base_rotation must be a proper rotation matrix "
+                f"(orthogonality_error={orthogonality_error:.3e}, det={determinant:.6f})"
+            )
+        self.gyro_units = str(self.cfg.get("gyro_units", "rad_s")).lower()
+        self.gyro_axis_signs = as_vector3(
+            self.cfg.get("gyro_axis_signs", [1.0, 1.0, 1.0]),
+            "gyro_axis_signs",
+        )
+        self.gravity_axis_signs = as_vector3(
+            self.cfg.get("gravity_axis_signs", [1.0, 1.0, 1.0]),
+            "gravity_axis_signs",
+        )
+        self.flip_gravity = bool(self.cfg.get("flip_gravity", False))
 
         self.ser = None
         self.buffer = bytearray()
@@ -385,6 +409,8 @@ class XsensBinaryImuSensor:
         self.velocity_world = np.zeros(3, dtype=np.float32)
         self.last_velocity_time = None
         self.last_packet_time = None
+        self.latest_orientation_time = None
+        self.latest_gyro_time = None
 
     def open(self):
         import serial
@@ -415,6 +441,7 @@ class XsensBinaryImuSensor:
                 continue
 
             parsed = parse_mtdata2(payload)
+            packet_time = time.monotonic()
             if "quaternion_wxyz" in parsed:
                 self.latest_quaternion_wxyz = reorder_quaternion(
                     parsed["quaternion_wxyz"],
@@ -423,9 +450,11 @@ class XsensBinaryImuSensor:
                 self.latest_abs = projected_gravity_absolute_xsens(
                     self.latest_quaternion_wxyz
                 )
+                self.latest_orientation_time = packet_time
                 updated = True
             if "gyro_sensor" in parsed:
                 self.latest_gyro_sensor = np.asarray(parsed["gyro_sensor"], dtype=np.float32)
+                self.latest_gyro_time = packet_time
                 updated = True
             if "free_acc_sensor" in parsed:
                 self.latest_free_acc_sensor = np.asarray(
@@ -439,6 +468,17 @@ class XsensBinaryImuSensor:
 
         if updated:
             self.last_packet_time = time.monotonic()
+
+    def _gyro_in_base_frame(self):
+        gyro = self.sensor_to_base_rotation @ self.latest_gyro_sensor
+        gyro = np.asarray(gyro, dtype=np.float32) * self.gyro_axis_signs
+        if self.gyro_units in ("deg_s", "deg/s", "dps"):
+            gyro = np.deg2rad(gyro).astype(np.float32)
+        elif self.gyro_units not in ("rad_s", "rad/s", "rps"):
+            raise ValueError(f"Unsupported gyro_units: {self.gyro_units}")
+        if not np.all(np.isfinite(gyro)):
+            raise ValueError(f"Xsens gyro contains non-finite values: {gyro}")
+        return gyro
 
     def estimate_base_linear_velocity(self):
         if (
@@ -479,7 +519,13 @@ class XsensBinaryImuSensor:
             raise RuntimeError("IMU serial port is not open")
 
         self._read_packets()
-        if self.latest_quaternion_wxyz is None or self.latest_abs is None:
+        if (
+            self.latest_quaternion_wxyz is None
+            or self.latest_abs is None
+            or self.latest_gyro_sensor is None
+            or self.latest_orientation_time is None
+            or self.latest_gyro_time is None
+        ):
             return None
 
         projected_gravity_sensor = np.asarray(
@@ -487,10 +533,21 @@ class XsensBinaryImuSensor:
             dtype=np.float32,
         )
         projected_gravity = self.sensor_to_base_rotation @ projected_gravity_sensor
-        if self.latest_gyro_sensor is None:
-            base_ang_vel = np.zeros(3, dtype=np.float32)
-        else:
-            base_ang_vel = self.sensor_to_base_rotation @ self.latest_gyro_sensor
+        projected_gravity = (
+            np.asarray(projected_gravity, dtype=np.float32)
+            * self.gravity_axis_signs
+        )
+        if self.flip_gravity:
+            projected_gravity = -projected_gravity
+        base_ang_vel = self._gyro_in_base_frame()
+
+        rotation_world_from_sensor = np.asarray(
+            self.latest_abs["rotation"],
+            dtype=np.float32,
+        )
+        rotation_world_from_base = (
+            rotation_world_from_sensor @ self.sensor_to_base_rotation.T
+        )
 
         base_lin_vel = self.estimate_base_linear_velocity()
 
@@ -501,12 +558,20 @@ class XsensBinaryImuSensor:
                 fallback=[0.0, 0.0, -1.0],
             ),
             base_lin_vel_b=base_lin_vel,
-            timestamp=self.last_packet_time or time.monotonic(),
+            timestamp=min(self.latest_orientation_time, self.latest_gyro_time),
             quaternion_wxyz=self.latest_quaternion_wxyz.copy(),
-            rpy_abs_deg=np.asarray(self.latest_abs["rpy_abs_deg"], dtype=np.float32),
-            axes_world=np.asarray(self.latest_abs["axes_world"], dtype=np.float32),
-            det_r=float(self.latest_abs["det_r"]),
-            cross_err=float(self.latest_abs["cross_err"]),
+            rpy_abs_deg=rotmat_to_rpy_deg(rotation_world_from_base),
+            axes_world=rotation_world_from_base.copy(),
+            det_r=float(np.linalg.det(rotation_world_from_base)),
+            cross_err=float(
+                np.linalg.norm(
+                    np.cross(
+                        rotation_world_from_base[:, 0],
+                        rotation_world_from_base[:, 1],
+                    )
+                    - rotation_world_from_base[:, 2]
+                )
+            ),
         )
 
 
