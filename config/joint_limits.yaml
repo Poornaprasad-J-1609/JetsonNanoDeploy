@@ -4,15 +4,17 @@
 # policy, sit, and stand target through these limits before MIT packets are sent.
 #
 # dq_max_per_step is the pose/hold target change per 20 ms control step because
-# config/joint_map.yaml currently sets control_dt: 0.02. Walking uses the
-# separate dq_max_per_step_policy value so a sit/stand safety slew does not
-# flatten the learned gait.
+# config/joint_map.yaml currently sets control_dt: 0.02. Walking can use the
+# separate dq_max_per_step_policy value so pose safety does not flatten the
+# learned gait.
 # These values are target slew limits, not hard joint angles. Hard angle limits
 # below are still always applied before MIT packets are sent.
 #
 # Walking-test defaults:
 #   pose:   0.040 rad/step = 2.00 rad/s at 50 Hz
-#   policy: 0.080 rad/step = 4.00 rad/s at 50 Hz
+#   policy: 0.600 rad/step = 30.00 rad/s target slew at 50 Hz
+# The corrected simulation-order rollouts peak near 0.51 rad/step, so this
+# guard stays above the learned gait while still catching a runaway target.
 # Increase per-joint values only after the robot moves smoothly and all
 # encoder directions/limits are verified on hardware.
 
@@ -21,61 +23,61 @@ joint_limits:
     min: -2.0
     max: 2.0
     dq_max_per_step: 0.040
-    dq_max_per_step_policy: 0.080
+    dq_max_per_step_policy: 0.600
   FR_hip_joint:
     min: -2.0
     max: 2.0
     dq_max_per_step: 0.040
-    dq_max_per_step_policy: 0.080
+    dq_max_per_step_policy: 0.600
   BL_hip_joint:
     min: -2.0
     max: 2.0
     dq_max_per_step: 0.040
-    dq_max_per_step_policy: 0.080
+    dq_max_per_step_policy: 0.600
   BR_hip_joint:
     min: -2.0
     max: 2.0
     dq_max_per_step: 0.040
-    dq_max_per_step_policy: 0.080
+    dq_max_per_step_policy: 0.600
 
   FL_thigh_joint:
     min: -3.0
     max: 3.0
     dq_max_per_step: 0.040
-    dq_max_per_step_policy: 0.080
+    dq_max_per_step_policy: 0.600
   FR_thigh_joint:
     min: -3.0
     max: 3.0
     dq_max_per_step: 0.040
-    dq_max_per_step_policy: 0.080
+    dq_max_per_step_policy: 0.600
   BL_thigh_joint:
     min: -3.0
     max: 3.0
     dq_max_per_step: 0.040
-    dq_max_per_step_policy: 0.080
+    dq_max_per_step_policy: 0.600
   BR_thigh_joint:
     min: -3.0
     max: 3.0
     dq_max_per_step: 0.040
-    dq_max_per_step_policy: 0.080
+    dq_max_per_step_policy: 0.600
 
   FL_calf_joint:
     min: -2.0
     max: 2.0
     dq_max_per_step: 0.040
-    dq_max_per_step_policy: 0.080
+    dq_max_per_step_policy: 0.600
   FR_calf_joint:
     min: -2.0
     max: 2.0
     dq_max_per_step: 0.040
-    dq_max_per_step_policy: 0.080
+    dq_max_per_step_policy: 0.600
   BL_calf_joint:
     min: -2.0
     max: 2.0
     dq_max_per_step: 0.040
-    dq_max_per_step_policy: 0.080
+    dq_max_per_step_policy: 0.600
   BR_calf_joint:
     min: -2.0
     max: 2.0
     dq_max_per_step: 0.040
-    dq_max_per_step_policy: 0.080
+    dq_max_per_step_policy: 0.600

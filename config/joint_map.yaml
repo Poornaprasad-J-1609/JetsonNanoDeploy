@@ -12,18 +12,18 @@ policy_contract:
   observation_dim: 48
   action_dim: 12
   action_joint_order:
-    - FR_hip_joint
-    - FR_thigh_joint
-    - FR_calf_joint
-    - FL_hip_joint
-    - FL_thigh_joint
-    - FL_calf_joint
-    - BR_hip_joint
-    - BR_thigh_joint
-    - BR_calf_joint
     - BL_hip_joint
+    - BR_hip_joint
+    - FL_hip_joint
+    - FR_hip_joint
     - BL_thigh_joint
+    - BR_thigh_joint
+    - FL_thigh_joint
+    - FR_thigh_joint
     - BL_calf_joint
+    - BR_calf_joint
+    - FL_calf_joint
+    - FR_calf_joint
   force_zero_base_linear_velocity: true
   normalize_projected_gravity: true
   observation_scales:
@@ -37,23 +37,22 @@ policy_contract:
 
 # Policy output/observation joint order.
 #
-# The trained grallator_final IsaacLab asset and deployment URDF are both
-# leg-grouped in this order:
-#   FR hip/thigh/calf, FL hip/thigh/calf, BR hip/thigh/calf, BL hip/thigh/calf.
-# Older asset copies called the rear legs RR/RL; those positions map to BR/BL.
+# This is the native IsaacLab articulation order printed by the simulation
+# telemetry used to export policy.pt. JointPositionActionCfg and joint_pos_rel /
+# joint_vel_rel all use this same order when preserve_order is false.
 policy_to_real_order:
-  - FR_hip_joint
-  - FR_thigh_joint
-  - FR_calf_joint
-  - FL_hip_joint
-  - FL_thigh_joint
-  - FL_calf_joint
-  - BR_hip_joint
-  - BR_thigh_joint
-  - BR_calf_joint
   - BL_hip_joint
+  - BR_hip_joint
+  - FL_hip_joint
+  - FR_hip_joint
   - BL_thigh_joint
+  - BR_thigh_joint
+  - FL_thigh_joint
+  - FR_thigh_joint
   - BL_calf_joint
+  - BR_calf_joint
+  - FL_calf_joint
+  - FR_calf_joint
 
 observation_layout:
   base_lin_vel: [0, 1, 2]
@@ -67,9 +66,9 @@ observation_layout:
 command_limits:
   # Fallback command limits when config/control_limits.yaml disables its
   # velocity_command section. Keep these aligned with play_grallator_keyboard.py.
-  vx_min: -1.80
-  vx_max: 1.80
-  vy_min: -0.80
-  vy_max: 0.80
+  vx_min: -2.20
+  vx_max: 2.20
+  vy_min: -1.20
+  vy_max: 1.20
   yaw_min: -0.70
   yaw_max: 0.70

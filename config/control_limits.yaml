@@ -11,21 +11,21 @@ velocity_command:
   # Match the IsaacSim keyboard play command envelope. Joystick speed_scale
   # still keeps first tests slow, but the policy is no longer clipped to a
   # near-standing command before inference.
-  vx_min: -1.80
-  vx_max: 1.80
-  vy_min: -0.80
-  vy_max: 0.80
+  vx_min: -2.20
+  vx_max: 2.20
+  vy_min: -1.20
+  vy_max: 1.20
   yaw_min: -0.70
   yaw_max: 0.70
 
 joystick_speed_scale:
-  # Restrained mid-speed defaults. With keyboard W and max_vx=1.8, the
-  # initial scale commands 0.18 m/s. Arrow keys may tune only inside this
-  # deliberately narrow hardware-test envelope.
-  initial: 0.10
-  min: 0.06
-  max: 0.16
-  step: 0.02
+  # The unscaled envelope matches the IsaacLab keyboard script (2.2/1.2/0.7),
+  # while this scale starts the real robot at a moderate 0.33 m/s forward
+  # command. Arrow keys tune only inside the hardware-test envelope.
+  initial: 0.15
+  min: 0.10
+  max: 0.30
+  step: 0.05
 
 policy_deployment:
   # These affect only the policy inference path. The joystick speed_scale still
@@ -37,12 +37,11 @@ policy_deployment:
   command_vx_abs_max: 0.0
   command_vy_abs_max: 0.0
   command_yaw_abs_max: 0.0
-  # Normal policy outputs are below this value in the deployment preflight.
-  # This catches an abnormal actor spike without clipping the checked gait.
+  # Normal closed-loop dry runs stay below this value. The cap is deliberately
+  # high so it does not shape the gait, but it stops a runaway observation from
+  # turning an unbounded actor output into an extreme target.
   action_clip_abs: 4.0
-  # Light recurrent smoothing damps one-frame action discontinuities while
-  # retaining most of the current policy output on every 20 ms step.
-  action_smoothing: 0.20
+  action_smoothing: 0.0
   # Ramp body commands before placing them in observations 9:12. These are
   # body-frame acceleration/yaw-acceleration limits per second.
   command_slew_vx_per_s: 0.60
@@ -57,6 +56,10 @@ joint_position:
 
 joint_rate:
   enabled: true
+  # Sit/stand/hold and walking use separate per-joint rates. Walking has a much
+  # wider profile to preserve the learned gait while retaining a final dynamic
+  # guard against one-cycle target reversals.
+  policy_enabled: true
 
 mit_parameters:
   enabled: true

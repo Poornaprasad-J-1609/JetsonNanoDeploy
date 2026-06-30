@@ -83,7 +83,7 @@ Main controller workflow:
 1. Start with the robot manually in crouch/default pose.
 2. Normal controller startup is passive: no software-zero and no MIT hold
    command stream is sent when the program opens.
-3. Keyboard controls: W/S = +X/-X, A/D = -Y/+Y, Q/E = +Z/-Z yaw,
+3. Keyboard controls: W/S = +X/-X, A/D = +Y/-Y, Q/E = +Z/-Z yaw,
    space = stand, c = crouch/default, h = hold current position,
    up/down arrows = speed up/down, x = emergency stop.
 4. Press h only when you want to hold the current pose. Press space or c to
@@ -179,6 +179,35 @@ q = quit
 
 8. Dry run, no motors/CAN/real IMU
 ----------------------------------
+
+First run the complete policy contract checker and one-shot no-CAN probe:
+
+/usr/bin/python3 src/check_policy_limits.py
+
+/usr/bin/python3 src/main_controller.py \
+  --dry-run-policy-check \
+  --policy-path policy/policy.pt
+
+To run the complete loop and print the 12 MIT commands without opening CAN:
+
+/usr/bin/python3 src/main_controller.py \
+  --motors-disabled \
+  --policy-path policy/policy.pt \
+  --feedback-source fake \
+  --command-source fixed \
+  --vx 0.20 \
+  --vy 0.00 \
+  --yaw 0.00 \
+  --imu-source fake \
+  --start-control-mode policy \
+  --initial-zero-frame stand \
+  --policy-steps 100 \
+  --policy-obs-check-every 10 \
+  --log-every 10 \
+  --no-imu-stabilization \
+  --no-gait-assist
+
+The older GUI dry-run form is retained below:
 
 /usr/bin/python3 src/main_controller.py \
   --mode print \
@@ -302,16 +331,18 @@ tilt/move the IMU gently and watch whether policy actions/leg targets respond.
 
 This sends real MIT commands. First full robot tests should be suspended/secured.
 After launch: press space to stand and wait for "zero_frame -> stand", then
-hold W/S for +X/-X, A/D for -Y/+Y, Q/E for +Z/-Z yaw, and combine movement
+hold W/S for +X/-X, A/D for +Y/-Y, Q/E for +Z/-Z yaw, and combine movement
 keys only when diagonal or translation-plus-yaw motion is intended. Press
 up/down arrows to change speed scale. Press c to
 return to crouch/default and software-zero crouch again, h to hold current
 position, x to emergency-stop. Walking is
 blocked while the controller is in crouch-zero mode.
-Diagonal XY mapping is W+A=+X/-Y, W+D=+X/+Y, S+A=-X/-Y, S+D=-X/+Y.
-The command speed is kept low, but policy inference itself is unchanged from
-training: no command gain, action clipping, smoothing, gait overlay, or manual
-IMU overlay. The real Xsens gyro and projected gravity enter observations 3:9.
+Diagonal XY mapping is W+A=+X/+Y, W+D=+X/-Y, S+A=-X/+Y, S+D=-X/-Y.
+The command speed is a moderate 0.33 m/s at W. Policy inference is unchanged
+from training: no gait overlay or manual IMU overlay. A command slew and 0.40 s
+entry blend soften only start-up. The wider walking target-rate profile retains
+gait motion, while an emergency action cap catches only runaway outputs. The
+real Xsens gyro and projected gravity enter observations 3:9.
 
 /usr/bin/python3 src/main_controller.py \
   --mode mit-signal \
@@ -336,19 +367,23 @@ IMU overlay. The real Xsens gyro and projected gravity enter observations 3:9.
   --stand-calibration-value 0.0 \
   --policy-steps 0 \
   --walk-command-threshold 0.02 \
-  --max-vx 1.80 \
-  --max-vy 0.80 \
+  --max-vx 2.20 \
+  --max-vy 1.20 \
   --max-yaw 0.70 \
-  --speed-scale-initial 0.08 \
-  --speed-scale-min 0.04 \
-  --speed-scale-max 0.18 \
-  --speed-scale-step 0.02 \
+  --speed-scale-initial 0.15 \
+  --speed-scale-min 0.10 \
+  --speed-scale-max 0.30 \
+  --speed-scale-step 0.05 \
   --keyboard-command-timeout 0.35 \
   --policy-command-gain 1.0 \
   --policy-command-vx-max 0.0 \
   --policy-command-vy-max 0.0 \
   --policy-command-yaw-max 0.0 \
-  --policy-action-clip 0.0 \
+  --policy-command-slew-vx 0.60 \
+  --policy-command-slew-vy 0.40 \
+  --policy-command-slew-yaw 0.60 \
+  --policy-transition-seconds 0.40 \
+  --policy-action-clip 4.0 \
   --policy-action-smoothing 0.0 \
   --enable-retries 3 \
   --enable-retry-delay 0.05 \
@@ -366,12 +401,12 @@ IMU overlay. The real Xsens gyro and projected gravity enter observations 3:9.
 
 This sends real MIT commands but uses fake upright IMU values.
 After launch: press space to stand and wait for "zero_frame -> stand", then
-hold W/S for +X/-X, A/D for -Y/+Y, Q/E for +Z/-Z yaw, and combine movement
+hold W/S for +X/-X, A/D for +Y/-Y, Q/E for +Z/-Z yaw, and combine movement
 keys only when diagonal or translation-plus-yaw motion is intended. Press
 up/down arrows to change speed scale. Press c to
 return to crouch/default and software-zero crouch again, h to hold current
 position, x to emergency-stop.
-Diagonal XY mapping is W+A=+X/-Y, W+D=+X/+Y, S+A=-X/-Y, S+D=-X/+Y.
+Diagonal XY mapping is W+A=+X/+Y, W+D=+X/-Y, S+A=-X/+Y, S+D=-X/-Y.
 This uses the same policy I/O path as section 10 but substitutes upright/zero
 IMU observations. It is useful only for a suspended motion check.
 
@@ -397,19 +432,23 @@ IMU observations. It is useful only for a suspended motion check.
   --stand-calibration-value 0.0 \
   --policy-steps 0 \
   --walk-command-threshold 0.02 \
-  --max-vx 1.80 \
-  --max-vy 0.80 \
+  --max-vx 2.20 \
+  --max-vy 1.20 \
   --max-yaw 0.70 \
-  --speed-scale-initial 0.08 \
-  --speed-scale-min 0.04 \
-  --speed-scale-max 0.18 \
-  --speed-scale-step 0.02 \
+  --speed-scale-initial 0.15 \
+  --speed-scale-min 0.10 \
+  --speed-scale-max 0.30 \
+  --speed-scale-step 0.05 \
   --keyboard-command-timeout 0.35 \
   --policy-command-gain 1.0 \
   --policy-command-vx-max 0.0 \
   --policy-command-vy-max 0.0 \
   --policy-command-yaw-max 0.0 \
-  --policy-action-clip 0.0 \
+  --policy-command-slew-vx 0.60 \
+  --policy-command-slew-vy 0.40 \
+  --policy-command-slew-yaw 0.60 \
+  --policy-transition-seconds 0.40 \
+  --policy-action-clip 4.0 \
   --policy-action-smoothing 0.0 \
   --enable-retries 3 \
   --enable-retry-delay 0.05 \
@@ -442,8 +481,8 @@ Replace these switches in section 10 or 11:
   --policy-action-clip 0.0 \
   --policy-action-smoothing 0.0 \
 
-Keyboard W/S alone sends only +/-1.8 vx to the policy. A/D alone sends only
--/+0.8 vy. Q/E alone sends only +/-0.7 yaw rate. Combined movement keys send
+Keyboard W/S alone sends +/-2.2 vx to the policy. A/D alone sends
++/-1.2 vy. Q/E alone sends +/-0.7 yaw rate. Combined movement keys send
 multi-axis commands intentionally.
 
 
