@@ -88,6 +88,12 @@ def main():
     parser = argparse.ArgumentParser()
     add_can_topology_args(parser, default_port="/dev/ttyUSB1", default_can_count=2)
     parser.add_argument("--baud", type=int, default=921600)
+    parser.add_argument("--policy-path", default=None)
+    parser.add_argument(
+        "--allow-policy-hash-mismatch",
+        action="store_true",
+        help="allow an unrecognized policy SHA256 after explicit artifact verification",
+    )
     parser.add_argument(
         "--joints",
         nargs="+",
@@ -120,7 +126,10 @@ def main():
         print("ERROR:", exc)
         return 1
 
-    runner = PolicyRunner()
+    runner = PolicyRunner(
+        policy_path=args.policy_path,
+        allow_policy_hash_mismatch=args.allow_policy_hash_mismatch,
+    )
     motor_ids = load_motor_ids()
     joint_can_bus = resolve_joint_can_bus(runner.policy_order, args.can_count)
     layer = MotorCommandLayer(
@@ -139,6 +148,7 @@ def main():
 
     print("==== DIRECT MIT JOINT MOTION TEST ====")
     print("This bypasses policy, joystick, and IMU.")
+    print("Pose source policy SHA256:", runner.policy_sha256)
     print("Joints:", ", ".join(args.joints))
     for line in topology_lines(args.can_count, port_by_bus):
         print(line)

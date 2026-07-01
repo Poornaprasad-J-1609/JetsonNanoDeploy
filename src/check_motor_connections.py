@@ -36,6 +36,7 @@ from can_topology import (
 ROOT = Path(__file__).resolve().parents[1]
 TELEMETRY_PORT_DEFAULT = 57543
 POSE_SNAP_TOLERANCE_RAD = 0.0
+DISPLAY_LEG_ORDER = ("FR", "FL", "BR", "BL")
 
 
 class KeyboardReader:
@@ -114,6 +115,21 @@ def resolve_joints(policy_order, motor_cfg, active_joints_arg):
         raise KeyError(f"Missing motor ID(s) in motor_ids.yaml: {missing_ids}")
 
     return joints
+
+
+def connection_display_order(joints, motor_ids):
+    """Order diagnostics by physical leg, then by ascending CAN motor ID."""
+    leg_rank = {leg: rank for rank, leg in enumerate(DISPLAY_LEG_ORDER)}
+
+    def sort_key(joint_name):
+        leg = str(joint_name).split("_", 1)[0]
+        return (
+            leg_rank.get(leg, len(leg_rank)),
+            int(motor_ids[joint_name]),
+            str(joint_name),
+        )
+
+    return sorted(joints, key=sort_key)
 
 
 def feedback_status(feedback, now, stale_seconds):
@@ -745,6 +761,7 @@ def main():
         joints = resolve_joints(policy_order, motor_cfg, args.active_joints)
 
     motor_ids = motor_cfg["motor_ids"]
+    display_joints = connection_display_order(joints, motor_ids)
     joint_can_bus = resolve_joint_can_bus(policy_order, args.can_count)
     layer = MotorCommandLayer(
         policy_order=policy_order,
@@ -779,8 +796,8 @@ def main():
     for line in topology_lines(args.can_count, port_by_bus):
         print(line)
     print(f"baud={args.baud}")
-    print("Checking joints:")
-    for joint_name in layer.active_joints:
+    print("Checking joints (FR, FL, BR, BL; ascending motor ID within each leg):")
+    for joint_name in display_joints:
         bus_name = joint_can_bus.get(joint_name, "front")
         print(f"  {joint_name:20s} -> 0x{int(motor_ids[joint_name]):02X}  [{bus_name}]")
 
@@ -914,7 +931,7 @@ def main():
                         )
                     else:
                         print_table(
-                            joints=layer.active_joints,
+                            joints=display_joints,
                             motor_ids=motor_ids,
                             joint_can_bus=joint_can_bus,
                             layer=layer,

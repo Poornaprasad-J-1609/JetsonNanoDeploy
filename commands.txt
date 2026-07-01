@@ -45,6 +45,28 @@ Install Python requirements:
 
 /usr/bin/python3 -m pip install -r requirements.txt
 
+Verify the approved policy artifact and fixed 48-observation contract:
+
+/usr/bin/python3 src/check_policy_contract.py
+
+Replay and compare IsaacLab policy/motor CSV logs against deployment:
+
+/usr/bin/python3 src/compare_sim_policy_logs.py \
+  grallator_sim_policy_input_log_20260701_065137.csv \
+  grallator_sim_motor_log_20260701_065137.csv \
+  --output logs/sim_replay_comparison_20260701_065137.csv
+
+Every main_controller CSV includes the complete policy data path in verified
+policy joint order: obs_000..047 (input), action_00..11 (raw policy output),
+sent_action_00..11 (output after optional filtering), q_target_00..11 (MIT
+position target), and q_00..11/qd_00..11 (joint-radian feedback). Command,
+IMU status, torque summaries, policy SHA256, and policy_joint_order are also
+saved. Use --log-every 1 when every 50 Hz control step must be recorded.
+
+The controller prints the selected policy SHA256 at startup. It refuses an
+unrecognized policy unless --allow-policy-hash-mismatch is passed explicitly
+after the replacement artifact has been independently verified.
+
 Ubuntu/Debian GUI dependency if tkinter is missing:
 
 sudo apt-get update
@@ -80,15 +102,14 @@ To see raw axes/buttons:
 
 Main controller workflow:
 
-1. Start with the robot manually in crouch/default pose.
+1. Set RobStride hardware zero once with the robot physically standing.
 2. Normal controller startup is passive: no software-zero and no MIT hold
-   command stream is sent when the program opens.
+   command stream is sent when the program opens. Hardware stand zero is fixed.
 3. Keyboard controls: space = stand, c = crouch/default, h = hold current
    position, up/down arrows = speed up/down, x = emergency stop.
-4. Press h only when you want to hold the current pose. Press space or c to
-   start a pose transition. The first space/stand command can software-zero the
-   current crouch/default frame if needed; c/crouch commands q=0 and never
-   redefines the current pose as zero.
+4. Press h only when you want to hold the current pose. Press space to command
+   stand q=0, or c to command config/default_pose.yaml crouch_pose. Walking is
+   blocked until stand reaches its target. No pose command changes motor zero.
 
 
 3. IMU check without GUI
@@ -187,6 +208,7 @@ q = quit
   --vy 0.00 \
   --yaw 0.00 \
   --imu-source fake \
+  --no-stand-policy-stabilization \
   --no-imu-stabilization \
   --no-gait-assist \
   --base-lin-vel-source zero \
@@ -214,15 +236,16 @@ position, x = emergency stop. Startup is idle: no auto-zero and no auto-hold.
   --feedback-source mit \
   --command-source keyboard \
   --imu-source fake \
+  --no-stand-policy-stabilization \
   --no-imu-stabilization \
   --no-gait-assist \
   --base-lin-vel-source zero \
   --start-control-mode idle \
   --startup-action hold \
-  --initial-zero-frame crouch \
+  --initial-zero-frame stand \
   --no-auto-zero-on-startup \
-  --auto-stand-zero \
-  --auto-sit-zero \
+  --no-auto-stand-zero \
+  --no-auto-sit-zero \
   --crouch-calibration-value 0.0 \
   --stand-calibration-value 0.0 \
   --policy-steps 0 \
@@ -249,7 +272,7 @@ position, x = emergency stop. Startup is idle: no auto-zero and no auto-hold.
 ------------------------------------------------------
 
 This sends real MIT commands. Walking is disabled, but after you press space
-and stand auto-zero completes, the RL policy keeps running with zero velocity
+and the stand target settles, the RL policy keeps running with zero velocity
 command. The policy receives live projected_gravity, gyro, encoder positions,
 encoder velocities, and previous_action exactly like walking mode. Use this to
 tilt/move the IMU gently and watch whether policy actions/leg targets respond.
@@ -268,10 +291,10 @@ tilt/move the IMU gently and watch whether policy actions/leg targets respond.
   --base-lin-vel-source zero \
   --start-control-mode idle \
   --startup-action hold \
-  --initial-zero-frame crouch \
+  --initial-zero-frame stand \
   --no-auto-zero-on-startup \
-  --auto-stand-zero \
-  --auto-sit-zero \
+  --no-auto-stand-zero \
+  --no-auto-sit-zero \
   --crouch-calibration-value 0.0 \
   --stand-calibration-value 0.0 \
   --policy-steps 0 \
@@ -300,12 +323,11 @@ tilt/move the IMU gently and watch whether policy actions/leg targets respond.
 ---------------------------------------------------------------------
 
 This sends real MIT commands. First full robot tests should be suspended/secured.
-After launch: press space to stand and wait for "zero_frame -> stand", then
+After launch: press space to stand and wait for "Policy walking is armed", then
 hold W/S for straight forward/back, A/D for lateral, and W+A/W+D/S+A/S+D for
 diagonal xy movement. Press up/down arrows to change speed scale. Press c to
-return to crouch/default and software-zero crouch again, h to hold current
-position, x to emergency-stop. Walking is
-blocked while the controller is in crouch-zero mode.
+return to the configured crouch pose, h to hold current position, or x to
+emergency-stop. No runtime software-zero is performed.
 These settings deliberately soften the policy command and action output for
 first tests. For simulation-match policy input, see section 12.
 
@@ -317,15 +339,16 @@ first tests. For simulation-match policy input, see section 12.
   --command-source keyboard \
   --imu-source xsens \
   --imu-port "$IMU_PORT" \
-  --imu-stabilization \
+  --stand-policy-stabilization \
+  --no-imu-stabilization \
   --no-gait-assist \
   --base-lin-vel-source zero \
   --start-control-mode idle \
   --startup-action hold \
-  --initial-zero-frame crouch \
+  --initial-zero-frame stand \
   --no-auto-zero-on-startup \
-  --auto-stand-zero \
-  --auto-sit-zero \
+  --no-auto-stand-zero \
+  --no-auto-sit-zero \
   --crouch-calibration-value 0.0 \
   --stand-calibration-value 0.0 \
   --policy-steps 0 \
@@ -358,11 +381,11 @@ first tests. For simulation-match policy input, see section 12.
 ---------------------------------------------------------------------
 
 This sends real MIT commands but uses fake upright IMU values.
-After launch: press space to stand and wait for "zero_frame -> stand", then
+After launch: press space to stand and wait for "Policy walking is armed", then
 hold W/S for straight forward/back, A/D for lateral, and W+A/W+D/S+A/S+D for
 diagonal xy movement. Press up/down arrows to change speed scale. Press c to
-return to crouch/default and software-zero crouch again, h to hold current
-position, x to emergency-stop.
+return to the configured crouch pose, h to hold current position, or x to
+emergency-stop. No runtime software-zero is performed.
 These settings deliberately soften the policy command and action output for
 first tests. For simulation-match policy input, see section 12.
 
@@ -373,15 +396,16 @@ first tests. For simulation-match policy input, see section 12.
   --feedback-source mit \
   --command-source keyboard \
   --imu-source fake \
+  --stand-policy-stabilization \
   --no-imu-stabilization \
   --no-gait-assist \
   --base-lin-vel-source zero \
   --start-control-mode idle \
   --startup-action hold \
-  --initial-zero-frame crouch \
+  --initial-zero-frame stand \
   --no-auto-zero-on-startup \
-  --auto-stand-zero \
-  --auto-sit-zero \
+  --no-auto-stand-zero \
+  --no-auto-sit-zero \
   --crouch-calibration-value 0.0 \
   --stand-calibration-value 0.0 \
   --policy-steps 0 \
@@ -419,6 +443,9 @@ caps, action clipping, and action smoothing. Keep the robot suspended/secured.
 
 Replace these switches in section 10 or 11:
 
+  --max-vx 0.80 \
+  --max-vy 0.80 \
+  --max-yaw 0.70 \
   --speed-scale-initial 1.0 \
   --speed-scale-min 1.0 \
   --speed-scale-max 1.0 \
@@ -428,11 +455,12 @@ Replace these switches in section 10 or 11:
   --policy-command-yaw-max 0.0 \
   --policy-action-clip 0.0 \
   --policy-action-smoothing 0.0 \
+  --log-every 1 \
 
-Keyboard W/S alone sends only +/-1.8 vx to the policy. A/D alone sends only
-/-0.8 vy. Combined W+A/W+D/S+A/S+D sends xy diagonal commands, matching the
-IsaacSim keyboard script. Yaw is still disabled in keyboard deploy commands
-because the current terminal control request uses only W/A/S/D.
+With the switches above, keyboard W/S sends exactly +/-0.8 vx to the policy.
+A/D sends +/-0.8 vy. Combined W+A/W+D/S+A/S+D sends xy diagonal commands,
+matching the IsaacSim keyboard script. Yaw remains disabled for terminal
+keyboard control because the current control request uses W/A/S/D only.
 
 
 13. Quick code checks after migration

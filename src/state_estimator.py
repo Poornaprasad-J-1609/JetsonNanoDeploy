@@ -18,7 +18,7 @@ class FakeStateEstimator:
       - qd_current from RobStride velocity feedback
       - base_ang_vel_b from IMU gyro
       - projected_gravity_b from IMU orientation
-      - base_lin_vel_b from velocity estimator
+      - base_lin_vel_b fixed to [0, 0, 0] for the 48-slot policy contract
     """
 
     def __init__(self, q_initial, imu_sensor=None):
@@ -42,8 +42,7 @@ class FakeStateEstimator:
             return False
 
         # The deployed policy is run with base linear velocity fixed at zero.
-        # Keep this observation term identical even when an IMU helper can
-        # estimate velocity from acceleration.
+        # Keep this observation term identical for every IMU source.
         self.base_lin_vel_b = np.zeros(3, dtype=np.float32)
         self.base_ang_vel_b = np.asarray(reading.base_ang_vel_b, dtype=np.float32).copy()
         self.projected_gravity_b = np.asarray(reading.projected_gravity_b, dtype=np.float32).copy()

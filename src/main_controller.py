@@ -207,18 +207,6 @@ def joystick_walk_requested(command, threshold):
     return bool(np.max(np.abs(command)) > float(threshold))
 
 
-def select_policy_base_lin_vel(source, estimator_base_lin_vel_b, command):
-    source = str(source).replace("-", "_").lower()
-    if source == "zero":
-        return np.zeros(3, dtype=np.float32)
-    if source == "command":
-        command = np.asarray(command, dtype=np.float32)
-        return np.array([command[0], command[1], 0.0], dtype=np.float32)
-    if source == "imu":
-        return np.asarray(estimator_base_lin_vel_b, dtype=np.float32)
-    raise ValueError(f"Unknown base linear velocity source: {source}")
-
-
 def scaled_policy_command(command, gain=1.0, vx_abs_max=0.0, vy_abs_max=0.0, yaw_abs_max=0.0):
     cmd = np.asarray(command, dtype=np.float32).copy()
     cmd *= max(0.0, float(gain))
@@ -417,6 +405,14 @@ def compact_telemetry_record(
     action=None,
     phase="policy",
     policy_command=None,
+    observation=None,
+    raw_action=None,
+    sent_action=None,
+    q_current=None,
+    qd_current=None,
+    q_target=None,
+    policy_order=None,
+    policy_sha256=None,
 ):
     command = np.asarray(command, dtype=np.float32)
     policy_command = command if policy_command is None else np.asarray(policy_command, dtype=np.float32)
@@ -447,10 +443,29 @@ def compact_telemetry_record(
         "tau_fb": None,
         "tau_fb_max": None,
         "fault_reason": "",
+        "policy_joint_order": "" if policy_order is None else ",".join(policy_order),
+        "policy_sha256": "" if policy_sha256 is None else str(policy_sha256),
     }
     if tau_fb is not None:
         record["tau_fb"] = float(tau_fb[0])
         record["tau_fb_max"] = float(tau_fb[1])
+
+    arrays = {
+        "obs": (observation, 48, 3),
+        "action": (raw_action, 12, 2),
+        "sent_action": (sent_action, 12, 2),
+        "q": (q_current, 12, 2),
+        "qd": (qd_current, 12, 2),
+        "q_target": (q_target, 12, 2),
+    }
+    for prefix, (values, count, width) in arrays.items():
+        if values is None:
+            continue
+        values = np.asarray(values, dtype=np.float32).reshape(-1)
+        if values.shape != (count,):
+            continue
+        for index, value in enumerate(values):
+            record[f"{prefix}_{index:0{width}d}"] = float(value)
     return record
 
 
@@ -531,8 +546,16 @@ class CsvRunLogger:
         "tau_fb",
         "tau_fb_max",
         "fault_reason",
+        "policy_joint_order",
+        "policy_sha256",
         "compact_line",
     ]
+    FIELDNAMES += [f"obs_{index:03d}" for index in range(48)]
+    FIELDNAMES += [f"action_{index:02d}" for index in range(12)]
+    FIELDNAMES += [f"sent_action_{index:02d}" for index in range(12)]
+    FIELDNAMES += [f"q_{index:02d}" for index in range(12)]
+    FIELDNAMES += [f"qd_{index:02d}" for index in range(12)]
+    FIELDNAMES += [f"q_target_{index:02d}" for index in range(12)]
 
     def __init__(self, enabled=True, log_dir=None, log_file=None):
         self.enabled = bool(enabled)
@@ -953,31 +976,34 @@ def constant_pose_like(runner, value):
 
 
 def stand_pose_for_zero_frame(runner, zero_frame, crouch_calibration_value, stand_calibration_value):
-    if str(zero_frame).lower() == "crouch":
-        return (
-            constant_pose_like(runner, crouch_calibration_value)
-            + runner.q_stand_when_sit_zero
-        )
+    # Hardware zero is established once with the robot standing. The RL default
+    # and stand pose therefore remain q=0 for the lifetime of the process.
     return constant_pose_like(runner, stand_calibration_value) + runner.q_stand
 
 
 def sit_pose_for_zero_frame(runner, zero_frame, crouch_calibration_value, stand_calibration_value):
-    if str(zero_frame).lower() == "crouch":
-        return constant_pose_like(runner, crouch_calibration_value)
-    # After stand auto-zero, the only target that returns exactly to the
-    # startup crouch/default pose is the inverse of the stand-from-crouch delta.
-    # This keeps c/CROUCH mathematically tied to the zero pose captured at
-    # startup instead of depending on a separately tuned YAML value drifting.
-    return constant_pose_like(runner, stand_calibration_value) - runner.q_stand_when_sit_zero
+    # crouch_pose is expressed directly in the fixed stand-zero joint frame.
+    return constant_pose_like(runner, stand_calibration_value) + runner.q_crouch
 
 
-def shifted_safety_filter(safety, q_target, q_previous, q_shift):
+def shifted_safety_filter(
+    safety,
+    q_target,
+    q_previous,
+    q_shift,
+    apply_rate_limit=True,
+):
     q_shift = np.asarray(q_shift, dtype=np.float32)
     if not np.any(np.abs(q_shift) > 1e-8):
-        return safety.safety_filter(q_target, q_previous)
+        return safety.safety_filter(
+            q_target,
+            q_previous,
+            apply_rate_limit=apply_rate_limit,
+        )
     filtered = safety.safety_filter(
         np.asarray(q_target, dtype=np.float32) - q_shift,
         np.asarray(q_previous, dtype=np.float32) - q_shift,
+        apply_rate_limit=apply_rate_limit,
     )
     return (filtered + q_shift).astype(np.float32)
 
@@ -1192,7 +1218,7 @@ def run_startup_to_stand(
                     buses=buses,
                     mode=mode,
                     feedback_timeout=feedback_timeout,
-                    q_keepalive=q_safe_target,
+                    q_keepalive=q_safe,
                     phase="startup",
                 )
         reason = encoder_safety_stop_reason(
@@ -1304,7 +1330,10 @@ def run_policy_loop(
 ):
     dt = runner.control_dt
     action_dim = len(runner.policy_order)
+    # The observation stores the previous raw actor output. A separate value is
+    # retained for optional deployment smoothing of the command actually sent.
     previous_action = np.zeros(action_dim, dtype=np.float32)
+    previous_sent_action = np.zeros(action_dim, dtype=np.float32)
 
     control_mode = start_control_mode  # options: idle, hold, policy, stand, sit
     zero_frame = str(initial_zero_frame).lower()
@@ -1321,6 +1350,9 @@ def run_policy_loop(
         auto_sit_zero and control_mode == "sit" and zero_frame == "stand"
     )
     sit_zero_settle_count = 0
+    walking_armed = control_mode == "policy"
+    stand_ready_pending = control_mode == "stand"
+    stand_ready_settle_count = 0
     calibration_hold_until_step = -1
     active_indices = active_joint_indices(runner.policy_order, motor_layer.active_joints)
 
@@ -1332,7 +1364,7 @@ def run_policy_loop(
     print("  button 4    -> STOP walking and SIT/CROUCH pose")
     print("  button 5    -> STAND pose")
     print("  buttons 0-3 -> EMERGENCY STOP")
-    print("  D-pad down / configured zero axis -> software-zero current crouch/default pose")
+    print("  D-pad zero request -> ignored while fixed hardware stand-zero is active")
     print("Joystick axes:")
     print("  left stick Y  -> forward/back vx")
     print("  left stick X  -> left/right vy")
@@ -1366,6 +1398,7 @@ def run_policy_loop(
     print("policy_action_clip:", float(policy_action_clip), "(0 disables)")
     print("policy_action_smoothing:", float(policy_action_smoothing), "(0 disables)")
     print("stand_policy_stabilization:", bool(stand_policy_stabilization))
+    print("walking_armed:", bool(walking_armed))
     print("hold_capture_seconds:", float(hold_capture_seconds))
     print("hold_command_repeats:", int(hold_command_repeats))
     print("crouch_calibration_value:", float(crouch_calibration_value))
@@ -1384,6 +1417,8 @@ def run_policy_loop(
     step = 0
     while steps is None or step < steps:
         cycle_start = time.monotonic()
+        observation_for_log = None
+        raw_action = np.zeros(action_dim, dtype=np.float32)
         (
             q_current,
             qd_current,
@@ -1728,6 +1763,7 @@ def run_policy_loop(
                 )
                 q_previous_target = q_hold.copy()
                 previous_action = np.zeros(action_dim, dtype=np.float32)
+                previous_sent_action = np.zeros(action_dim, dtype=np.float32)
                 print(
                     f"\n[FEEDBACK] hold target captured from "
                     f"{feedback_count}/{len(motor_layer.active_joints)} fresh motor angle(s)"
@@ -1769,6 +1805,15 @@ def run_policy_loop(
                     stand_zero_settle_count = 0
                     sit_zero_pending = False
                     sit_zero_settle_count = 0
+                if control_mode == "stand":
+                    walking_armed = False
+                    stand_ready_pending = True
+                    stand_ready_settle_count = 0
+                    print("[POSE] walking remains blocked until the stand target settles.")
+                elif control_mode in ("sit", "hold"):
+                    walking_armed = False
+                    stand_ready_pending = False
+                    stand_ready_settle_count = 0
                 print(f"\n[MODE CHANGE] control_mode -> {control_mode}")
 
         command = command_source.read()
@@ -1781,16 +1826,11 @@ def run_policy_loop(
             vy_abs_max=policy_command_vy_max,
             yaw_abs_max=policy_command_yaw_max,
         )
-        policy_base_lin_vel_b = select_policy_base_lin_vel(
-            base_lin_vel_source,
-            base_lin_vel_b,
-            policy_command,
-        )
         walk_requested = joystick_walk_requested(command, walk_command_threshold)
-        if zero_frame != "stand" and walk_requested:
+        if not walking_armed and walk_requested:
             walk_requested = False
             if step % max(1, log_every) == 0:
-                print("[ZERO CAL] walking blocked until STAND auto-zero completes.")
+                print("[POSE] walking blocked until STAND reaches its target.")
         if (
             walk_requested
             and not has_motion_target
@@ -1822,6 +1862,7 @@ def run_policy_loop(
         elif (
             stand_policy_stabilization
             and control_mode == "stand"
+            and walking_armed
             and zero_frame == "stand"
             and not stand_zero_pending
         ):
@@ -1903,7 +1944,6 @@ def run_policy_loop(
 
         elif active_control_mode == "policy":
             obs = runner.build_observation(
-                base_lin_vel_b=policy_base_lin_vel_b,
                 base_ang_vel_b=base_ang_vel_b,
                 projected_gravity_b=projected_gravity_b,
                 command=policy_command,
@@ -1913,9 +1953,10 @@ def run_policy_loop(
             )
 
             raw_action = runner.infer_action(obs)
+            observation_for_log = obs.copy()
             action = filtered_policy_action(
                 raw_action=raw_action,
-                previous_action=previous_action,
+                previous_action=previous_sent_action,
                 clip_abs=policy_action_clip,
                 smoothing=policy_action_smoothing,
             )
@@ -1934,6 +1975,7 @@ def run_policy_loop(
                 q_policy_target,
                 q_previous_target,
                 q_coordinate_shift,
+                apply_rate_limit=False,
             )
             commands = motor_layer.build_mit_commands(
                 q_safe_target,
@@ -2040,6 +2082,7 @@ def run_policy_loop(
                     q_previous_target = q_safe_target.copy()
                     zero_calibrated = True
                     previous_action = np.zeros(action_dim, dtype=np.float32)
+                    previous_sent_action = np.zeros(action_dim, dtype=np.float32)
                     commands = motor_layer.build_mit_commands(
                         q_safe_target,
                         phase="startup",
@@ -2050,6 +2093,31 @@ def run_policy_loop(
                     elif mode == "mit-signal":
                         motor_layer.send_signal_commands(buses, commands)
                     print("[ZERO CAL] zero_frame -> stand. Policy walking is now enabled in RL zero coordinates.")
+
+        if active_control_mode == "stand" and stand_ready_pending:
+            q_stand_target = stand_pose_for_zero_frame(
+                runner,
+                zero_frame,
+                crouch_calibration_value,
+                stand_calibration_value,
+            )
+            q_feedback = getattr(estimator, "q_current", q_safe_target)
+            command_error = max_active_error(q_safe_target, q_stand_target, active_indices)
+            feedback_error = max_active_error(q_feedback, q_stand_target, active_indices)
+            if (
+                command_error <= float(stand_zero_error_rad)
+                and feedback_error <= float(stand_zero_error_rad)
+            ):
+                stand_ready_settle_count += 1
+            else:
+                stand_ready_settle_count = 0
+            if stand_ready_settle_count >= int(stand_zero_settle_steps):
+                walking_armed = True
+                stand_ready_pending = False
+                stand_ready_settle_count = 0
+                previous_action = np.zeros(action_dim, dtype=np.float32)
+                previous_sent_action = np.zeros(action_dim, dtype=np.float32)
+                print("[POSE] stand settled. Policy walking is armed.")
 
         if active_control_mode == "sit" and sit_zero_pending:
             q_feedback = getattr(estimator, "q_current", q_safe_target)
@@ -2083,6 +2151,7 @@ def run_policy_loop(
                     q_previous_target = q_safe_target.copy()
                     zero_calibrated = True
                     previous_action = np.zeros(action_dim, dtype=np.float32)
+                    previous_sent_action = np.zeros(action_dim, dtype=np.float32)
                     commands = motor_layer.build_mit_commands(
                         q_safe_target,
                         phase="startup",
@@ -2108,6 +2177,14 @@ def run_policy_loop(
                 action=action,
                 policy_command=policy_command,
                 phase="policy",
+                observation=observation_for_log,
+                raw_action=raw_action,
+                sent_action=action,
+                q_current=q_current,
+                qd_current=qd_current,
+                q_target=q_safe_target,
+                policy_order=runner.policy_order,
+                policy_sha256=runner.policy_sha256,
             )
             print(compact_telemetry_line(telemetry_record))
             if csv_logger is not None:
@@ -2122,9 +2199,11 @@ def run_policy_loop(
         estimator.dry_update_as_if_robot_followed(q_safe_target, dt)
 
         if active_control_mode == "policy":
-            previous_action = action.copy()
+            previous_action = raw_action.copy()
+            previous_sent_action = action.copy()
         else:
             previous_action = np.zeros(action_dim, dtype=np.float32)
+            previous_sent_action = np.zeros(action_dim, dtype=np.float32)
 
         if advance_target:
             q_previous_target = q_safe_target.copy()
@@ -2172,6 +2251,11 @@ def main():
         help="only send motor commands to these joint names; default uses config/motor_ids.yaml",
     )
     parser.add_argument("--policy-path", default=None)
+    parser.add_argument(
+        "--allow-policy-hash-mismatch",
+        action="store_true",
+        help="allow an unrecognized policy SHA256 after explicit artifact verification",
+    )
     parser.add_argument(
         "--policy-activation",
         choices=["elu", "relu", "tanh", "identity", "none"],
@@ -2310,21 +2394,21 @@ def main():
     parser.add_argument("--startup-action", choices=["hold", "stand"], default="hold")
     parser.add_argument(
         "--initial-zero-frame",
-        choices=["stand", "crouch"],
-        default="crouch",
-        help="coordinate frame at startup; crouch means the current crouch/default pose is software-zeroed",
+        choices=["stand"],
+        default="stand",
+        help="fixed hardware-zero frame; use stand for policy deployment",
     )
     parser.add_argument(
         "--auto-stand-zero",
         action=argparse.BooleanOptionalAction,
-        default=True,
-        help="after standing from crouch-zero frame, make current stand pose software zero",
+        default=False,
+        help="legacy software-zero transition; keep disabled with stand hardware zero",
     )
     parser.add_argument(
         "--auto-sit-zero",
         action=argparse.BooleanOptionalAction,
-        default=True,
-        help="after sitting from stand-zero frame, make current crouch/sit pose software zero",
+        default=False,
+        help="legacy software-zero transition; keep disabled with stand hardware zero",
     )
     parser.add_argument(
         "--auto-zero-on-startup",
@@ -2414,9 +2498,9 @@ def main():
     parser.add_argument("--imu-baud", type=int, default=None)
     parser.add_argument(
         "--base-lin-vel-source",
-        choices=["command", "imu", "zero"],
-        default=str(imu_defaults.get("base_linear_velocity_source", "zero")),
-        help="policy base linear velocity input: command=[vx,vy,0], imu=sensor/estimator value, zero=[0,0,0]",
+        choices=["zero"],
+        default="zero",
+        help="fixed policy contract: observation indices 0:3 are always [0,0,0]",
     )
     parser.add_argument(
         "--imu-stabilization",
@@ -2427,7 +2511,7 @@ def main():
     parser.add_argument(
         "--stand-policy-stabilization",
         action=argparse.BooleanOptionalAction,
-        default=False,
+        default=True,
         help="after stand auto-zero, keep running the RL policy at zero command for IMU/encoder balance stabilization",
     )
     parser.add_argument(
@@ -2515,7 +2599,11 @@ def main():
     args.policy_command_yaw_max = max(0.0, float(args.policy_command_yaw_max))
     args.policy_action_clip = max(0.0, float(args.policy_action_clip))
     args.policy_action_smoothing = float(np.clip(args.policy_action_smoothing, 0.0, 0.98))
-
+    if args.auto_zero_on_startup or args.auto_stand_zero or args.auto_sit_zero:
+        parser.error(
+            "automatic software-zero transitions are disabled; set RobStride "
+            "hardware zero once in stand, then use stand_pose=0 and crouch_pose YAML targets"
+        )
     try:
         port_by_bus = resolve_port_by_bus(args)
     except ValueError as exc:
@@ -2533,6 +2621,7 @@ def main():
     runner = PolicyRunner(
         policy_path=args.policy_path,
         policy_activation=args.policy_activation,
+        allow_policy_hash_mismatch=args.allow_policy_hash_mismatch,
     )
     motion_assist_cfg = motion_assist_defaults
     if args.imu_stabilization is not None:
@@ -2641,6 +2730,8 @@ def main():
     print("Start control mode:", args.start_control_mode)
     print("Startup action:", args.startup_action)
     print("Policy:", runner.policy_path)
+    print("Policy SHA256:", runner.policy_sha256)
+    print("Policy hash verified:", runner.policy_hash_matches)
     print("Policy format:", runner.policy_format)
     print("Policy obs/actions:", runner.observation_dim, runner.action_dim)
     print("Control dt:", runner.control_dt)
@@ -2677,6 +2768,11 @@ def main():
         )
         if csv_logger.enabled:
             print("\nCSV log:", csv_logger.path)
+            print(
+                "CSV policy I/O: input=obs_000..047, "
+                "raw_output=action_00..11, sent_output=sent_action_00..11, "
+                "motor_target=q_target_00..11, feedback=q_00..11/qd_00..11"
+            )
 
         imu_sensor = create_imu_sensor(
             source=args.imu_source,

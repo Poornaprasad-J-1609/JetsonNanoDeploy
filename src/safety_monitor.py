@@ -155,14 +155,15 @@ class SafetyMonitor:
         dq = np.clip(dq, -self.dq_max, self.dq_max)
         return q_previous + dq
 
-    def safety_filter(self, q_policy_target, q_previous_target):
+    def safety_filter(self, q_policy_target, q_previous_target, apply_rate_limit=True):
         self.reload_control_limits()
         self.reload_joint_limits()
 
         q_previous_target = np.asarray(q_previous_target, dtype=np.float32)
 
         q = self.clip_q_target(q_policy_target)
-        q = self.rate_limit_q_target(q, q_previous_target)
+        if apply_rate_limit:
+            q = self.rate_limit_q_target(q, q_previous_target)
         q = self.clip_q_target(q)
         return q.astype(np.float32)
 

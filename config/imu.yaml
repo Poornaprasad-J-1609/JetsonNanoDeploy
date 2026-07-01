@@ -16,19 +16,12 @@ imu:
   stale_timeout: 0.25
   require_live: true
 
-  # Policy base linear velocity input:
-  #   zero    -> force [0, 0, 0]
-  #   command -> [joystick_vx, joystick_vy, 0]
-  #   imu     -> use the IMU/estimator base_linear_vel value
+  # Fixed 48-slot policy contract: indices 0:3 are always [0, 0, 0].
+  # Deployment does not estimate velocity or copy it from commands.
   base_linear_velocity_source: zero
 
-  # If true, the IMU reader reports base_linear_vel as [0, 0, 0].
+  # Retained for compatibility; deployment code enforces true.
   force_zero_base_linear_velocity: true
-
-  # Xsens only: integrate free acceleration to estimate base velocity.
-  # This is approximate and can drift, so keep it off unless you explicitly need it.
-  estimate_linear_velocity: false
-  velocity_decay: 0.98
 
   # Used by source: xsens. The MTData2 parser is built into src/imu_interface.py,
   # so this deploy folder has no dependency on an external absolute path.

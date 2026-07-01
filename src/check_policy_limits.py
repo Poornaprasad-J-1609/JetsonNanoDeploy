@@ -145,18 +145,11 @@ def print_control_limits():
     return command_limits
 
 
-def sample_policy(command, runner, safety, base_lin_vel_source):
+def sample_policy(command, runner, safety):
     command = np.asarray(command, dtype=np.float32)
     command_clipped = clip_command(command, load_command_limits())
-    if base_lin_vel_source == "command":
-        base_lin_vel = np.array([command_clipped[0], command_clipped[1], 0.0], dtype=np.float32)
-    elif base_lin_vel_source == "zero":
-        base_lin_vel = np.zeros(3, dtype=np.float32)
-    else:
-        raise ValueError("check script supports base_lin_vel_source command or zero")
 
     obs = runner.build_observation(
-        base_lin_vel_b=base_lin_vel,
         base_ang_vel_b=np.zeros(3, dtype=np.float32),
         projected_gravity_b=np.array([0.0, 0.0, -1.0], dtype=np.float32),
         command=command_clipped,
@@ -167,7 +160,13 @@ def sample_policy(command, runner, safety, base_lin_vel_source):
     action = runner.infer_action(obs)
     q_raw = runner.action_to_q_target(action)
     q_hard = np.clip(q_raw, safety.q_min, safety.q_max)
-    q_safe = safety.safety_filter(q_raw, runner.q_default)
+    # Main deployment preserves the trained policy target cadence. Pose modes
+    # retain dq_max_per_step, while policy mode skips only that deploy-only slew.
+    q_safe = safety.safety_filter(
+        q_raw,
+        runner.q_default,
+        apply_rate_limit=False,
+    )
     return command_clipped, action, q_raw, q_hard, q_safe
 
 
@@ -283,7 +282,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--base-lin-vel-source",
-        choices=["command", "zero"],
+        choices=["zero"],
         default="zero",
     )
     args = parser.parse_args()
@@ -300,6 +299,8 @@ def main():
     limits = load_yaml(ROOT / "config" / "joint_limits.yaml")["joint_limits"]
 
     print("Policy:", runner.policy_path)
+    print("Policy SHA256:", runner.policy_sha256)
+    print("Policy hash verified:", runner.policy_hash_matches)
     print("Observation/action dim:", runner.observation_dim, runner.action_dim)
     print("Action scale:", runner.action_scale)
     print("Control dt:", runner.control_dt)
@@ -310,8 +311,6 @@ def main():
     failures += check_pose("default_pose", runner.q_default, runner, limits)
     failures += check_pose("stand_pose", runner.q_stand, runner, limits)
     failures += check_pose("crouch_pose", runner.q_crouch, runner, limits)
-    failures += check_pose("sit_pose_when_stand_zero", runner.q_sit_when_stand_zero, runner, limits)
-    failures += check_pose("stand_pose_when_sit_zero", runner.q_stand_when_sit_zero, runner, limits)
     print_control_limits()
 
     print("\nRate limits:")
@@ -342,7 +341,6 @@ def main():
             command,
             runner,
             safety,
-            args.base_lin_vel_source,
         )
         pos_clipped = np.abs(q_hard - q_raw) > 1e-6
         rate_clipped = np.abs(q_safe - q_hard) > 1e-6
@@ -386,7 +384,8 @@ def main():
 
     print("\nOK: poses are inside limits.")
     print("OK: velocity commands are clipped to control_limits.yaml before policy observation.")
-    print("OK: safety_filter enforces configured joint position/rate limits when enabled.")
+    print("OK: policy targets preserve simulation cadence while retaining position limits.")
+    print("OK: sit/stand paths retain configured dq_max_per_step rate limits.")
     print("OK: MotorCommandLayer hard-clips every final MIT q_des to joint_limits.yaml.")
     print("OK: MIT kp/kd/v/tau parameters obey control_limits.yaml when mit_parameters.enabled is true.")
     if position_clip_count > 0:

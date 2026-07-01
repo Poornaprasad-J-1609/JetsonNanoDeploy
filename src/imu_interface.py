@@ -171,46 +171,6 @@ def projected_gravity_absolute_xsens(quat_wxyz):
     }
 
 
-def quat_array(quat_wxyz):
-    quat_wxyz = np.asarray(quat_wxyz, dtype=np.float32)
-    if quat_wxyz.shape != (4,):
-        raise ValueError("quaternion must have exactly 4 values")
-    return quat_wxyz
-
-
-def quat_conj(quat_wxyz):
-    quat_wxyz = quat_array(quat_wxyz)
-    return np.array(
-        [quat_wxyz[0], -quat_wxyz[1], -quat_wxyz[2], -quat_wxyz[3]],
-        dtype=np.float32,
-    )
-
-
-def quat_mul(a, b):
-    aw, ax, ay, az = [float(v) for v in quat_array(a)]
-    bw, bx, by, bz = [float(v) for v in quat_array(b)]
-    return np.array(
-        [
-            aw * bw - ax * bx - ay * by - az * bz,
-            aw * bx + ax * bw + ay * bz - az * by,
-            aw * by - ax * bz + ay * bw + az * bx,
-            aw * bz + ax * by - ay * bx + az * bw,
-        ],
-        dtype=np.float32,
-    )
-
-
-def quat_rotate(quat_wxyz, vec):
-    quat_wxyz = reorder_quaternion(quat_wxyz, "wxyz")
-    vec = np.asarray(vec, dtype=np.float32)
-    vec_quat = np.array([0.0, vec[0], vec[1], vec[2]], dtype=np.float32)
-    return quat_mul(quat_mul(quat_wxyz, vec_quat), quat_conj(quat_wxyz))[1:]
-
-
-def quat_rotate_inverse(quat_wxyz, vec):
-    return quat_rotate(quat_conj(quat_wxyz), vec)
-
-
 def projected_gravity_from_quaternion(quat, order="wxyz", frame="world_from_body"):
     quat_wxyz = reorder_quaternion(quat, order)
     rotation = quat_to_rotation_matrix(quat_wxyz)
@@ -361,13 +321,6 @@ class XsensBinaryImuSensor:
         self.baud = int(self.cfg.get("baud", 115200))
         self.timeout = float(self.cfg.get("timeout", 0.001))
         self.stale_timeout = float(self.cfg.get("stale_timeout", 0.25))
-        self.force_zero_base_linear_velocity = bool(
-            self.cfg.get("force_zero_base_linear_velocity", True)
-        )
-        self.estimate_linear_velocity = bool(
-            self.cfg.get("estimate_linear_velocity", False)
-        )
-        self.velocity_decay = float(self.cfg.get("velocity_decay", 0.98))
         self.sensor_to_base_rotation = np.asarray(
             self.cfg.get("sensor_to_base_rotation", np.eye(3)),
             dtype=np.float32,
@@ -382,8 +335,6 @@ class XsensBinaryImuSensor:
         self.latest_free_acc_sensor = None
         self.latest_acc_sensor = None
         self.latest_abs = None
-        self.velocity_world = np.zeros(3, dtype=np.float32)
-        self.last_velocity_time = None
         self.last_packet_time = None
 
     def open(self):
@@ -440,40 +391,6 @@ class XsensBinaryImuSensor:
         if updated:
             self.last_packet_time = time.monotonic()
 
-    def estimate_base_linear_velocity(self):
-        if (
-            self.force_zero_base_linear_velocity
-            or not self.estimate_linear_velocity
-            or self.latest_quaternion_wxyz is None
-        ):
-            return np.zeros(3, dtype=np.float32)
-
-        now = time.monotonic()
-        if self.last_velocity_time is None:
-            self.last_velocity_time = now
-            return np.zeros(3, dtype=np.float32)
-
-        dt = now - self.last_velocity_time
-        self.last_velocity_time = now
-
-        if self.latest_free_acc_sensor is not None and 0.0 < dt <= 0.2:
-            free_acc_world = quat_rotate(
-                self.latest_quaternion_wxyz,
-                self.latest_free_acc_sensor,
-            )
-            self.velocity_world += np.asarray(free_acc_world, dtype=np.float32) * dt
-            self.velocity_world *= self.velocity_decay
-
-        velocity_sensor = quat_rotate_inverse(
-            self.latest_quaternion_wxyz,
-            self.velocity_world,
-        )
-        velocity_base = self.sensor_to_base_rotation @ np.asarray(
-            velocity_sensor,
-            dtype=np.float32,
-        )
-        return np.asarray(velocity_base, dtype=np.float32)
-
     def read(self):
         if self.ser is None:
             raise RuntimeError("IMU serial port is not open")
@@ -492,7 +409,7 @@ class XsensBinaryImuSensor:
         else:
             base_ang_vel = self.sensor_to_base_rotation @ self.latest_gyro_sensor
 
-        base_lin_vel = self.estimate_base_linear_velocity()
+        base_lin_vel = np.zeros(3, dtype=np.float32)
 
         return ImuReading(
             base_ang_vel_b=np.asarray(base_ang_vel, dtype=np.float32),
@@ -528,9 +445,6 @@ class SerialImuSensor:
         self.csv_fields = list(self.cfg.get("csv_fields", ["gx", "gy", "gz", "qw", "qx", "qy", "qz"]))
         self.quaternion_order = self.cfg.get("quaternion_order", "wxyz")
         self.quaternion_frame = self.cfg.get("quaternion_frame", "world_from_body")
-        self.force_zero_base_linear_velocity = bool(
-            self.cfg.get("force_zero_base_linear_velocity", True)
-        )
         self.ser = None
 
     def open(self):
@@ -587,11 +501,7 @@ class SerialImuSensor:
                 fallback=[0.0, 0.0, -1.0],
             )
 
-        base_lin_vel = first_present(msg, ["base_lin_vel", "lin_vel", "linear_velocity"])
-        if self.force_zero_base_linear_velocity or base_lin_vel is None:
-            base_lin_vel = np.zeros(3, dtype=np.float32)
-        else:
-            base_lin_vel = as_vector3(base_lin_vel, "base_lin_vel")
+        base_lin_vel = np.zeros(3, dtype=np.float32)
 
         return ImuReading(
             base_ang_vel_b=self.scale_gyro(gyro),
@@ -630,8 +540,6 @@ class SerialImuSensor:
             )
 
         base_lin_vel = np.zeros(3, dtype=np.float32)
-        if not self.force_zero_base_linear_velocity and all(key in msg for key in ("vx", "vy", "vz")):
-            base_lin_vel = np.array([msg["vx"], msg["vy"], msg["vz"]], dtype=np.float32)
 
         return ImuReading(
             base_ang_vel_b=self.scale_gyro(gyro),

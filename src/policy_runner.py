@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import hashlib
 from pathlib import Path
 import numpy as np
 import torch
@@ -10,11 +11,36 @@ except ImportError as exc:
 
 
 ROOT = Path(__file__).resolve().parents[1]
+EXPECTED_POLICY_SHA256 = "330e02f2406e129bb6ed6ec4a6c6bcd5f80d7e7799a2ab087e81eda65d2fae69"
+EXPECTED_OBSERVATION_DIM = 48
+EXPECTED_ACTION_DIM = 12
+EXPECTED_POLICY_JOINT_ORDER = [
+    "BL_hip_joint", "BR_hip_joint", "FL_hip_joint", "FR_hip_joint",
+    "BL_thigh_joint", "BR_thigh_joint", "FL_thigh_joint", "FR_thigh_joint",
+    "BL_calf_joint", "BR_calf_joint", "FL_calf_joint", "FR_calf_joint",
+]
+EXPECTED_OBSERVATION_LAYOUT = {
+    "base_lin_vel": list(range(0, 3)),
+    "base_ang_vel": list(range(3, 6)),
+    "projected_gravity": list(range(6, 9)),
+    "command": list(range(9, 12)),
+    "joint_pos_relative": list(range(12, 24)),
+    "joint_vel": list(range(24, 36)),
+    "previous_action": list(range(36, 48)),
+}
 
 
 def load_yaml(path):
     with open(path, "r") as f:
         return yaml.safe_load(f)
+
+
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as policy_file:
+        for chunk in iter(lambda: policy_file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def activation_from_name(name):
@@ -125,66 +151,120 @@ def layout_indices(spec, values_len):
 
 
 class PolicyRunner:
-    def __init__(self, policy_path=None, policy_activation="elu"):
+    def __init__(
+        self,
+        policy_path=None,
+        policy_activation="elu",
+        allow_policy_hash_mismatch=False,
+        expected_policy_sha256=EXPECTED_POLICY_SHA256,
+    ):
         self.root = ROOT
 
         self.joint_cfg = load_yaml(self.root / "config" / "joint_map.yaml")
         self.pose_cfg = load_yaml(self.root / "config" / "default_pose.yaml")
 
         self.policy_order = self.joint_cfg["policy_to_real_order"]
+        if list(self.policy_order) != EXPECTED_POLICY_JOINT_ORDER:
+            raise ValueError(
+                "policy_to_real_order does not match the verified IsaacLab log order. "
+                f"Required {EXPECTED_POLICY_JOINT_ORDER}, got {list(self.policy_order)}"
+            )
         self.action_scale = float(self.joint_cfg["policy_action_scale"])
         self.control_dt = float(self.joint_cfg["control_dt"])
 
         self.q_default = self.pose_to_array(self.pose_cfg["default_pose"])
         self.q_stand = self.pose_to_array(self.pose_cfg["stand_pose"])
         self.q_crouch = self.pose_to_array(self.pose_cfg["crouch_pose"])
-        self.q_sit_when_stand_zero = self.pose_to_array(
-            self.pose_cfg.get("sit_pose_when_stand_zero", self.pose_cfg["crouch_pose"])
-        )
-        if "stand_pose_when_sit_zero" in self.pose_cfg:
-            self.q_stand_when_sit_zero = self.pose_to_array(
-                self.pose_cfg["stand_pose_when_sit_zero"]
-            )
-        else:
-            self.q_stand_when_sit_zero = -self.q_sit_when_stand_zero
 
         self.observation_layout = self.joint_cfg["observation_layout"]
         self.policy_path = resolve_policy_path(self.root, policy_path=policy_path)
+        if not self.policy_path.is_file():
+            raise FileNotFoundError(f"Policy file not found: {self.policy_path}")
+        self.policy_sha256 = sha256_file(self.policy_path)
+        self.expected_policy_sha256 = str(expected_policy_sha256).strip().lower()
+        self.policy_hash_matches = self.policy_sha256 == self.expected_policy_sha256
+        if not self.policy_hash_matches and not bool(allow_policy_hash_mismatch):
+            raise RuntimeError(
+                "Policy SHA256 mismatch. "
+                f"Expected {self.expected_policy_sha256}, got {self.policy_sha256} "
+                f"for {self.policy_path}. Refusing to run. Pass "
+                "--allow-policy-hash-mismatch only after verifying the artifact."
+            )
+        if not self.policy_hash_matches:
+            print(
+                "WARNING: policy SHA256 mismatch explicitly allowed: "
+                f"expected={self.expected_policy_sha256} actual={self.policy_sha256}"
+            )
         self.policy, self.policy_format = load_policy_model(
             self.policy_path,
             activation=policy_activation,
         )
         self.policy.eval()
 
-        self.observation_dim, self.action_dim = infer_linear_io_dims(self.policy)
-        if self.observation_dim is None:
-            self.observation_dim = self._probe_observation_dim()
-        if self.action_dim is None:
-            self.action_dim = len(self.policy_order)
-
-        if self.action_dim != len(self.policy_order):
+        inferred_observation_dim, inferred_action_dim = infer_linear_io_dims(self.policy)
+        if (
+            inferred_observation_dim is not None
+            and inferred_observation_dim != EXPECTED_OBSERVATION_DIM
+        ):
             raise ValueError(
-                f"Policy outputs {self.action_dim} actions, "
-                f"but policy_order has {len(self.policy_order)} joints"
+                f"Policy expects {inferred_observation_dim} observations; "
+                f"deployment requires exactly {EXPECTED_OBSERVATION_DIM}"
+            )
+        if inferred_action_dim is not None and inferred_action_dim != EXPECTED_ACTION_DIM:
+            raise ValueError(
+                f"Policy outputs {inferred_action_dim} actions; "
+                f"deployment requires exactly {EXPECTED_ACTION_DIM}"
             )
 
-    def _probe_observation_dim(self):
-        for obs_dim in (48, 45, 51, 60, 63, 66, 69, 72, 235, 240, 252):
-            obs_t = torch.zeros(1, obs_dim, dtype=torch.float32)
-            try:
-                with torch.no_grad():
-                    self.policy(obs_t)
-                return obs_dim
-            except Exception:
-                pass
-        raise ValueError("Could not infer policy observation dimension")
+        self.observation_dim = EXPECTED_OBSERVATION_DIM
+        self.action_dim = EXPECTED_ACTION_DIM
+        self._validate_observation_layout()
+        self._validate_policy_tensor_contract()
+
+        if len(self.policy_order) != EXPECTED_ACTION_DIM:
+            raise ValueError(
+                f"policy_order has {len(self.policy_order)} joints; "
+                f"deployment requires exactly {EXPECTED_ACTION_DIM}"
+            )
+
+    def _validate_observation_layout(self):
+        for field_name, expected_indices in EXPECTED_OBSERVATION_LAYOUT.items():
+            if field_name not in self.observation_layout:
+                raise ValueError(f"Observation layout is missing required field {field_name}")
+            actual_indices = layout_indices(
+                self.observation_layout[field_name],
+                len(expected_indices),
+            )
+            if actual_indices != expected_indices:
+                raise ValueError(
+                    f"Observation layout for {field_name} is {actual_indices}; "
+                    f"required {expected_indices}"
+                )
+
+    def _validate_policy_tensor_contract(self):
+        probe = torch.zeros(1, EXPECTED_OBSERVATION_DIM, dtype=torch.float32)
+        try:
+            with torch.no_grad():
+                output = self.policy(probe)
+        except Exception as exc:
+            raise ValueError(
+                f"Policy does not accept required input shape [1, {EXPECTED_OBSERVATION_DIM}]"
+            ) from exc
+        if not isinstance(output, torch.Tensor):
+            raise ValueError(f"Policy returned {type(output)!r}; expected torch.Tensor")
+        if tuple(output.shape) != (1, EXPECTED_ACTION_DIM):
+            raise ValueError(
+                f"Policy returned shape {list(output.shape)}; "
+                f"required [1, {EXPECTED_ACTION_DIM}]"
+            )
+        if not bool(torch.isfinite(output).all()):
+            raise ValueError("Policy returned NaN or Inf for a zero [1, 48] observation")
 
     def pose_to_array(self, pose_dict):
         return np.array([pose_dict[name] for name in self.policy_order], dtype=np.float32)
 
     def build_observation(
         self,
-        base_lin_vel_b,
         base_ang_vel_b,
         projected_gravity_b,
         command,
@@ -192,10 +272,11 @@ class PolicyRunner:
         qd_current,
         previous_action,
     ):
-        obs = np.zeros(self.observation_dim, dtype=np.float32)
+        obs = np.zeros(EXPECTED_OBSERVATION_DIM, dtype=np.float32)
 
         fields = {
-            "base_lin_vel": np.asarray(base_lin_vel_b, dtype=np.float32),
+            # These slots exist in training but are always literal zeros.
+            "base_lin_vel": np.zeros(3, dtype=np.float32),
             "base_ang_vel": np.asarray(base_ang_vel_b, dtype=np.float32),
             "projected_gravity": np.asarray(projected_gravity_b, dtype=np.float32),
             "command": np.asarray(command, dtype=np.float32),
@@ -205,8 +286,15 @@ class PolicyRunner:
         }
 
         for field_name, values in fields.items():
-            if field_name not in self.observation_layout:
-                continue
+            values = np.asarray(values, dtype=np.float32).reshape(-1)
+            expected_length = len(EXPECTED_OBSERVATION_LAYOUT[field_name])
+            if values.shape != (expected_length,):
+                raise ValueError(
+                    f"Observation field {field_name} has shape {list(values.shape)}; "
+                    f"required [{expected_length}]"
+                )
+            if not np.all(np.isfinite(values)):
+                raise ValueError(f"Observation field {field_name} contains NaN or Inf")
             indices = layout_indices(self.observation_layout[field_name], len(values))
             if max(indices) >= self.observation_dim:
                 raise ValueError(
@@ -215,22 +303,44 @@ class PolicyRunner:
                 )
             obs[indices] = values
 
+        if not np.array_equal(obs[0:3], np.zeros(3, dtype=np.float32)):
+            raise RuntimeError("Policy base linear velocity observation must remain exactly zero")
         return obs
 
     def infer_action(self, obs):
-        obs_t = torch.tensor(obs, dtype=torch.float32).unsqueeze(0)
+        obs = np.asarray(obs, dtype=np.float32)
+        if obs.shape != (EXPECTED_OBSERVATION_DIM,):
+            raise ValueError(
+                f"Policy observation has shape {list(obs.shape)}; "
+                f"required [{EXPECTED_OBSERVATION_DIM}]"
+            )
+        if not np.all(np.isfinite(obs)):
+            raise ValueError("Policy observation contains NaN or Inf")
+        if not np.array_equal(obs[0:3], np.zeros(3, dtype=np.float32)):
+            raise ValueError("Policy observation indices 0:3 must be exactly [0, 0, 0]")
+
+        obs_t = torch.from_numpy(obs).unsqueeze(0)
         with torch.no_grad():
             action = self.policy(obs_t).squeeze(0).cpu().numpy()
         action = action.astype(np.float32)
-        if action.shape[0] != len(self.policy_order):
+        if action.shape != (EXPECTED_ACTION_DIM,):
             raise ValueError(
-                f"Policy returned {action.shape[0]} actions, "
-                f"expected {len(self.policy_order)}"
+                f"Policy returned shape {list(action.shape)}, "
+                f"required [{EXPECTED_ACTION_DIM}]"
             )
+        if not np.all(np.isfinite(action)):
+            raise ValueError("Policy action contains NaN or Inf")
         return action
 
     def action_to_q_target(self, action):
         action = np.asarray(action, dtype=np.float32)
+        if action.shape != (EXPECTED_ACTION_DIM,):
+            raise ValueError(
+                f"Policy action has shape {list(action.shape)}; "
+                f"required [{EXPECTED_ACTION_DIM}]"
+            )
+        if not np.all(np.isfinite(action)):
+            raise ValueError("Policy action contains NaN or Inf")
         return self.q_default + self.action_scale * action
 
     def array_to_joint_dict(self, q):
@@ -241,6 +351,7 @@ class PolicyRunner:
 if __name__ == "__main__":
     runner = PolicyRunner()
     print("Loaded policy:", runner.policy_path)
+    print("Policy SHA256:", runner.policy_sha256)
     print("Policy format:", runner.policy_format)
     print("Observation dim:", runner.observation_dim)
     print("Action dim:", runner.action_dim)

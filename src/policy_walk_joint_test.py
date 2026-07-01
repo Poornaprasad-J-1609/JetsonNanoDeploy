@@ -239,6 +239,11 @@ def main():
         help="send commands for every motor ID in motor_ids.yaml; unconnected motors ignore them",
     )
     parser.add_argument("--policy-path", default=None)
+    parser.add_argument(
+        "--allow-policy-hash-mismatch",
+        action="store_true",
+        help="allow an unrecognized policy SHA256 after explicit artifact verification",
+    )
     parser.add_argument("--policy-activation", choices=["elu", "relu", "tanh", "identity", "none"], default="elu")
 
     parser.add_argument("--command-source", choices=["fixed", "joystick"], default="joystick")
@@ -341,7 +346,11 @@ def main():
     active_imu_source = str(active_imu_source).replace("-", "_").lower()
     active_imu_port = args.imu_port if args.imu_port is not None else imu_defaults.get("port")
 
-    runner = PolicyRunner(policy_path=args.policy_path, policy_activation=args.policy_activation)
+    runner = PolicyRunner(
+        policy_path=args.policy_path,
+        policy_activation=args.policy_activation,
+        allow_policy_hash_mismatch=args.allow_policy_hash_mismatch,
+    )
     safety = SafetyMonitor(runner.policy_order)
     motor_ids = load_motor_ids()
     joint_can_bus = resolve_joint_can_bus(runner.policy_order, args.can_count)
@@ -386,6 +395,8 @@ def main():
     for line in topology_lines(args.can_count, port_by_bus):
         print(line)
     print("Policy:", runner.policy_path)
+    print("Policy SHA256:", runner.policy_sha256)
+    print("Policy hash verified:", runner.policy_hash_matches)
     print("Policy obs/actions:", runner.observation_dim, runner.action_dim)
     print("Control dt:", runner.control_dt)
     print("Command source:", args.command_source)
@@ -500,7 +511,6 @@ def main():
 
             if walk_requested:
                 obs = runner.build_observation(
-                    base_lin_vel_b=np.zeros(3, dtype=np.float32),
                     base_ang_vel_b=base_ang_vel_b,
                     projected_gravity_b=projected_gravity_b,
                     command=command,

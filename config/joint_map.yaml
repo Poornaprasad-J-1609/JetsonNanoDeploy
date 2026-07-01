@@ -6,27 +6,22 @@ policy_action_scale: 0.25
 
 # Policy output/observation joint order.
 #
-# The trained IsaacLab asset was created from grallator_quadruped_isaac and its
-# articulation order is leg-grouped:
-#   FR hip/thigh/calf, FL hip/thigh/calf, RR hip/thigh/calf, RL hip/thigh/calf.
-#
-# The deploy URDF/config names the rear legs BR/BL instead of RR/RL, so the last
-# two policy legs are mapped by position:
-#   policy RR_* -> real BR_*
-#   policy RL_* -> real BL_*
+# Verified against grallator_sim_motor_log_20260701_065137.csv and policy.pt.
+# Replaying the logged 48-value observations in this order reproduces the
+# simulation actions with less than 2e-6 maximum absolute error.
 policy_to_real_order:
-  - FR_hip_joint
-  - FR_thigh_joint
-  - FR_calf_joint
-  - FL_hip_joint
-  - FL_thigh_joint
-  - FL_calf_joint
-  - BR_hip_joint
-  - BR_thigh_joint
-  - BR_calf_joint
   - BL_hip_joint
+  - BR_hip_joint
+  - FL_hip_joint
+  - FR_hip_joint
   - BL_thigh_joint
+  - BR_thigh_joint
+  - FL_thigh_joint
+  - FR_thigh_joint
   - BL_calf_joint
+  - BR_calf_joint
+  - FL_calf_joint
+  - FR_calf_joint
 
 observation_layout:
   base_lin_vel: [0, 1, 2]
