@@ -258,6 +258,11 @@ class MotorCommandLayer:
                 raise KeyError(f"Missing joint offset for active joint: {joint_name}")
             if joint_name not in self.joint_directions:
                 raise KeyError(f"Missing joint direction for active joint: {joint_name}")
+            motor_id = int(self.motor_ids[joint_name])
+            if motor_id < 0 or motor_id > 0xFF:
+                raise ValueError(
+                    f"{joint_name}: motor ID 0x{motor_id:X} is outside 8-bit range"
+                )
             resolved.append(joint_name)
 
         return resolved
@@ -307,6 +312,8 @@ class MotorCommandLayer:
             joint_limit = limits[joint_name]
             q_min = float(joint_limit["min"])
             q_max = float(joint_limit["max"])
+            if not np.all(np.isfinite([q_min, q_max])):
+                raise ValueError(f"{joint_name}: joint limits must be finite")
             if q_min > q_max:
                 raise ValueError(f"{joint_name}: min {q_min} is greater than max {q_max}")
             offset = float(self.joint_offsets[joint_name])
@@ -328,6 +335,8 @@ class MotorCommandLayer:
 
     def apply_hard_joint_limit(self, joint_name, q_des):
         self.reload_joint_limits()
+        if not np.isfinite(q_des):
+            raise ValueError(f"{joint_name}: requested joint target is NaN or Inf")
         q_min, q_max = self.hard_joint_limits[joint_name]
         shift = float(self.joint_coordinate_shifts.get(joint_name, 0.0))
         q_min += shift
@@ -401,6 +410,9 @@ class MotorCommandLayer:
 
     def apply_mit_parameter_limits(self, p_des, v_des, kp, kd, tau_ff):
         self.reload_control_limits()
+        values = np.asarray([p_des, v_des, kp, kd, tau_ff], dtype=np.float64)
+        if not np.all(np.isfinite(values)):
+            raise ValueError("MIT command parameters contain NaN or Inf")
         if not self.mit_parameter_limits_enabled:
             return p_des, v_des, kp, kd, tau_ff
 
@@ -415,11 +427,13 @@ class MotorCommandLayer:
 
     def build_mit_commands(self, q_target, phase="policy", feedback_by_joint=None):
         q_target = np.asarray(q_target, dtype=np.float32)
-        if q_target.shape[0] != len(self.policy_order):
+        if q_target.shape != (len(self.policy_order),):
             raise ValueError(
-                f"q_target has {q_target.shape[0]} values, "
-                f"expected {len(self.policy_order)}"
+                f"q_target has shape {list(q_target.shape)}, "
+                f"expected [{len(self.policy_order)}]"
             )
+        if not np.all(np.isfinite(q_target)):
+            raise ValueError("q_target contains NaN or Inf")
 
         commands = []
         feedback_by_joint = feedback_by_joint or {}

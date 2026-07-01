@@ -69,6 +69,8 @@ class SafetyMonitor:
             q_hi = float(joint_limit["max"])
             dq_step = float(joint_limit["dq_max_per_step"])
 
+            if not np.all(np.isfinite([q_lo, q_hi, dq_step])):
+                raise ValueError(f"{joint_name}: joint limits must be finite")
             if q_lo > q_hi:
                 raise ValueError(f"{joint_name}: min {q_lo} is greater than max {q_hi}")
             if dq_step < 0.0:
@@ -126,11 +128,21 @@ class SafetyMonitor:
         )
         self.encoder_report_max_joints = int(encoder.get("report_max_joints", 4))
 
-        if self.max_abs_encoder_position_rad <= 0.0:
+        if not np.isfinite(self.projected_gravity_gz_min):
+            raise ValueError("emergency.projected_gravity_gz_min must be finite")
+        if not np.isfinite(self.max_body_ang_vel_norm) or self.max_body_ang_vel_norm <= 0.0:
+            raise ValueError("emergency.max_body_ang_vel_norm must be finite and > 0")
+        if (
+            not np.isfinite(self.max_abs_encoder_position_rad)
+            or self.max_abs_encoder_position_rad <= 0.0
+        ):
             raise ValueError("encoder.max_abs_position_rad must be > 0")
-        if self.max_feedback_age_s <= 0.0:
+        if not np.isfinite(self.max_feedback_age_s) or self.max_feedback_age_s <= 0.0:
             raise ValueError("encoder.max_feedback_age_s must be > 0")
-        if self.encoder_joint_limit_margin_rad < 0.0:
+        if (
+            not np.isfinite(self.encoder_joint_limit_margin_rad)
+            or self.encoder_joint_limit_margin_rad < 0.0
+        ):
             raise ValueError("encoder.joint_limit_margin_rad must be >= 0")
         if self.encoder_report_max_joints < 1:
             raise ValueError("encoder.report_max_joints must be >= 1")
@@ -140,6 +152,13 @@ class SafetyMonitor:
 
     def clip_q_target(self, q_target):
         q_target = np.asarray(q_target, dtype=np.float32)
+        if q_target.shape != (len(self.policy_order),):
+            raise ValueError(
+                f"q_target has shape {list(q_target.shape)}; "
+                f"expected [{len(self.policy_order)}]"
+            )
+        if not np.all(np.isfinite(q_target)):
+            raise ValueError("q_target contains NaN or Inf")
         if not self.joint_position_enabled:
             return q_target
 
@@ -148,6 +167,13 @@ class SafetyMonitor:
     def rate_limit_q_target(self, q_desired, q_previous):
         q_desired = np.asarray(q_desired, dtype=np.float32)
         q_previous = np.asarray(q_previous, dtype=np.float32)
+        expected_shape = (len(self.policy_order),)
+        if q_desired.shape != expected_shape or q_previous.shape != expected_shape:
+            raise ValueError(
+                f"rate-limit targets must both have shape {list(expected_shape)}"
+            )
+        if not np.all(np.isfinite(q_desired)) or not np.all(np.isfinite(q_previous)):
+            raise ValueError("rate-limit targets contain NaN or Inf")
         if not self.joint_rate_enabled:
             return q_desired
 
@@ -172,6 +198,13 @@ class SafetyMonitor:
 
         projected_gravity_b = np.asarray(projected_gravity_b, dtype=np.float32)
         base_ang_vel_b = np.asarray(base_ang_vel_b, dtype=np.float32)
+
+        if projected_gravity_b.shape != (3,) or base_ang_vel_b.shape != (3,):
+            return True, "invalid IMU vector shape"
+        if not np.all(np.isfinite(projected_gravity_b)):
+            return True, f"invalid projected gravity: {projected_gravity_b}"
+        if not np.all(np.isfinite(base_ang_vel_b)):
+            return True, f"invalid body angular velocity: {base_ang_vel_b}"
 
         if projected_gravity_b[2] > self.projected_gravity_gz_min:
             return True, f"bad tilt: projected_gravity={projected_gravity_b}"
@@ -201,11 +234,11 @@ class SafetyMonitor:
             return False, ""
 
         q_current = np.asarray(q_current, dtype=np.float32)
-        if q_current.shape[0] != len(self.policy_order):
+        if q_current.shape != (len(self.policy_order),):
             return (
                 True,
                 "ABNORMAL ENCODER ANGLE: feedback vector has "
-                f"{q_current.shape[0]} joints, expected {len(self.policy_order)}",
+                f"shape {list(q_current.shape)}, expected [{len(self.policy_order)}]",
             )
 
         active_joints = list(active_joints or self.policy_order)
@@ -217,6 +250,26 @@ class SafetyMonitor:
 
         feedback_names = set(feedback_by_joint or {})
         require_feedback = bool(require_feedback and self.require_feedback_for_motion)
+
+        motor_faults = []
+        if feedback_by_joint is not None:
+            for name, _ in active_indices:
+                feedback = (feedback_by_joint or {}).get(name)
+                if not isinstance(feedback, dict):
+                    continue
+                try:
+                    fault_bits = int(feedback.get("fault_bits", 0))
+                except (TypeError, ValueError):
+                    fault_bits = -1
+                if fault_bits != 0:
+                    label = "invalid" if fault_bits < 0 else f"0x{fault_bits:02X}"
+                    motor_faults.append(f"{name}={label}")
+        if motor_faults:
+            shown = ", ".join(motor_faults[:self.encoder_report_max_joints])
+            if len(motor_faults) > self.encoder_report_max_joints:
+                shown += f", +{len(motor_faults) - self.encoder_report_max_joints} more"
+            return True, f"MOTOR FEEDBACK FAULT: {shown}"
+
         if require_feedback:
             missing = [name for name, _ in active_indices if name not in feedback_names]
             if missing:

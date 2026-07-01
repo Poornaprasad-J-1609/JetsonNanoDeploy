@@ -171,6 +171,10 @@ class PolicyRunner:
             )
         self.action_scale = float(self.joint_cfg["policy_action_scale"])
         self.control_dt = float(self.joint_cfg["control_dt"])
+        if not np.isfinite(self.action_scale) or self.action_scale <= 0.0:
+            raise ValueError("policy_action_scale must be finite and > 0")
+        if not np.isfinite(self.control_dt) or self.control_dt <= 0.0:
+            raise ValueError("control_dt must be finite and > 0")
 
         self.q_default = self.pose_to_array(self.pose_cfg["default_pose"])
         self.q_stand = self.pose_to_array(self.pose_cfg["stand_pose"])
@@ -261,7 +265,17 @@ class PolicyRunner:
             raise ValueError("Policy returned NaN or Inf for a zero [1, 48] observation")
 
     def pose_to_array(self, pose_dict):
-        return np.array([pose_dict[name] for name in self.policy_order], dtype=np.float32)
+        missing = [name for name in self.policy_order if name not in pose_dict]
+        if missing:
+            raise KeyError(f"Pose is missing required joint(s): {missing}")
+        pose = np.array([pose_dict[name] for name in self.policy_order], dtype=np.float32)
+        if pose.shape != (EXPECTED_ACTION_DIM,):
+            raise ValueError(
+                f"Pose has shape {list(pose.shape)}; required [{EXPECTED_ACTION_DIM}]"
+            )
+        if not np.all(np.isfinite(pose)):
+            raise ValueError("Pose contains NaN or Inf")
+        return pose
 
     def build_observation(
         self,

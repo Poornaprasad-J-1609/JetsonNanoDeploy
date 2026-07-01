@@ -1126,7 +1126,7 @@ def run_startup_to_stand(
             action=None,
             phase="startup",
         )
-        return q_previous_target
+        return q_previous_target, False
 
     print("\n" + "#" * 80)
     print("STARTUP PHASE: current pose -> STAND / DEFAULT pose")
@@ -1285,7 +1285,7 @@ def run_startup_to_stand(
         print("\nStartup phase stopped by safety fault.")
     else:
         print("\nStartup phase completed. Robot target is STAND / DEFAULT pose.")
-    return q_previous_target
+    return q_previous_target, not safety_faulted
 
 
 def run_policy_loop(
@@ -2939,7 +2939,7 @@ def main():
             print("Motor enable frames sent.")
 
         if args.startup_action == "stand":
-            q_previous_target = run_startup_to_stand(
+            q_previous_target, startup_ok = run_startup_to_stand(
                 runner=runner,
                 safety=safety,
                 motor_layer=motor_layer,
@@ -2953,6 +2953,9 @@ def main():
                 telemetry=telemetry,
                 csv_logger=csv_logger,
             )
+            if not startup_ok:
+                print("Controller aborted because startup-to-stand did not complete safely.")
+                return 1
         else:
             q_previous_target = initialize_hold_target(
                 estimator=estimator,
