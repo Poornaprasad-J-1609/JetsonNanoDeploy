@@ -445,7 +445,7 @@ Replace these switches in section 10 or 11:
 
   --max-vx 0.80 \
   --max-vy 0.80 \
-  --max-yaw 0.70 \
+  --max-yaw 0.80 \
   --speed-scale-initial 1.0 \
   --speed-scale-min 1.0 \
   --speed-scale-max 1.0 \
@@ -458,9 +458,8 @@ Replace these switches in section 10 or 11:
   --log-every 1 \
 
 With the switches above, keyboard W/S sends exactly +/-0.8 vx to the policy.
-A/D sends +/-0.8 vy. Combined W+A/W+D/S+A/S+D sends xy diagonal commands,
-matching the IsaacSim keyboard script. Yaw remains disabled for terminal
-keyboard control because the current control request uses W/A/S/D only.
+A/D sends +/-0.8 vy and Q/E sends +/-0.8 yaw. Combined movement keys send
+translation/diagonal/yaw commands matching the logged IsaacSim convention.
 
 
 13. Quick code checks after migration

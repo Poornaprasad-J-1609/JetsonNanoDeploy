@@ -39,5 +39,5 @@ command_limits:
   vx_max: 1.80
   vy_min: -0.80
   vy_max: 0.80
-  yaw_min: -0.70
-  yaw_max: 0.70
+  yaw_min: -0.80
+  yaw_max: 0.80

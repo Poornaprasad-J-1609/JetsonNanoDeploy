@@ -29,10 +29,10 @@ encoder:
   # joint-direction correction, and direction-aware 2*pi phase unwrapping.
   # If this trips, the remaining error is larger than a single-turn branch
   # correction and motion should stay blocked.
-  max_abs_position_rad: 3.5
+  max_abs_position_rad: 2.0
 
   # Also stop if measured q is outside config/joint_limits.yaml by this margin.
   # This catches bad zero positions before they become violent motion commands.
-  joint_limit_margin_rad: 0.75
+  joint_limit_margin_rad: 0.15
 
   report_max_joints: 4

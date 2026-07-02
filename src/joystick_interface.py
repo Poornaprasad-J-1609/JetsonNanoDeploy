@@ -166,6 +166,7 @@ class KeyboardCommandSource:
       w/s -> straight forward/back while the key repeats
       a/d -> left/right while the key repeats
       w+a, w+d, s+a, s+d -> diagonal xy movement
+      q/e -> yaw left/right; may be combined with translation
       up/down arrows -> increase/decrease speed scale
       c -> sit/crouch
       space -> stand
@@ -199,6 +200,8 @@ class KeyboardCommandSource:
             "s": -1.0,
             "a": -1.0,
             "d": -1.0,
+            "q": -1.0,
+            "e": -1.0,
         }
         self.command = np.zeros(3, dtype=np.float32)
         self.command_limits = load_command_limits()
@@ -219,6 +222,7 @@ class KeyboardCommandSource:
         print("  a -> left")
         print("  d -> right")
         print("  w+a/w+d/s+a/s+d -> diagonal xy movement")
+        print("  q/e -> yaw left/right; combine with w/a/s/d if needed")
         print("  up/down arrows -> increase/decrease speed scale")
         print("  c -> crouch/sit")
         print("  space -> stand")
@@ -311,7 +315,13 @@ class KeyboardCommandSource:
         elif "d" in active and "a" not in active:
             vy = -self.max_vy
 
-        self.command = np.array([vx, vy, 0.0], dtype=np.float32)
+        yaw = 0.0
+        if "q" in active and "e" not in active:
+            yaw = self.max_yaw
+        elif "e" in active and "q" not in active:
+            yaw = -self.max_yaw
+
+        self.command = np.array([vx, vy, yaw], dtype=np.float32)
 
     def _clear_motion_command(self):
         self.command = np.zeros(3, dtype=np.float32)

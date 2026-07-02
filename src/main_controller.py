@@ -1371,6 +1371,7 @@ def run_policy_loop(
     print("  right stick X -> turn/yaw")
     print("Terminal keys:")
     print("  w/s -> straight vx, a/d -> lateral vy, combine for xy diagonal")
+    print("  q/e -> positive/negative yaw; combine with translation if needed")
     print("  c -> SIT/CROUCH, space -> STAND")
     print("  up/down arrows -> increase/decrease speed scale")
     print("  h -> HOLD current position, x -> EMERGENCY STOP")
