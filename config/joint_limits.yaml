@@ -13,7 +13,7 @@
 # cross them; deployment must preserve that physical constraint.
 #
 # Conservative walking-test rate defaults:
-#   0.040 rad/step = 2.00 rad/s at 50 Hz.
+#   0.010 rad/step = 0.50 rad/s at 50 Hz.
 # Increase per-joint values only after the robot moves smoothly and all
 # encoder directions/limits are verified on hardware.
 
@@ -21,50 +21,50 @@ joint_limits:
   FL_hip_joint:
     min: -0.79
     max: 0.79
-    dq_max_per_step: 0.040
+    dq_max_per_step: 0.010
   FR_hip_joint:
     min: -0.79
     max: 0.79
-    dq_max_per_step: 0.040
+    dq_max_per_step: 0.010
   BL_hip_joint:
     min: -0.79
     max: 0.79
-    dq_max_per_step: 0.040
+    dq_max_per_step: 0.010
   BR_hip_joint:
     min: -0.79
     max: 0.79
-    dq_max_per_step: 0.040
+    dq_max_per_step: 0.010
 
   FL_thigh_joint:
     min: -1.68
     max: 1.68
-    dq_max_per_step: 0.040
+    dq_max_per_step: 0.010
   FR_thigh_joint:
     min: -1.68
     max: 1.68
-    dq_max_per_step: 0.040
+    dq_max_per_step: 0.010
   BL_thigh_joint:
     min: -1.68
     max: 1.68
-    dq_max_per_step: 0.040
+    dq_max_per_step: 0.010
   BR_thigh_joint:
     min: -1.68
     max: 1.68
-    dq_max_per_step: 0.040
+    dq_max_per_step: 0.010
 
   FL_calf_joint:
     min: 0.0
     max: 1.56
-    dq_max_per_step: 0.040
+    dq_max_per_step: 0.010
   FR_calf_joint:
     min: -1.56
     max: 0.0
-    dq_max_per_step: 0.040
+    dq_max_per_step: 0.010
   BL_calf_joint:
     min: 0.0
     max: 1.56
-    dq_max_per_step: 0.040
+    dq_max_per_step: 0.010
   BR_calf_joint:
     min: -1.56
     max: 0.0
-    dq_max_per_step: 0.040
+    dq_max_per_step: 0.010

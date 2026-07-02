@@ -34,11 +34,10 @@ policy_deployment:
   command_vx_abs_max: 0.0
   command_vy_abs_max: 0.0
   command_yaw_abs_max: 0.0
-  # 0.0 matches IsaacSim RSL-RL default no action clipping. For suspended tests,
-  # pass --policy-action-clip on the command line if you want a softer preview.
-  action_clip_abs: 0.0
-  # 0.0 matches IsaacSim. For first hanging tests, 0.20-0.35 makes motion slower.
-  action_smoothing: 0.0
+  # Real encoder/IMU mismatch can push the actor far outside its nominal range.
+  # Clip before action_scale and smooth the sent action for hardware safety.
+  action_clip_abs: 0.8
+  action_smoothing: 0.50
 
 joint_position:
   enabled: true

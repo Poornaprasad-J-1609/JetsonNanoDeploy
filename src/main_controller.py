@@ -305,27 +305,38 @@ def stand_policy_imu_correction(
     """
     previous_action = np.zeros(len(runner.policy_order), dtype=np.float32)
     zero_command = np.zeros(3, dtype=np.float32)
+    policy_cfg = cfg.get("stand_policy_imu", {})
+    policy_gyro = (
+        np.asarray(base_ang_vel_b, dtype=np.float32)
+        if bool(policy_cfg.get("use_live_gyro", False))
+        else np.zeros(3, dtype=np.float32)
+    )
+    if bool(policy_cfg.get("use_live_joint_state", False)):
+        policy_q = np.asarray(q_current, dtype=np.float32)
+        policy_qd = np.asarray(qd_current, dtype=np.float32)
+    else:
+        policy_q = runner.q_stand
+        policy_qd = np.zeros(len(runner.policy_order), dtype=np.float32)
     live_obs = runner.build_observation(
-        base_ang_vel_b=base_ang_vel_b,
+        base_ang_vel_b=policy_gyro,
         projected_gravity_b=projected_gravity_b,
         command=zero_command,
-        q_current=q_current,
-        qd_current=qd_current,
+        q_current=policy_q,
+        qd_current=policy_qd,
         previous_action=previous_action,
     )
     upright_obs = runner.build_observation(
         base_ang_vel_b=np.zeros(3, dtype=np.float32),
         projected_gravity_b=np.array([0.0, 0.0, -1.0], dtype=np.float32),
         command=zero_command,
-        q_current=q_current,
-        qd_current=qd_current,
+        q_current=policy_q,
+        qd_current=policy_qd,
         previous_action=previous_action,
     )
     live_action = runner.infer_action(live_obs)
     upright_action = runner.infer_action(upright_obs)
     delta_action = np.asarray(live_action - upright_action, dtype=np.float32)
 
-    policy_cfg = cfg.get("stand_policy_imu", {})
     gain = max(0.0, float(policy_cfg.get("gain", 1.0)))
     max_correction = max(0.0, float(policy_cfg.get("max_correction", 0.12)))
     correction = runner.action_scale * gain * delta_action
@@ -1418,8 +1429,9 @@ def run_policy_loop(
 ):
     dt = runner.control_dt
     action_dim = len(runner.policy_order)
-    # The observation stores the previous raw actor output. A separate value is
-    # retained for optional deployment smoothing of the command actually sent.
+    # Preserve the trained observation contract: slots 36:48 contain the
+    # previous raw actor output. Hardware clipping, smoothing, and target slew
+    # limiting are applied downstream without changing this policy input.
     previous_action = np.zeros(action_dim, dtype=np.float32)
     previous_sent_action = np.zeros(action_dim, dtype=np.float32)
 
@@ -2084,7 +2096,7 @@ def run_policy_loop(
                 q_policy_target,
                 q_previous_target,
                 q_coordinate_shift,
-                apply_rate_limit=False,
+                apply_rate_limit=True,
             )
             commands = motor_layer.build_mit_commands(
                 q_safe_target,

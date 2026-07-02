@@ -46,14 +46,16 @@ gains:
 
   policy:
     hip:
-      kp: 75.0
-      kd: 1.8
+      # Low suspended-test gains: enough to reveal the policy gait without
+      # aggressively loading a joint when target tracking is imperfect.
+      kp: 20.0
+      kd: 0.8
     thigh:
-      kp: 75.0
-      kd: 1.8
+      kp: 20.0
+      kd: 0.8
     calf:
-      kp: 75.0
-      kd: 1.8
+      kp: 20.0
+      kd: 0.8
 
 feedforward:
   tau_ff: 0.0

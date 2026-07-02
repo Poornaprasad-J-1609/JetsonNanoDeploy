@@ -38,6 +38,7 @@ class SafetyMonitor:
         self.max_abs_encoder_position_rad = 3.5
         self.max_feedback_age_s = 0.25
         self.encoder_joint_limit_margin_rad = 0.75
+        self.max_abs_feedback_torque = 6.0
         self.encoder_report_max_joints = 4
         self.projected_gravity_gz_min = -0.75
         self.max_body_ang_vel_norm = 8.0
@@ -126,6 +127,9 @@ class SafetyMonitor:
         self.encoder_joint_limit_margin_rad = float(
             encoder.get("joint_limit_margin_rad", 0.75)
         )
+        self.max_abs_feedback_torque = float(
+            encoder.get("max_abs_torque", 6.0)
+        )
         self.encoder_report_max_joints = int(encoder.get("report_max_joints", 4))
 
         if not np.isfinite(self.projected_gravity_gz_min):
@@ -144,6 +148,11 @@ class SafetyMonitor:
             or self.encoder_joint_limit_margin_rad < 0.0
         ):
             raise ValueError("encoder.joint_limit_margin_rad must be >= 0")
+        if (
+            not np.isfinite(self.max_abs_feedback_torque)
+            or self.max_abs_feedback_torque <= 0.0
+        ):
+            raise ValueError("encoder.max_abs_torque must be finite and > 0")
         if self.encoder_report_max_joints < 1:
             raise ValueError("encoder.report_max_joints must be >= 1")
 
@@ -269,6 +278,32 @@ class SafetyMonitor:
             if len(motor_faults) > self.encoder_report_max_joints:
                 shown += f", +{len(motor_faults) - self.encoder_report_max_joints} more"
             return True, f"MOTOR FEEDBACK FAULT: {shown}"
+
+        excessive_torque = []
+        if feedback_by_joint is not None:
+            for name, _ in active_indices:
+                feedback = (feedback_by_joint or {}).get(name)
+                if not isinstance(feedback, dict):
+                    continue
+                value = feedback.get("joint_torque", feedback.get("torque"))
+                try:
+                    torque = float(value)
+                except (TypeError, ValueError):
+                    continue
+                if not np.isfinite(torque):
+                    excessive_torque.append(f"{name}=non-finite")
+                elif abs(torque) > self.max_abs_feedback_torque:
+                    excessive_torque.append(f"{name}={torque:+.3f}")
+        if excessive_torque:
+            shown = ", ".join(excessive_torque[:self.encoder_report_max_joints])
+            if len(excessive_torque) > self.encoder_report_max_joints:
+                shown += f", +{len(excessive_torque) - self.encoder_report_max_joints} more"
+            return (
+                True,
+                "EXCESSIVE MOTOR TORQUE: "
+                + shown
+                + f"; limit={self.max_abs_feedback_torque:.3f}",
+            )
 
         if require_feedback:
             missing = [name for name, _ in active_indices if name not in feedback_names]

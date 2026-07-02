@@ -38,7 +38,12 @@ imu_posture:
 # IMU-dependent whole-leg response.
 stand_policy_imu:
   gain: 1.0
-  max_correction: 0.12
+  max_correction: 0.08
+  # Keep the stabilizer deterministic around the trained stand pose. Live
+  # joint velocity and gyro immediately after walking can otherwise drive the
+  # differential actor response into its correction cap.
+  use_live_gyro: false
+  use_live_joint_state: false
 
 gait_assist:
   # Off by default. Enable with --gait-assist for suspended one/two-leg tests

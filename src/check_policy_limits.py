@@ -384,7 +384,8 @@ def main():
 
     print("\nOK: poses are inside limits.")
     print("OK: velocity commands are clipped to control_limits.yaml before policy observation.")
-    print("OK: policy targets preserve simulation cadence while retaining position limits.")
+    print("OK: raw policy targets are inspected with position limits retained.")
+    print("OK: main_controller applies configured action filtering and joint slew limits on hardware.")
     print("OK: sit/stand paths retain configured dq_max_per_step rate limits.")
     print("OK: MotorCommandLayer hard-clips every final MIT q_des to joint_limits.yaml.")
     print("OK: MIT kp/kd/v/tau parameters obey control_limits.yaml when mit_parameters.enabled is true.")
