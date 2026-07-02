@@ -32,6 +32,14 @@ imu_posture:
     BL_calf_joint: {roll: 0.0, pitch:  0.5}
     BR_calf_joint: {roll: 0.0, pitch:  0.5}
 
+# Learned stand stabilization uses the difference between two policy passes:
+# one with live IMU gyro/gravity and one with an upright, zero-gyro IMU. This
+# cancels the policy's nonzero nominal stand action and retains only its learned
+# IMU-dependent whole-leg response.
+stand_policy_imu:
+  gain: 1.0
+  max_correction: 0.12
+
 gait_assist:
   # Off by default. Enable with --gait-assist for suspended one/two-leg tests
   # when you want to see a walking-style swing even without full body dynamics.

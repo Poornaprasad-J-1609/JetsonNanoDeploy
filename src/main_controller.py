@@ -288,6 +288,58 @@ def apply_imu_posture_stabilization(q_target, projected_gravity_b, policy_order,
     return q_target
 
 
+def stand_policy_imu_correction(
+    runner,
+    base_ang_vel_b,
+    projected_gravity_b,
+    q_current,
+    qd_current,
+    cfg,
+):
+    """Return only the actor response caused by live IMU state.
+
+    Subtracting an otherwise identical upright policy pass prevents the
+    policy's nonzero nominal stand action from moving the legs by itself.
+    Joint feedback remains present in both passes and therefore cancels from
+    the comparison except for its interaction with the IMU observation.
+    """
+    previous_action = np.zeros(len(runner.policy_order), dtype=np.float32)
+    zero_command = np.zeros(3, dtype=np.float32)
+    live_obs = runner.build_observation(
+        base_ang_vel_b=base_ang_vel_b,
+        projected_gravity_b=projected_gravity_b,
+        command=zero_command,
+        q_current=q_current,
+        qd_current=qd_current,
+        previous_action=previous_action,
+    )
+    upright_obs = runner.build_observation(
+        base_ang_vel_b=np.zeros(3, dtype=np.float32),
+        projected_gravity_b=np.array([0.0, 0.0, -1.0], dtype=np.float32),
+        command=zero_command,
+        q_current=q_current,
+        qd_current=qd_current,
+        previous_action=previous_action,
+    )
+    live_action = runner.infer_action(live_obs)
+    upright_action = runner.infer_action(upright_obs)
+    delta_action = np.asarray(live_action - upright_action, dtype=np.float32)
+
+    policy_cfg = cfg.get("stand_policy_imu", {})
+    gain = max(0.0, float(policy_cfg.get("gain", 1.0)))
+    max_correction = max(0.0, float(policy_cfg.get("max_correction", 0.12)))
+    correction = runner.action_scale * gain * delta_action
+    if max_correction > 0.0:
+        correction = np.clip(correction, -max_correction, max_correction)
+
+    return (
+        correction.astype(np.float32),
+        live_obs,
+        live_action.astype(np.float32),
+        delta_action,
+    )
+
+
 def joint_pose_sign(reference_pose_value):
     sign = float(np.sign(reference_pose_value))
     return sign if abs(sign) > 0.0 else 1.0
@@ -1897,14 +1949,6 @@ def run_policy_loop(
             active_control_mode = "sit"
         elif walk_requested:
             active_control_mode = "policy"
-        elif (
-            stand_policy_stabilization
-            and control_mode == "stand"
-            and walking_armed
-            and zero_frame == "stand"
-            and not stand_zero_pending
-        ):
-            active_control_mode = "policy"
         elif control_mode == "policy":
             active_control_mode = "hold"
         else:
@@ -1938,21 +1982,37 @@ def run_policy_loop(
                 crouch_calibration_value,
                 stand_calibration_value,
             )
-            imu_correction = imu_posture_correction(
-                projected_gravity_b=projected_gravity_b,
-                policy_order=runner.policy_order,
-                cfg=motion_assist_cfg,
+            learned_stand_stabilization_active = bool(
+                stand_policy_stabilization
+                and walking_armed
+                and zero_frame == "stand"
+                and not stand_zero_pending
             )
-            imu_correction_abs_max = float(np.max(np.abs(imu_correction)))
-            q_policy_target = apply_motion_assists(
-                q_target=q_policy_target,
-                command=policy_command,
-                elapsed_time=step * dt,
-                projected_gravity_b=projected_gravity_b,
-                runner=runner,
-                cfg=motion_assist_cfg,
-                use_gait=False,
-            )
+            action = np.zeros(action_dim, dtype=np.float32)
+            if learned_stand_stabilization_active:
+                (
+                    imu_correction,
+                    observation_for_log,
+                    raw_action,
+                    action,
+                ) = stand_policy_imu_correction(
+                    runner=runner,
+                    base_ang_vel_b=base_ang_vel_b,
+                    projected_gravity_b=projected_gravity_b,
+                    q_current=q_current,
+                    qd_current=qd_current,
+                    cfg=motion_assist_cfg,
+                )
+                q_policy_target = q_policy_target + imu_correction
+                imu_correction_abs_max = float(np.max(np.abs(imu_correction)))
+            elif not stand_policy_stabilization:
+                imu_correction = imu_posture_correction(
+                    projected_gravity_b=projected_gravity_b,
+                    policy_order=runner.policy_order,
+                    cfg=motion_assist_cfg,
+                )
+                imu_correction_abs_max = float(np.max(np.abs(imu_correction)))
+                q_policy_target = q_policy_target + imu_correction
             q_safe_target = shifted_safety_filter(
                 safety,
                 q_policy_target,
@@ -1964,7 +2024,6 @@ def run_policy_loop(
                 phase="startup",
                 feedback_by_joint=getattr(estimator, "last_feedback_by_joint", None),
             )
-            action = np.zeros(action_dim, dtype=np.float32)
 
         elif active_control_mode == "sit":
             q_policy_target = sit_pose_for_zero_frame(
@@ -2167,7 +2226,13 @@ def run_policy_loop(
                 stand_ready_settle_count = 0
                 previous_action = np.zeros(action_dim, dtype=np.float32)
                 previous_sent_action = np.zeros(action_dim, dtype=np.float32)
-                print("[POSE] stand settled. Policy walking is armed.")
+                if stand_policy_stabilization:
+                    print(
+                        "[POSE] stand settled. Differential RL IMU stabilization "
+                        "is active; policy walking is armed."
+                    )
+                else:
+                    print("[POSE] stand settled. Policy walking is armed.")
 
         if active_control_mode == "sit" and sit_zero_pending:
             q_feedback = getattr(estimator, "q_current", q_safe_target)
@@ -2563,7 +2628,10 @@ def main():
         "--stand-policy-stabilization",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="after stand auto-zero, keep running the RL policy at zero command for IMU/encoder balance stabilization",
+        help=(
+            "after stand settles, apply only the difference between live-IMU "
+            "and upright-IMU RL actions; cancels nominal policy motion"
+        ),
     )
     parser.add_argument(
         "--gait-assist",

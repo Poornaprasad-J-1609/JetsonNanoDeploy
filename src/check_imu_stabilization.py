@@ -12,6 +12,7 @@ from main_controller import (
     load_motion_assist_config,
     load_motor_ids,
     projected_gravity_to_roll_pitch,
+    stand_policy_imu_correction,
 )
 from motor_command_layer import MotorCommandLayer
 from policy_runner import PolicyRunner
@@ -125,6 +126,50 @@ def main():
 
     print("\nIMU STABILIZATION DRY CHECK OK")
     print("Upright is neutral; roll/pitch signs are symmetric; targets obey limits and motor directions.")
+
+    print("\nDIFFERENTIAL RL STAND STABILIZATION")
+    learned = {}
+    zero3 = np.zeros(3, dtype=np.float32)
+    zero12 = np.zeros(len(runner.policy_order), dtype=np.float32)
+    for label, roll_deg, pitch_deg in cases[:5]:
+        gravity = gravity_for_tilt(roll_deg=roll_deg, pitch_deg=pitch_deg)
+        correction, _, _, delta_action = stand_policy_imu_correction(
+            runner=runner,
+            base_ang_vel_b=zero3,
+            projected_gravity_b=gravity,
+            q_current=runner.q_stand,
+            qd_current=zero12,
+            cfg=cfg,
+        )
+        requested = runner.q_stand + correction
+        settled = settle_through_safety(safety, requested, runner.q_stand)
+        commands = layer.build_mit_commands(settled, phase="startup")
+        learned[label] = correction
+        if not np.all(np.isfinite(correction)):
+            raise AssertionError(f"{label}: differential RL correction is non-finite")
+        if np.any(settled < safety.q_min - 1e-6) or np.any(settled > safety.q_max + 1e-6):
+            raise AssertionError(f"{label}: differential RL target escaped limits")
+        for command in commands:
+            expected = command["offset"] + command["direction"] * command["q_des"]
+            if abs(float(command["p_base"]) - float(expected)) > 1e-7:
+                raise AssertionError(f"{label}: differential RL motor conversion mismatch")
+        print(
+            f"{label:9s} delta_action_max={np.max(np.abs(delta_action)):.4f} "
+            f"joint_corr_max={np.max(np.abs(correction)):.4f}"
+        )
+
+    if np.max(np.abs(learned["upright"])) > 1e-7:
+        raise AssertionError("upright differential RL correction must be exactly zero")
+    for positive, negative in (("roll+5", "roll-5"), ("pitch+5", "pitch-5")):
+        norm_product = float(np.linalg.norm(learned[positive]) * np.linalg.norm(learned[negative]))
+        opposition = float(np.dot(learned[positive], -learned[negative]) / norm_product)
+        if opposition < 0.90:
+            raise AssertionError(f"{positive}/{negative}: learned responses do not oppose")
+        if np.max(np.abs(learned[positive])) < 0.02:
+            raise AssertionError(f"{positive}: learned correction is too small")
+        print(f"  {positive}/{negative} opposition={opposition:.3f}")
+
+    print("DIFFERENTIAL RL STAND STABILIZATION OK")
     return 0
 
 
