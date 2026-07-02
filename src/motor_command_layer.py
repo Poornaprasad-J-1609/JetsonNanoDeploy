@@ -226,7 +226,8 @@ class MotorCommandLayer:
         self.feedforward = self.cfg["feedforward"]
         communication_cfg = self.cfg.get("communication", {})
         self.frame_gap_s = float(communication_cfg.get("frame_gap_s", 0.0))
-        self.batch_writes = bool(communication_cfg.get("batch_writes", True))
+        self.batch_writes = bool(communication_cfg.get("batch_writes", False))
+        self.group_flush = bool(communication_cfg.get("group_flush", True))
         self.joint_offsets = self.offset_cfg["joint_offsets"]
         self.joint_directions = self._load_joint_directions()
         self.active_joints = self.resolve_active_joints(active_joints)
@@ -644,11 +645,20 @@ class MotorCommandLayer:
             return []
 
         def send_items(bus, items):
-            if self.batch_writes and hasattr(bus, "send_raw_batch"):
-                frames = [
-                    (cmd["can_id"], cmd["data"])
-                    for _, cmd in items
+            frames = [
+                (cmd["can_id"], cmd["data"])
+                for _, cmd in items
+            ]
+            if self.group_flush and hasattr(bus, "send_raw_sequence"):
+                packets = bus.send_raw_sequence(
+                    frames,
+                    frame_gap_s=self.frame_gap_s,
+                )
+                return [
+                    (index, packet)
+                    for (index, _), packet in zip(items, packets)
                 ]
+            if self.batch_writes and hasattr(bus, "send_raw_batch"):
                 packets = bus.send_raw_batch(frames)
                 return [
                     (index, packet)

@@ -27,11 +27,11 @@ startup:
   standup_seconds: 3.0
 
 communication:
-  # Batch all packets for each CAN adapter into one serial write/flush. Twelve
-  # individual USB flushes reduced the measured policy loop to about 12.5 Hz;
-  # the exported policy requires its trained 50 Hz timing.
-  batch_writes: true
-  # Retained for adapters without batch support.
+  # This AT USB-CAN adapter drops motor polls when six encoded packets are
+  # concatenated into one write. Keep each AT packet distinct and paced, but
+  # flush only once after each CAN bus group to avoid the old 12-flush delay.
+  batch_writes: false
+  group_flush: true
   frame_gap_s: 0.0010
 
 gains:

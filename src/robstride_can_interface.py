@@ -79,6 +79,25 @@ class ATUsbCan:
             )
         return packets
 
+    def send_raw_sequence(self, frames, frame_gap_s=0.0):
+        """Write separately paced AT packets, then flush the serial port once."""
+        if self.ser is None:
+            raise RuntimeError("Serial port is not open")
+
+        packets = [make_at_packet(can_id, data) for can_id, data in frames]
+        for index, packet in enumerate(packets):
+            written = self.ser.write(packet)
+            if written != len(packet):
+                raise IOError(
+                    f"Short USB-CAN packet write on {self.port}: "
+                    f"wrote {written}/{len(packet)} bytes"
+                )
+            if frame_gap_s > 0.0 and index + 1 < len(packets):
+                time.sleep(float(frame_gap_s))
+        if packets:
+            self.ser.flush()
+        return packets
+
     def _pop_frames_from_rx_buffer(self):
         frames = []
 
