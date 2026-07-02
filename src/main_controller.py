@@ -2390,6 +2390,15 @@ def main():
         default="elu",
         help="activation to use when loading non-TorchScript actor checkpoints",
     )
+    parser.add_argument(
+        "--control-hz",
+        type=float,
+        default=0.0,
+        help=(
+            "runtime controller update rate; 0 uses the policy's trained rate "
+            "(50 Hz). Use 25 only for conservative suspended testing"
+        ),
+    )
 
     parser.add_argument("--command-source", choices=["fixed", "joystick", "keyboard"], default="joystick")
 
@@ -2730,6 +2739,10 @@ def main():
     args.policy_command_yaw_max = max(0.0, float(args.policy_command_yaw_max))
     args.policy_action_clip = max(0.0, float(args.policy_action_clip))
     args.policy_action_smoothing = float(np.clip(args.policy_action_smoothing, 0.0, 0.98))
+    if not np.isfinite(args.control_hz) or args.control_hz < 0.0:
+        parser.error("--control-hz must be finite and >= 0")
+    if 0.0 < args.control_hz < 10.0 or args.control_hz > 100.0:
+        parser.error("--control-hz must be 0 or within 10..100 Hz")
     if args.auto_zero_on_startup or args.auto_stand_zero or args.auto_sit_zero:
         parser.error(
             "automatic software-zero transitions are disabled; set RobStride "
@@ -2754,6 +2767,11 @@ def main():
         policy_activation=args.policy_activation,
         allow_policy_hash_mismatch=args.allow_policy_hash_mismatch,
     )
+    trained_control_dt = float(runner.control_dt)
+    trained_control_hz = 1.0 / trained_control_dt
+    if args.control_hz > 0.0:
+        runner.control_dt = 1.0 / float(args.control_hz)
+    runtime_control_hz = 1.0 / float(runner.control_dt)
     motion_assist_cfg = motion_assist_defaults
     if args.imu_stabilization is not None:
         motion_assist_cfg.setdefault("imu_posture", {})["enabled"] = bool(args.imu_stabilization)
@@ -2865,7 +2883,17 @@ def main():
     print("Policy hash verified:", runner.policy_hash_matches)
     print("Policy format:", runner.policy_format)
     print("Policy obs/actions:", runner.observation_dim, runner.action_dim)
-    print("Control dt:", runner.control_dt)
+    print(
+        "Control rate:",
+        f"runtime={runtime_control_hz:.2f} Hz",
+        f"dt={runner.control_dt:.4f}s",
+        f"trained={trained_control_hz:.2f} Hz",
+    )
+    if not np.isclose(runtime_control_hz, trained_control_hz):
+        print(
+            "WARNING: runtime control rate differs from policy training; "
+            "use only for suspended motion testing."
+        )
     for line in topology_lines(args.can_count, port_by_bus):
         print(line)
     print("Baud:", args.baud)
