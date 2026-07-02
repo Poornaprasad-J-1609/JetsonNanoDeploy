@@ -20,7 +20,11 @@ try:
 except ImportError as exc:
     raise ImportError("Install PyYAML first: pip3 install pyyaml") from exc
 
-from motor_command_layer import MotorCommandLayer, float_to_uint
+from motor_command_layer import (
+    MotorCommandLayer,
+    float_to_uint,
+    motor_position_to_joint_angle,
+)
 from robstride_can_interface import CanFrame
 from state_estimator import MitFeedbackStateEstimator
 from can_topology import bus_names_for_count, resolve_joint_can_bus
@@ -243,10 +247,22 @@ def assert_duplicate_id_feedback_mapping(policy_order, motor_ids, joint_can_bus,
     q_b = -0.234
     offset_a = float(duplicate_layer.joint_offsets[joint_a])
     offset_b = float(duplicate_layer.joint_offsets[joint_b])
+    direction_a = float(duplicate_layer.joint_directions[joint_a])
+    direction_b = float(duplicate_layer.joint_directions[joint_b])
     motor_id = int(duplicate_motor_ids[joint_a])
     frames = [
-        make_feedback_frame(bus_a, motor_id, duplicate_layer.proto, q_a + offset_a),
-        make_feedback_frame(bus_b, motor_id, duplicate_layer.proto, q_b + offset_b),
+        make_feedback_frame(
+            bus_a,
+            motor_id,
+            duplicate_layer.proto,
+            offset_a + direction_a * q_a,
+        ),
+        make_feedback_frame(
+            bus_b,
+            motor_id,
+            duplicate_layer.proto,
+            offset_b + direction_b * q_b,
+        ),
     ]
     count = estimator.update_from_frames(frames)
     if count != 2:
@@ -283,10 +299,17 @@ def assert_software_zero_calibration(policy_order, motor_ids, joint_can_bus):
     )
 
     raw_crouch = 0.73
+    direction = float(layer.joint_directions[joint])
+    offset = float(layer.joint_offsets[joint])
     estimator.update_from_frames([
         make_feedback_frame(bus_name, motor_id, layer.proto, raw_crouch)
     ])
-    if abs(float(estimator.q_current[index]) - raw_crouch) > 0.004:
+    expected_q = motor_position_to_joint_angle(
+        raw_crouch,
+        offset=offset,
+        direction=direction,
+    )
+    if abs(float(estimator.q_current[index]) - expected_q) > 0.004:
         raise AssertionError("raw feedback should be used before software zero calibration")
 
     updated, missing = estimator.apply_software_zero(active_joints=[joint])
@@ -302,7 +325,7 @@ def assert_software_zero_calibration(policy_order, motor_ids, joint_can_bus):
         phase="policy",
         feedback_by_joint=estimator.last_feedback_by_joint,
     )
-    expected_p = raw_crouch + float(q_target[index])
+    expected_p = raw_crouch + direction * float(q_target[index])
     if len(commands) != 1 or abs(float(commands[0]["p_des"]) - expected_p) > 0.010:
         raise AssertionError("MIT command did not remain continuous after software zero")
 

@@ -3,8 +3,10 @@
 #   motor_command = joint_direction * target_from_policy_or_pose + offset
 #
 # Keep offsets zero first. Tune one motor at a time only after checking direction.
-# If the checker shows a joint angle decreasing when you physically move that
-# joint in the positive policy direction, flip only that joint_direction to -1.
+# The IsaacSim/USD hip and thigh convention is positive counter-clockwise,
+# while the deployed encoders report those joints positive clockwise. Their
+# -1 direction maps both feedback and commands into the policy coordinate frame.
+# Calf encoders already match the trained convention and remain +1.
 
 joint_offsets:
   FL_hip_joint: 0.0
@@ -23,15 +25,15 @@ joint_offsets:
   BR_calf_joint: 0.0
 
 joint_directions:
-  FL_hip_joint: 1.0
-  FR_hip_joint: 1.0
-  BL_hip_joint: 1.0
-  BR_hip_joint: 1.0
+  FL_hip_joint: -1.0
+  FR_hip_joint: -1.0
+  BL_hip_joint: -1.0
+  BR_hip_joint: -1.0
 
-  FL_thigh_joint: 1.0
-  FR_thigh_joint: 1.0
-  BL_thigh_joint: 1.0
-  BR_thigh_joint: 1.0
+  FL_thigh_joint: -1.0
+  FR_thigh_joint: -1.0
+  BL_thigh_joint: -1.0
+  BR_thigh_joint: -1.0
 
   FL_calf_joint: 1.0
   FR_calf_joint: 1.0
