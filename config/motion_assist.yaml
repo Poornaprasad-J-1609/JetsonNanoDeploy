@@ -5,10 +5,13 @@ imu_posture:
   # Adds a small roll/pitch correction from projected_gravity on top of stand
   # and policy targets. Disable with --no-imu-stabilization.
   enabled: false
-  roll_kp: 0.12
-  pitch_kp: 0.08
-  max_roll_correction: 0.08
-  max_pitch_correction: 0.06
+  # A 5 degree tilt now requests about 0.031 rad of roll correction and
+  # 0.026 rad of pitch correction. The previous values (0.010/0.007 rad)
+  # were valid but too small to observe reliably on the real mechanism.
+  roll_kp: 0.35
+  pitch_kp: 0.30
+  max_roll_correction: 0.12
+  max_pitch_correction: 0.10
 
   # q += roll_gain * roll_correction + pitch_gain * pitch_correction
   # Signs are robot-calibration dependent. If tilt correction pushes the wrong

@@ -235,17 +235,20 @@ def filtered_policy_action(raw_action, previous_action, clip_abs=0.0, smoothing=
 def projected_gravity_to_roll_pitch(projected_gravity_b):
     g = np.asarray(projected_gravity_b, dtype=np.float32)
     down_z = max(1e-6, -float(g[2]))
-    roll = float(np.arctan2(float(g[1]), down_z))
-    pitch = float(np.arctan2(-float(g[0]), down_z))
+    # projected_gravity_b = R_world_from_body.T @ [0, 0, -1]. Therefore a
+    # positive body roll produces negative gravity-Y, and positive pitch
+    # produces positive gravity-X. These signs match IsaacLab and the Xsens
+    # world-from-body quaternion conversion in imu_interface.py.
+    roll = float(np.arctan2(-float(g[1]), down_z))
+    pitch = float(np.arctan2(float(g[0]), down_z))
     return roll, pitch
 
 
-def apply_imu_posture_stabilization(q_target, projected_gravity_b, policy_order, cfg):
+def imu_posture_correction(projected_gravity_b, policy_order, cfg):
     imu_cfg = cfg.get("imu_posture", {})
     if not bool(imu_cfg.get("enabled", False)):
-        return q_target
+        return np.zeros(len(policy_order), dtype=np.float32)
 
-    q_target = np.asarray(q_target, dtype=np.float32).copy()
     roll, pitch = projected_gravity_to_roll_pitch(projected_gravity_b)
     roll_corr = float(
         np.clip(
@@ -263,12 +266,24 @@ def apply_imu_posture_stabilization(q_target, projected_gravity_b, policy_order,
     )
 
     gains = imu_cfg.get("joint_gains", {})
+    correction = np.zeros(len(policy_order), dtype=np.float32)
     for index, joint_name in enumerate(policy_order):
         joint_gain = gains.get(joint_name, {})
-        q_target[index] += (
+        correction[index] = (
             float(joint_gain.get("roll", 0.0)) * roll_corr
             + float(joint_gain.get("pitch", 0.0)) * pitch_corr
         )
+
+    return correction
+
+
+def apply_imu_posture_stabilization(q_target, projected_gravity_b, policy_order, cfg):
+    q_target = np.asarray(q_target, dtype=np.float32).copy()
+    q_target += imu_posture_correction(
+        projected_gravity_b=projected_gravity_b,
+        policy_order=policy_order,
+        cfg=cfg,
+    )
 
     return q_target
 
@@ -413,6 +428,7 @@ def compact_telemetry_record(
     q_target=None,
     policy_order=None,
     policy_sha256=None,
+    imu_correction_abs_max=0.0,
 ):
     command = np.asarray(command, dtype=np.float32)
     policy_command = command if policy_command is None else np.asarray(policy_command, dtype=np.float32)
@@ -420,6 +436,11 @@ def compact_telemetry_record(
     bus_counts = command_bus_counts(commands)
     tau_fb = feedback_torque_stats(estimator)
     action_abs_max = 0.0 if action is None else float(np.max(np.abs(action)))
+    gravity = np.asarray(
+        getattr(estimator, "projected_gravity_b", [0.0, 0.0, -1.0]),
+        dtype=np.float32,
+    )
+    imu_roll, imu_pitch = projected_gravity_to_roll_pitch(gravity)
 
     record = {
         "phase": str(phase),
@@ -435,6 +456,12 @@ def compact_telemetry_record(
         "policy_yaw": float(policy_command[2]),
         "speed": float(command_speed_scale(command_source)),
         "imu": estimator_imu_status(estimator),
+        "gravity_x": float(gravity[0]),
+        "gravity_y": float(gravity[1]),
+        "gravity_z": float(gravity[2]),
+        "imu_roll_deg": float(np.degrees(imu_roll)),
+        "imu_pitch_deg": float(np.degrees(imu_pitch)),
+        "imu_correction_abs_max": float(imu_correction_abs_max),
         "act_max": action_abs_max,
         "tau_cmd": tau_cmd_mean,
         "tau_cmd_max": tau_cmd_max,
@@ -479,6 +506,9 @@ def compact_telemetry_line(record):
         f"yaw={float(record['yaw']): .3f} "
         f"speed={float(record['speed']):.2f} "
         f"imu={record['imu']} "
+        f"tilt_rp=[{float(record.get('imu_roll_deg', 0.0)):+.1f},"
+        f"{float(record.get('imu_pitch_deg', 0.0)):+.1f}]deg "
+        f"imu_corr={float(record.get('imu_correction_abs_max', 0.0)):.3f} "
         f"act_max={float(record['act_max']): .3f} "
         f"tau_cmd={float(record['tau_cmd']): .3f} "
         f"tau_cmd_max={float(record['tau_cmd_max']): .3f} "
@@ -538,6 +568,12 @@ class CsvRunLogger:
         "policy_yaw",
         "speed",
         "imu",
+        "gravity_x",
+        "gravity_y",
+        "gravity_z",
+        "imu_roll_deg",
+        "imu_pitch_deg",
+        "imu_correction_abs_max",
         "act_max",
         "tau_cmd",
         "tau_cmd_max",
@@ -1420,6 +1456,7 @@ def run_policy_loop(
         cycle_start = time.monotonic()
         observation_for_log = None
         raw_action = np.zeros(action_dim, dtype=np.float32)
+        imu_correction_abs_max = 0.0
         (
             q_current,
             qd_current,
@@ -1901,6 +1938,12 @@ def run_policy_loop(
                 crouch_calibration_value,
                 stand_calibration_value,
             )
+            imu_correction = imu_posture_correction(
+                projected_gravity_b=projected_gravity_b,
+                policy_order=runner.policy_order,
+                cfg=motion_assist_cfg,
+            )
+            imu_correction_abs_max = float(np.max(np.abs(imu_correction)))
             q_policy_target = apply_motion_assists(
                 q_target=q_policy_target,
                 command=policy_command,
@@ -1962,6 +2005,12 @@ def run_policy_loop(
                 smoothing=policy_action_smoothing,
             )
             q_policy_target = runner.action_to_q_target(action)
+            imu_correction = imu_posture_correction(
+                projected_gravity_b=projected_gravity_b,
+                policy_order=runner.policy_order,
+                cfg=motion_assist_cfg,
+            )
+            imu_correction_abs_max = float(np.max(np.abs(imu_correction)))
             q_policy_target = apply_motion_assists(
                 q_target=q_policy_target,
                 command=policy_command,
@@ -2186,6 +2235,7 @@ def run_policy_loop(
                 q_target=q_safe_target,
                 policy_order=runner.policy_order,
                 policy_sha256=runner.policy_sha256,
+                imu_correction_abs_max=imu_correction_abs_max,
             )
             print(compact_telemetry_line(telemetry_record))
             if csv_logger is not None:
