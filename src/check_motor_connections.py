@@ -326,7 +326,7 @@ def print_table(
             )
         if crouch_enabled:
             actions.append(
-                f"'{crouch_key}' = save current encoder angles as YAML crouch_pose"
+                f"'{crouch_key}' = save current sign-corrected joint angles as YAML crouch_pose"
             )
         actions.append(f"'{quit_key}' = quit")
         print("Keys: " + "; ".join(actions))
@@ -521,9 +521,15 @@ def capture_crouch_pose(
         return "CROUCH capture refused; joint limit violation: " + "; ".join(violations[:4])
 
     path, backup_path = update_default_pose_yaml({"crouch_pose": angles})
+    ordered_joints = connection_display_order(list(angles), motor_ids)
+    saved_values = "\n".join(
+        f"  {joint_name:20s} joint_rad={angles[joint_name]:+.6f}"
+        for joint_name in ordered_joints
+    )
     return (
-        f"CROUCH pose saved for {len(angles)} joint(s) to {path}; "
-        f"backup={backup_path}"
+        f"CROUCH pose saved from sign-corrected joint radians for "
+        f"{len(angles)} joint(s):\n{saved_values}\n"
+        f"YAML: {path}; backup={backup_path}"
     )
 
 
@@ -725,7 +731,7 @@ def main():
     parser.add_argument("--set-zero-key", default="s",
                         help="keyboard key that sends RobStride set-zero to active joints")
     parser.add_argument("--crouch-key", default="c",
-                        help="keyboard key that saves current feedback as config/default_pose.yaml crouch_pose")
+                        help="keyboard key that saves current sign-corrected joint feedback as config/default_pose.yaml crouch_pose")
     parser.add_argument("--quit-key", default="q", help="keyboard key that quits the checker")
     parser.add_argument("--set-zero-cooldown", type=float, default=1.0,
                         help="minimum seconds between repeated set-zero keypresses")
