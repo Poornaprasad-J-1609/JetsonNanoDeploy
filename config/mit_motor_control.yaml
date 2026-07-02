@@ -27,9 +27,11 @@ startup:
   standup_seconds: 3.0
 
 communication:
-  # Manual gait scripts use a short gap between RobStride frames.
-  # 1 ms matches the working manual gait scripts and keeps a 12-motor command
-  # batch near one 20 ms control tick without over-driving the serial adapters.
+  # Batch all packets for each CAN adapter into one serial write/flush. Twelve
+  # individual USB flushes reduced the measured policy loop to about 12.5 Hz;
+  # the exported policy requires its trained 50 Hz timing.
+  batch_writes: true
+  # Retained for adapters without batch support.
   frame_gap_s: 0.0010
 
 gains:

@@ -226,6 +226,7 @@ class MotorCommandLayer:
         self.feedforward = self.cfg["feedforward"]
         communication_cfg = self.cfg.get("communication", {})
         self.frame_gap_s = float(communication_cfg.get("frame_gap_s", 0.0))
+        self.batch_writes = bool(communication_cfg.get("batch_writes", True))
         self.joint_offsets = self.offset_cfg["joint_offsets"]
         self.joint_directions = self._load_joint_directions()
         self.active_joints = self.resolve_active_joints(active_joints)
@@ -642,14 +643,29 @@ class MotorCommandLayer:
         if not commands:
             return []
 
-        if not isinstance(buses, dict):
-            sent = []
-            for cmd in commands:
-                pkt = buses.send_raw(cmd["can_id"], cmd["data"])
-                sent.append(pkt)
+        def send_items(bus, items):
+            if self.batch_writes and hasattr(bus, "send_raw_batch"):
+                frames = [
+                    (cmd["can_id"], cmd["data"])
+                    for _, cmd in items
+                ]
+                packets = bus.send_raw_batch(frames)
+                return [
+                    (index, packet)
+                    for (index, _), packet in zip(items, packets)
+                ]
+
+            results = []
+            for index, cmd in items:
+                packet = bus.send_raw(cmd["can_id"], cmd["data"])
+                results.append((index, packet))
                 if self.frame_gap_s > 0.0:
                     time.sleep(self.frame_gap_s)
-            return sent
+            return results
+
+        if not isinstance(buses, dict):
+            indexed = list(enumerate(commands))
+            return [packet for _, packet in send_items(buses, indexed)]
 
         grouped = {}
         group_order = []
@@ -667,23 +683,14 @@ class MotorCommandLayer:
         if len(group_order) == 1:
             bus = grouped[group_order[0]]["bus"]
             sent = [None] * len(commands)
-            for index, cmd in grouped[group_order[0]]["items"]:
-                sent[index] = bus.send_raw(cmd["can_id"], cmd["data"])
-                if self.frame_gap_s > 0.0:
-                    time.sleep(self.frame_gap_s)
+            for index, packet in send_items(bus, grouped[group_order[0]]["items"]):
+                sent[index] = packet
             return sent
 
         sent = [None] * len(commands)
 
         def send_group(group):
-            bus = group["bus"]
-            results = []
-            for index, cmd in group["items"]:
-                pkt = bus.send_raw(cmd["can_id"], cmd["data"])
-                results.append((index, pkt))
-                if self.frame_gap_s > 0.0:
-                    time.sleep(self.frame_gap_s)
-            return results
+            return send_items(group["bus"], group["items"])
 
         with ThreadPoolExecutor(max_workers=len(group_order)) as executor:
             futures = [executor.submit(send_group, grouped[key]) for key in group_order]

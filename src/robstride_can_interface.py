@@ -61,6 +61,24 @@ class ATUsbCan:
         self.ser.flush()
         return pkt
 
+    def send_raw_batch(self, frames):
+        """Write multiple complete AT packets with one USB serial flush."""
+        if self.ser is None:
+            raise RuntimeError("Serial port is not open")
+
+        packets = [make_at_packet(can_id, data) for can_id, data in frames]
+        if not packets:
+            return []
+        payload = b"".join(packets)
+        written = self.ser.write(payload)
+        self.ser.flush()
+        if written != len(payload):
+            raise IOError(
+                f"Short USB-CAN batch write on {self.port}: "
+                f"wrote {written}/{len(payload)} bytes"
+            )
+        return packets
+
     def _pop_frames_from_rx_buffer(self):
         frames = []
 
