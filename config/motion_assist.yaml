@@ -8,12 +8,14 @@ imu_posture:
   # Ignore mounting vibration near level and filter the command over several
   # control cycles. This path is for quasi-static feet-on-ground leveling.
   deadband_deg: 0.5
-  correction_smoothing: 0.90
+  correction_smoothing: 0.75
 
-  roll_kp: 0.25
-  pitch_kp: 0.22
-  max_roll_correction: 0.04
-  max_pitch_correction: 0.035
+  # Visible but still torque-limited body-leveling motion. At 5 degrees this
+  # requests roughly 0.047 rad roll and 0.039 rad pitch joint correction.
+  roll_kp: 0.60
+  pitch_kp: 0.50
+  max_roll_correction: 0.10
+  max_pitch_correction: 0.08
 
   # q += roll_gain * roll_correction + pitch_gain * pitch_correction
   # Signs are robot-calibration dependent. If tilt correction pushes the wrong
