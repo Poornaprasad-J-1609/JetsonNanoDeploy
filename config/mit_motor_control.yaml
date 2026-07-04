@@ -59,6 +59,19 @@ gains:
       kp: 20.0
       kd: 0.8
 
+  # Direct IMU body-leveling gains. Stand-up itself continues to use the
+  # startup gains above; these take over only after stand has settled.
+  leveling:
+    hip:
+      kp: 18.0
+      kd: 0.6
+    thigh:
+      kp: 18.0
+      kd: 0.6
+    calf:
+      kp: 18.0
+      kd: 0.6
+
 feedforward:
   tau_ff: 0.0
   v_des: 0.0

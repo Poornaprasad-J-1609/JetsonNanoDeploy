@@ -38,6 +38,10 @@ policy_deployment:
   # Clip before action_scale and smooth the sent action for hardware safety.
   action_clip_abs: 0.8
   action_smoothing: 0.50
+  # Before packing a walking MIT command, constrain its estimated joint-space
+  # PD torque around fresh encoder feedback. The independent measured-feedback
+  # emergency stop remains at 6.0 in safety_limits.yaml.
+  estimated_pd_torque_limit: 4.0
 
 joint_position:
   enabled: true
@@ -47,6 +51,9 @@ joint_rate:
 
 mit_parameters:
   enabled: true
+  # Direct IMU leveling is constrained before MIT packet generation. Measured
+  # feedback still has the independent 6.0 emergency threshold.
+  leveling_pd_torque_limit: 2.0
   p_min: -12.5
   p_max: 12.5
   v_min: -30.0

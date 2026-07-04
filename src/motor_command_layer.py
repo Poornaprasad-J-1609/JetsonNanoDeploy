@@ -217,6 +217,8 @@ class MotorCommandLayer:
         self.joint_limit_mtime_ns = None
         self.mit_parameter_limits_enabled = True
         self.mit_parameter_limits = {}
+        self.policy_pd_torque_limit = 0.0
+        self.leveling_pd_torque_limit = 0.0
         self.hard_joint_limits = {}
 
         self.cfg = load_yaml(ROOT / "config" / "mit_motor_control.yaml")
@@ -275,7 +277,18 @@ class MotorCommandLayer:
             return False
 
         cfg = load_yaml(self.control_limit_path)
+        policy_cfg = cfg.get("policy_deployment", {})
+        self.policy_pd_torque_limit = float(
+            policy_cfg.get("estimated_pd_torque_limit", 0.0)
+        )
+        if not np.isfinite(self.policy_pd_torque_limit) or self.policy_pd_torque_limit < 0.0:
+            raise ValueError("policy_deployment.estimated_pd_torque_limit must be finite and >= 0")
         mit_cfg = cfg.get("mit_parameters", {})
+        self.leveling_pd_torque_limit = float(
+            mit_cfg.get("leveling_pd_torque_limit", 0.0)
+        )
+        if not np.isfinite(self.leveling_pd_torque_limit) or self.leveling_pd_torque_limit < 0.0:
+            raise ValueError("mit_parameters.leveling_pd_torque_limit must be finite and >= 0")
         self.mit_parameter_limits_enabled = bool(mit_cfg.get("enabled", True))
         self.mit_parameter_limits = {
             "p_min": float(mit_cfg.get("p_min", self.proto["p_min"])),
@@ -428,6 +441,7 @@ class MotorCommandLayer:
         )
 
     def build_mit_commands(self, q_target, phase="policy", feedback_by_joint=None):
+        self.reload_control_limits()
         q_target = np.asarray(q_target, dtype=np.float32)
         if q_target.shape != (len(self.policy_order),):
             raise ValueError(
@@ -443,6 +457,12 @@ class MotorCommandLayer:
         if phase not in self.gains:
             raise ValueError(f"Unknown phase {phase}. Expected one of {list(self.gains.keys())}")
 
+        phase_torque_limit = 0.0
+        if phase == "policy":
+            phase_torque_limit = self.policy_pd_torque_limit
+        elif phase == "leveling":
+            phase_torque_limit = self.leveling_pd_torque_limit
+
         for joint_name in self.active_joints:
             i = self.policy_index_by_joint[joint_name]
             motor_id = int(self.motor_ids[joint_name])
@@ -456,10 +476,56 @@ class MotorCommandLayer:
             tau_ff = float(self.feedforward["tau_ff"])
             q_requested = float(q_target[i])
             q_des = self.apply_hard_joint_limit(joint_name, q_requested)
-            p_base = offset + direction * q_des
             feedback = feedback_by_joint.get(joint_name, {})
             feedback_position = feedback.get("position") if isinstance(feedback, dict) else None
             feedback_joint_position = feedback.get("joint_position") if isinstance(feedback, dict) else None
+            feedback_joint_velocity = feedback.get("joint_velocity") if isinstance(feedback, dict) else None
+            q_before_torque_limit = q_des
+            torque_limited = False
+            tau_pd_est = None
+            if (
+                phase_torque_limit > 0.0
+                and feedback_joint_position is not None
+                and feedback_joint_velocity is not None
+                and np.all(np.isfinite([feedback_joint_position, feedback_joint_velocity]))
+                and kp > 0.0
+            ):
+                q_feedback = float(feedback_joint_position)
+                qd_feedback = float(feedback_joint_velocity)
+                joint_v_des = direction * v_des
+                joint_tau_ff = direction * tau_ff
+                velocity_and_ff_torque = kd * (joint_v_des - qd_feedback) + joint_tau_ff
+                position_torque = kp * (q_des - q_feedback)
+                position_torque = float(np.clip(
+                    position_torque,
+                    -phase_torque_limit - velocity_and_ff_torque,
+                    phase_torque_limit - velocity_and_ff_torque,
+                ))
+                q_des = self.apply_hard_joint_limit(
+                    joint_name,
+                    q_feedback + position_torque / kp,
+                )
+                tau_pd_est = (
+                    kp * (q_des - q_feedback)
+                    + velocity_and_ff_torque
+                )
+                torque_limited = abs(q_des - q_before_torque_limit) > 1e-7
+
+            if (
+                tau_pd_est is None
+                and feedback_joint_position is not None
+                and feedback_joint_velocity is not None
+                and np.all(np.isfinite([feedback_joint_position, feedback_joint_velocity]))
+            ):
+                q_feedback = float(feedback_joint_position)
+                qd_feedback = float(feedback_joint_velocity)
+                tau_pd_est = (
+                    kp * (q_des - q_feedback)
+                    + kd * (direction * v_des - qd_feedback)
+                    + direction * tau_ff
+                )
+
+            p_base = offset + direction * q_des
             p_des = motor_command_position_near_feedback(
                 q_des=q_des,
                 offset=offset,
@@ -494,6 +560,9 @@ class MotorCommandLayer:
                 "phase": phase,
                 "q_des": q_des_sent,
                 "q_requested": q_requested,
+                "q_before_torque_limit": q_before_torque_limit,
+                "torque_limited": torque_limited,
+                "tau_pd_est": tau_pd_est,
                 "offset": offset,
                 "direction": direction,
                 "p_des": p_des,

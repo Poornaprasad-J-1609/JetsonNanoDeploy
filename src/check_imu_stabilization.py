@@ -121,7 +121,7 @@ def main():
     for positive, negative in (("roll+5", "roll-5"), ("pitch+5", "pitch-5")):
         if not np.allclose(corrections[positive], -corrections[negative], atol=1e-7):
             raise AssertionError(f"{positive}/{negative}: corrections are not symmetric")
-        if np.max(np.abs(corrections[positive])) < 0.02:
+        if np.max(np.abs(corrections[positive])) < 0.01:
             raise AssertionError(f"{positive}: correction is too small to observe")
 
     print("\nIMU STABILIZATION DRY CHECK OK")

@@ -250,6 +250,16 @@ def imu_posture_correction(projected_gravity_b, policy_order, cfg):
         return np.zeros(len(policy_order), dtype=np.float32)
 
     roll, pitch = projected_gravity_to_roll_pitch(projected_gravity_b)
+    deadband = np.radians(max(0.0, float(imu_cfg.get("deadband_deg", 0.0))))
+
+    def apply_deadband(value):
+        magnitude = abs(float(value))
+        if magnitude <= deadband:
+            return 0.0
+        return float(np.sign(value) * (magnitude - deadband))
+
+    roll = apply_deadband(roll)
+    pitch = apply_deadband(pitch)
     roll_corr = float(
         np.clip(
             float(imu_cfg.get("roll_kp", 0.0)) * roll,
@@ -434,7 +444,13 @@ def command_torque_stats(commands):
     if not commands:
         return 0.0, 0.0
 
-    tau = np.asarray([float(cmd["tau_ff"]) for cmd in commands], dtype=np.float32)
+    tau_values = []
+    for cmd in commands:
+        value = cmd.get("tau_pd_est")
+        if value is None or not np.isfinite(value):
+            value = cmd["tau_ff"]
+        tau_values.append(float(value))
+    tau = np.asarray(tau_values, dtype=np.float32)
     return float(np.abs(tau).mean()), float(np.abs(tau).max())
 
 
@@ -540,13 +556,22 @@ def compact_telemetry_record(
         record["tau_fb"] = float(tau_fb[0])
         record["tau_fb_max"] = float(tau_fb[1])
 
+    q_target_sent = q_target
+    if q_target is not None and policy_order is not None and commands:
+        q_target_sent = np.asarray(q_target, dtype=np.float32).copy()
+        index_by_joint = {name: index for index, name in enumerate(policy_order)}
+        for command_item in commands:
+            index = index_by_joint.get(command_item.get("joint_name"))
+            if index is not None and "q_des" in command_item:
+                q_target_sent[index] = float(command_item["q_des"])
+
     arrays = {
         "obs": (observation, 48, 3),
         "action": (raw_action, 12, 2),
         "sent_action": (sent_action, 12, 2),
         "q": (q_current, 12, 2),
         "qd": (qd_current, 12, 2),
-        "q_target": (q_target, 12, 2),
+        "q_target": (q_target_sent, 12, 2),
     }
     for prefix, (values, count, width) in arrays.items():
         if values is None:
@@ -1434,6 +1459,7 @@ def run_policy_loop(
     # limiting are applied downstream without changing this policy input.
     previous_action = np.zeros(action_dim, dtype=np.float32)
     previous_sent_action = np.zeros(action_dim, dtype=np.float32)
+    direct_leveling_correction = np.zeros(action_dim, dtype=np.float32)
 
     control_mode = start_control_mode  # options: idle, hold, policy, stand, sit
     zero_frame = str(initial_zero_frame).lower()
@@ -1994,6 +2020,7 @@ def run_policy_loop(
                 crouch_calibration_value,
                 stand_calibration_value,
             )
+            stand_command_phase = "startup"
             learned_stand_stabilization_active = bool(
                 stand_policy_stabilization
                 and walking_armed
@@ -2017,14 +2044,30 @@ def run_policy_loop(
                 )
                 q_policy_target = q_policy_target + imu_correction
                 imu_correction_abs_max = float(np.max(np.abs(imu_correction)))
-            elif not stand_policy_stabilization:
-                imu_correction = imu_posture_correction(
+            elif not stand_policy_stabilization and walking_armed:
+                requested_leveling_correction = imu_posture_correction(
                     projected_gravity_b=projected_gravity_b,
                     policy_order=runner.policy_order,
                     cfg=motion_assist_cfg,
                 )
+                smoothing = float(np.clip(
+                    motion_assist_cfg.get("imu_posture", {}).get(
+                        "correction_smoothing",
+                        0.0,
+                    ),
+                    0.0,
+                    0.98,
+                ))
+                direct_leveling_correction = (
+                    smoothing * direct_leveling_correction
+                    + (1.0 - smoothing) * requested_leveling_correction
+                ).astype(np.float32)
+                imu_correction = direct_leveling_correction.copy()
                 imu_correction_abs_max = float(np.max(np.abs(imu_correction)))
                 q_policy_target = q_policy_target + imu_correction
+                stand_command_phase = "leveling"
+            elif not stand_policy_stabilization:
+                direct_leveling_correction.fill(0.0)
             q_safe_target = shifted_safety_filter(
                 safety,
                 q_policy_target,
@@ -2033,7 +2076,7 @@ def run_policy_loop(
             )
             commands = motor_layer.build_mit_commands(
                 q_safe_target,
-                phase="startup",
+                phase=stand_command_phase,
                 feedback_by_joint=getattr(estimator, "last_feedback_by_joint", None),
             )
 
@@ -2244,7 +2287,10 @@ def run_policy_loop(
                         "is active; policy walking is armed."
                     )
                 else:
-                    print("[POSE] stand settled. Policy walking is armed.")
+                    print(
+                        "[POSE] stand settled. Direct IMU body leveling is "
+                        "active; policy walking is armed."
+                    )
 
         if active_control_mode == "sit" and sit_zero_pending:
             q_feedback = getattr(estimator, "q_current", q_safe_target)

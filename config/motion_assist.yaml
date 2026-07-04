@@ -5,13 +5,15 @@ imu_posture:
   # Adds a small roll/pitch correction from projected_gravity on top of stand
   # and policy targets. Disable with --no-imu-stabilization.
   enabled: false
-  # A 5 degree tilt now requests about 0.031 rad of roll correction and
-  # 0.026 rad of pitch correction. The previous values (0.010/0.007 rad)
-  # were valid but too small to observe reliably on the real mechanism.
-  roll_kp: 0.35
-  pitch_kp: 0.30
-  max_roll_correction: 0.12
-  max_pitch_correction: 0.10
+  # Ignore mounting vibration near level and filter the command over several
+  # control cycles. This path is for quasi-static feet-on-ground leveling.
+  deadband_deg: 0.5
+  correction_smoothing: 0.90
+
+  roll_kp: 0.25
+  pitch_kp: 0.22
+  max_roll_correction: 0.04
+  max_pitch_correction: 0.035
 
   # q += roll_gain * roll_correction + pitch_gain * pitch_correction
   # Signs are robot-calibration dependent. If tilt correction pushes the wrong
@@ -22,14 +24,16 @@ imu_posture:
     BL_hip_joint: {roll: -1.0, pitch: 0.0}
     BR_hip_joint: {roll:  1.0, pitch: 0.0}
 
-    FL_thigh_joint: {roll: 0.0, pitch: -1.0}
+    # Left and right flexion coordinates are mirrored in the deployed URDF
+    # frame. These signs flex the high end and extend the low end of the base.
+    FL_thigh_joint: {roll: 0.0, pitch:  1.0}
     FR_thigh_joint: {roll: 0.0, pitch: -1.0}
-    BL_thigh_joint: {roll: 0.0, pitch:  1.0}
+    BL_thigh_joint: {roll: 0.0, pitch: -1.0}
     BR_thigh_joint: {roll: 0.0, pitch:  1.0}
 
-    FL_calf_joint: {roll: 0.0, pitch: -0.5}
+    FL_calf_joint: {roll: 0.0, pitch:  0.5}
     FR_calf_joint: {roll: 0.0, pitch: -0.5}
-    BL_calf_joint: {roll: 0.0, pitch:  0.5}
+    BL_calf_joint: {roll: 0.0, pitch: -0.5}
     BR_calf_joint: {roll: 0.0, pitch:  0.5}
 
 # Learned stand stabilization uses the difference between two policy passes:
