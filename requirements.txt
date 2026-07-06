@@ -15,6 +15,9 @@ pyserial>=3.5
 pygame>=2.5
 torch>=2.0
 Pillow>=9.5
+python-can>=4.3
+tqdm>=4.65
+robstride-dynamics==0.0.1
 
 # pygame 2.6.x imports pkg_resources; this keeps that compatibility stable.
 setuptools<81

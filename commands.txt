@@ -83,6 +83,48 @@ ls -l /dev/ttyUSB* /dev/input/js* /dev/input/event* 2>/dev/null
 /usr/bin/python3 src/check_can_routing.py --can-count 4
 
 
+14. Official RobStride SocketCAN hardware-zero verification
+-----------------------------------------------------------
+
+This path requires SocketCAN interfaces such as can0/can1. It does not work
+with the older serial AT adapters exposed only as /dev/ttyUSB*. Install the
+official SDK dependencies, bring both 1 Mbps CAN channels up, and verify them:
+
+/usr/bin/python3 -m pip install -r requirements.txt
+
+sudo ip link set can0 down 2>/dev/null || true
+sudo ip link set can0 type can bitrate 1000000
+sudo ip link set can0 up
+
+sudo ip link set can1 down 2>/dev/null || true
+sudo ip link set can1 type can bitrate 1000000
+sudo ip link set can1 up
+
+ip -details link show can0
+ip -details link show can1
+
+Place every motor at the intended physical zero pose. Run the official raw
+reader and enter s only after all 12 MECHANICAL_POSITION reads are connected:
+
+/usr/bin/python3 src/robstride_official_zero.py \
+  --can-count 2 \
+  --channels can0 can1 \
+  --model rs-04
+
+Power motors off and back on. Do not press s again. Verify persisted raw zero:
+
+/usr/bin/python3 src/robstride_official_zero.py \
+  --can-count 2 \
+  --channels can0 can1 \
+  --model rs-04 \
+  --read-only
+
+The utility logs raw official mechanical position, measured position,
+mechanical offset, and zero state under logs/robstride_official_zero_*.csv.
+It deliberately performs no software-zero, direction conversion, pose snap,
+or modulo/2*pi correction.
+
+
 2. Joystick connection test
 ---------------------------
 
