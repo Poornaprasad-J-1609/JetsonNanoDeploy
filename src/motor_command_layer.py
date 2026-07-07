@@ -177,6 +177,7 @@ class MotorCommandLayer:
         self.mit_parameter_limits_enabled = True
         self.mit_parameter_limits = {}
         self.policy_pd_torque_limit = 0.0
+        self.startup_pd_torque_limit = 0.0
         self.leveling_pd_torque_limit = 0.0
         self.hard_joint_limits = {}
 
@@ -255,6 +256,11 @@ class MotorCommandLayer:
         if not np.isfinite(self.policy_pd_torque_limit) or self.policy_pd_torque_limit < 0.0:
             raise ValueError("policy_deployment.estimated_pd_torque_limit must be finite and >= 0")
         mit_cfg = cfg.get("mit_parameters", {})
+        self.startup_pd_torque_limit = float(
+            mit_cfg.get("startup_pd_torque_limit", 0.0)
+        )
+        if not np.isfinite(self.startup_pd_torque_limit) or self.startup_pd_torque_limit < 0.0:
+            raise ValueError("mit_parameters.startup_pd_torque_limit must be finite and >= 0")
         self.leveling_pd_torque_limit = float(
             mit_cfg.get("leveling_pd_torque_limit", 0.0)
         )
@@ -432,7 +438,9 @@ class MotorCommandLayer:
             raise ValueError(f"Unknown phase {phase}. Expected one of {list(self.gains.keys())}")
 
         phase_torque_limit = 0.0
-        if phase == "policy":
+        if phase == "startup":
+            phase_torque_limit = self.startup_pd_torque_limit
+        elif phase == "policy":
             phase_torque_limit = self.policy_pd_torque_limit
         elif phase == "leveling":
             phase_torque_limit = self.leveling_pd_torque_limit
