@@ -1,0 +1,39 @@
+default_pose:
+  BL_hip_joint: 0.0
+  BR_hip_joint: 0.0
+  FL_hip_joint: 0.0
+  FR_hip_joint: 0.0
+  BL_thigh_joint: 0.0
+  BR_thigh_joint: 0.0
+  FL_thigh_joint: 0.0
+  FR_thigh_joint: 0.0
+  BL_calf_joint: 0.0
+  BR_calf_joint: 0.0
+  FL_calf_joint: 0.0
+  FR_calf_joint: 0.0
+stand_pose:
+  BL_hip_joint: 0.0
+  BR_hip_joint: 0.0
+  FL_hip_joint: 0.0
+  FR_hip_joint: 0.0
+  BL_thigh_joint: 0.0
+  BR_thigh_joint: 0.0
+  FL_thigh_joint: 0.0
+  FR_thigh_joint: 0.0
+  BL_calf_joint: 0.0
+  BR_calf_joint: 0.0
+  FL_calf_joint: 0.0
+  FR_calf_joint: 0.0
+crouch_pose:
+  BL_hip_joint: 0.0
+  BR_hip_joint: 0.0
+  FL_hip_joint: 0.0
+  FR_hip_joint: 0.0
+  BL_thigh_joint: 0.3
+  BR_thigh_joint: -0.3
+  FL_thigh_joint: 0.3
+  FR_thigh_joint: -0.3
+  BL_calf_joint: 1.0
+  BR_calf_joint: -1.0
+  FL_calf_joint: 1.0
+  FR_calf_joint: -1.0
