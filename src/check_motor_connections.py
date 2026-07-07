@@ -150,32 +150,11 @@ def feedback_joint_position(joint_name, layer, feedback, reference=None, pose_re
         return float(feedback["joint_position"])
     offset = float(layer.joint_offsets.get(joint_name, 0.0))
     direction = float(layer.joint_directions.get(joint_name, 1.0))
-    references = []
-    if pose_references is not None:
-        references.extend(pose_references.get(joint_name, []))
-    if reference is not None:
-        references.insert(0, reference)
     return motor_position_to_joint_angle(
         feedback["position"],
         offset=offset,
         direction=direction,
-        references=references,
-        pose_snap_tolerance=POSE_SNAP_TOLERANCE_RAD if pose_references is not None else 0.0,
     )
-
-
-def infer_initial_pose_reference(
-    joints,
-    motor_ids,
-    joint_can_bus,
-    layer,
-    poses,
-    feedback_by_bus_motor_id,
-    feedback_by_motor_id,
-    branch_offsets,
-    stale_seconds,
-):
-    return None
 
 
 def resolve_feedback_joint_positions(
@@ -187,7 +166,6 @@ def resolve_feedback_joint_positions(
     poses,
     feedback_by_bus_motor_id,
     feedback_by_motor_id,
-    branch_offsets,
     joint_positions,
     stale_seconds,
 ):
@@ -215,9 +193,6 @@ def resolve_feedback_joint_positions(
             offset=offset,
             direction=direction,
         )
-        position_unwrapped = offset + direction * q_joint
-        branch_offsets[joint_name] = raw_position - position_unwrapped
-
         joint_positions[joint_name] = q_joint
         velocity_raw = float(feedback["velocity"])
         torque_raw = float(feedback["torque"])
@@ -229,7 +204,6 @@ def resolve_feedback_joint_positions(
         feedback["joint_torque"] = direction * torque_raw
         feedback["velocity"] = direction * velocity_raw
         feedback["torque"] = direction * torque_raw
-        feedback["position_branch_offset"] = float(branch_offsets[joint_name])
         feedback["joint_direction"] = direction
 
 
@@ -742,7 +716,7 @@ def main():
     parser.add_argument("--set-zero-yaml", action=argparse.BooleanOptionalAction, default=True,
                         help="when pressing set-zero, also write default_pose and stand_pose")
     parser.add_argument("--set-zero-value-rad", type=float, default=0.0,
-                        help="joint value assigned after pressing set-zero; default is true 0.0 rad")
+                        help="legacy compatibility option; hardware set-zero requires 0.0")
     parser.add_argument("--gui", action="store_true",
                         help="launch telemetry GUI and stream encoder values only")
     parser.add_argument("--gui-only", action="store_true",
@@ -752,6 +726,8 @@ def main():
     parser.add_argument("--no-clear", action="store_true",
                         help="do not clear/redraw the terminal table")
     args = parser.parse_args()
+    if not np.isclose(float(args.set_zero_value_rad), 0.0):
+        parser.error("--set-zero-value-rad must be 0.0 for persistent motor hardware zero")
     if args.gui_only:
         args.gui = True
 
@@ -794,20 +770,30 @@ def main():
         return 1
     poll_commands = layer.build_feedback_poll_commands()
     set_zero_commands = layer.build_set_zero_commands()
+    save_parameter_commands = layer.build_save_parameter_commands()
     set_zero_key = (args.set_zero_key or "s")[0].lower()
     crouch_key = (args.crouch_key or "c")[0].lower()
     quit_key = (args.quit_key or "q")[0].lower()
 
-    print("Opening RobStride AT USB-CAN adapters...")
+    print("Opening RobStride CAN interfaces...")
     for line in topology_lines(args.can_count, port_by_bus):
         print(line)
-    print(f"baud={args.baud}")
+    print(
+        f"backend={args.can_backend} bitrate={args.can_bitrate} "
+        f"serial_baud={args.baud}"
+    )
     print("Checking joints (FR, FL, BR, BL; ascending motor ID within each leg):")
     for joint_name in display_joints:
         bus_name = joint_can_bus.get(joint_name, "front")
         print(f"  {joint_name:20s} -> 0x{int(motor_ids[joint_name]):02X}  [{bus_name}]")
 
-    buses = open_can_buses(active_port_by_bus, baud=args.baud, timeout=0.002)
+    buses = open_can_buses(
+        active_port_by_bus,
+        baud=args.baud,
+        timeout=0.002,
+        backend=args.can_backend,
+        bitrate=args.can_bitrate,
+    )
 
     gui_proc = None
     telemetry_sock = None
@@ -818,7 +804,6 @@ def main():
 
     feedback_by_bus_motor_id = {}
     feedback_by_motor_id = {}
-    branch_offsets = {}
     joint_positions = {joint_name: 0.0 for joint_name in layer.active_joints}
     active_bus_motor_keys = {
         (joint_can_bus.get(name, "front"), int(motor_ids[name]))
@@ -846,28 +831,29 @@ def main():
                         break
                     if key == set_zero_key and set_zero_enabled:
                         if now - last_set_zero_time >= max(0.0, args.set_zero_cooldown):
+                            layer.send_raw_commands(buses, layer.build_stop_commands())
+                            time.sleep(0.02)
                             layer.send_raw_commands(buses, set_zero_commands)
+                            time.sleep(0.02)
+                            layer.send_raw_commands(buses, save_parameter_commands)
                             last_set_zero_time = now
-                            branch_offsets.clear()
                             joint_positions = {
-                                joint_name: float(args.set_zero_value_rad)
+                                joint_name: 0.0
                                 for joint_name in layer.active_joints
                             }
-                            for joint_name in layer.active_joints:
-                                direction = float(layer.joint_directions.get(joint_name, 1.0))
-                                layer.joint_offsets[joint_name] = -direction * float(args.set_zero_value_rad)
                             feedback_by_bus_motor_id.clear()
                             feedback_by_motor_id.clear()
                             status_message = (
-                                f"SET ZERO sent to {len(set_zero_commands)} active motor(s) "
+                                f"PERSISTENT MOTOR ZERO and SAVE sent to "
+                                f"{len(set_zero_commands)} active motor(s) "
                                 f"at {time.strftime('%H:%M:%S')}; "
-                                f"local q={float(args.set_zero_value_rad):+.3f} rad"
+                                "joint q=+0.000 rad; no software offset applied"
                             )
                             if args.set_zero_yaml:
                                 try:
                                     yaml_status = set_stand_default_yaml_value(
                                         layer.active_joints,
-                                        args.set_zero_value_rad,
+                                        0.0,
                                     )
                                     status_message += "\n" + yaml_status
                                 except Exception as exc:
@@ -916,7 +902,6 @@ def main():
                     poses=poses,
                     feedback_by_bus_motor_id=feedback_by_bus_motor_id,
                     feedback_by_motor_id=feedback_by_motor_id,
-                    branch_offsets=branch_offsets,
                     joint_positions=joint_positions,
                     stale_seconds=args.stale_seconds,
                 )

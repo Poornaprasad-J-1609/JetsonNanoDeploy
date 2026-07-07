@@ -132,7 +132,6 @@ class MitFeedbackStateEstimator(FakeStateEstimator):
 
         self.last_feedback_by_joint = {}
         self.last_feedback_count = 0
-        self.position_branch_offsets = {}
 
     def _pose_reference_iterable(self, pose_references):
         if pose_references is None:
@@ -203,14 +202,11 @@ class MitFeedbackStateEstimator(FakeStateEstimator):
         for joint_name, index, feedback, timestamp, bus_name in feedback_items:
             offset = float(self.motor_layer.joint_offsets[joint_name])
             direction = float(self.motor_layer.joint_directions[joint_name])
-            raw_position = float(feedback["position"])
             q_joint = motor_position_to_joint_angle(
                 feedback["position"],
                 offset=offset,
                 direction=direction,
             )
-            position_unwrapped = offset + direction * q_joint
-            self.position_branch_offsets[joint_name] = raw_position - position_unwrapped
 
             self.q_current[index] = q_joint
             velocity_raw = float(feedback["velocity"])
@@ -227,8 +223,6 @@ class MitFeedbackStateEstimator(FakeStateEstimator):
             feedback["joint_torque"] = direction * torque_raw
             feedback["velocity"] = direction * velocity_raw
             feedback["torque"] = direction * torque_raw
-            feedback["position_unwrapped"] = position_unwrapped
-            feedback["position_branch_offset"] = float(self.position_branch_offsets[joint_name])
             feedback["joint_direction"] = direction
             self.last_feedback_by_joint[joint_name] = feedback
             count += 1
@@ -267,8 +261,6 @@ class MitFeedbackStateEstimator(FakeStateEstimator):
             feedback = self.last_feedback_by_joint.get(joint_name)
             if feedback is not None:
                 feedback["joint_position"] = target_value
-                feedback["position_branch_offset"] = 0.0
-                feedback["position_unwrapped"] = float(feedback["position"])
                 feedback["velocity"] = 0.0
                 feedback["joint_velocity"] = 0.0
         return updated, missing

@@ -5,33 +5,39 @@ Run all commands from this folder:
 
 cd /path/to/GRALLATOR_DEPLOY
 
-For a migrated system, change these device variables after checking which
-/dev/ttyUSB* belongs to each device:
+For the official SocketCAN path, use Linux CAN channel names. The examples
+below work with slcan0/can0 style channels and select SocketCAN automatically:
 
-export CAN0=/dev/ttyUSB0
-export FRONT_CAN=/dev/ttyUSB0
-export BACK_CAN=/dev/ttyUSB1
-export FR_CAN=/dev/ttyUSB0
-export FL_CAN=/dev/ttyUSB1
-export BR_CAN=/dev/ttyUSB2
-export BL_CAN=/dev/ttyUSB3
-export IMU_PORT=/dev/ttyUSB2
+export CAN0=slcan0
+export FRONT_CAN=can0
+export BACK_CAN=can1
+export FR_CAN=can0
+export FL_CAN=can1
+export BR_CAN=can2
+export BL_CAN=can3
+export IMU_PORT=/dev/ttyUSB0
 export PYTHONPATH="$PWD/src"
 
-For 4-CAN plus real IMU, use a fifth serial device for IMU, for example
-export IMU_PORT=/dev/ttyUSB4. The controller will stop at startup if the IMU
-port matches any CAN port.
+All policy, feedback, enable, stop, and motor-check traffic now uses the same
+29-bit extended-ID SocketCAN framing as src/robstride_official_zero.py. Use
+--can-backend socketcan explicitly when desired. The old /dev/ttyUSB AT packet
+transport remains available only with --can-backend serial-at.
+
+Motor rotation signs are configured only in config/motor_directions.yaml.
++1 follows the motor's positive encoder direction (clockwise from the chosen
+motor viewpoint); -1 reverses it. The same sign is applied to command and
+feedback coordinates. Restart the controller after editing this file.
 
 CAN topology options:
 
 1 CAN, all 12 motors on one adapter:
-  --can-count 1 --can-ports "$CAN0"
+  --can-count 1 --can-ports "$CAN0" --can-backend socketcan --can-bitrate 1000000
 
 2 CAN, front legs on one adapter and back legs on one adapter:
-  --can-count 2 --can-ports "$FRONT_CAN" "$BACK_CAN"
+  --can-count 2 --can-ports "$FRONT_CAN" "$BACK_CAN" --can-backend socketcan --can-bitrate 1000000
 
 4 CAN, one adapter per leg. The port order is FR FL BR BL:
-  --can-count 4 --can-ports "$FR_CAN" "$FL_CAN" "$BR_CAN" "$BL_CAN"
+  --can-count 4 --can-ports "$FR_CAN" "$FL_CAN" "$BR_CAN" "$BL_CAN" --can-backend socketcan --can-bitrate 1000000
 
 The examples below use the 2-CAN front/back topology. Replace only the
 --can-count/--can-ports lines when your wiring is 1-CAN or 4-CAN.
@@ -86,9 +92,8 @@ ls -l /dev/ttyUSB* /dev/input/js* /dev/input/event* 2>/dev/null
 14. Official RobStride SocketCAN hardware-zero verification
 -----------------------------------------------------------
 
-This path requires SocketCAN interfaces such as can0/can1. It does not work
-with the older serial AT adapters exposed only as /dev/ttyUSB*. Install the
-official SDK dependencies, bring both 1 Mbps CAN channels up, and verify them:
+This path requires SocketCAN interfaces such as slcan0 or can0/can1. Install
+the official SDK dependencies, bring the channels up, and verify them:
 
 /usr/bin/python3 -m pip install -r requirements.txt
 
@@ -108,14 +113,14 @@ reader and enter s only after all 12 MECHANICAL_POSITION reads are connected:
 
 /usr/bin/python3 src/robstride_official_zero.py \
   --can-count 2 \
-  --channels can0 can1 \
+  --channels "$FRONT_CAN" "$BACK_CAN" \
   --model rs-04
 
 Power motors off and back on. Do not press s again. Verify persisted raw zero:
 
 /usr/bin/python3 src/robstride_official_zero.py \
   --can-count 2 \
-  --channels can0 can1 \
+  --channels "$FRONT_CAN" "$BACK_CAN" \
   --model rs-04 \
   --read-only
 

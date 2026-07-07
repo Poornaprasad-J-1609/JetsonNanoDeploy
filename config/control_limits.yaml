@@ -54,14 +54,12 @@ mit_parameters:
   # Direct IMU leveling is constrained before MIT packet generation. Measured
   # feedback still has the independent 6.0 emergency threshold.
   leveling_pd_torque_limit: 2.0
-  p_min: -12.5
-  p_max: 12.5
-  v_min: -30.0
-  v_max: 30.0
+  p_min: -12.566370614359172
+  p_max: 12.566370614359172
+  v_min: -15.0
+  v_max: 15.0
   kp_min: 0.0
-  # Startup sit/stand gains in config/mit_motor_control.yaml need headroom above
-  # policy gains. Policy gains remain low because their configured values are
-  # already below this cap.
+  # These are deployment safety caps, intentionally below the RS04 wire range.
   kp_max: 100.0
   kd_min: 0.0
   kd_max: 5.0

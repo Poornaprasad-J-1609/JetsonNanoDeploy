@@ -434,8 +434,13 @@ def main():
             )
 
         if args.mode == "mit-signal":
-            print("Opening USB-CAN ports...")
-            buses = open_can_buses(active_port_by_bus, baud=args.baud)
+            print("Opening CAN interfaces...")
+            buses = open_can_buses(
+                active_port_by_bus,
+                baud=args.baud,
+                backend=args.can_backend,
+                bitrate=args.can_bitrate,
+            )
             for bus_name, port in active_port_by_bus.items():
                 print(f"USB-CAN {bus_name} ({port}) opened.")
 
@@ -608,7 +613,7 @@ def main():
             except Exception as exc:
                 print("WARNING: failed to send stop frames:", exc)
             close_can_buses(buses)
-            print("USB-CAN closed.")
+            print("CAN interfaces closed.")
 
     print("Policy walk joint test finished.")
     return 0

@@ -22,8 +22,11 @@ except ImportError as exc:
 
 from motor_command_layer import (
     MotorCommandLayer,
-    float_to_uint,
+    decode_mit_feedback_frame,
+    mit_can_id,
     motor_position_to_joint_angle,
+    pack_mit_command,
+    signed_offset_to_uint,
 )
 from robstride_can_interface import CanFrame
 from state_estimator import MitFeedbackStateEstimator
@@ -88,9 +91,9 @@ def make_feedback_frame(bus_name, motor_id, proto, q_motor, velocity=0.0, torque
         | int(proto.get("master_id", 0xFD))
     )
     data = (
-        float_to_uint(q_motor, proto["p_min"], proto["p_max"], 16).to_bytes(2, "big")
-        + float_to_uint(velocity, proto["v_min"], proto["v_max"], 16).to_bytes(2, "big")
-        + float_to_uint(torque, proto["tau_min"], proto["tau_max"], 16).to_bytes(2, "big")
+        signed_offset_to_uint(q_motor, proto["p_min"], proto["p_max"]).to_bytes(2, "big")
+        + signed_offset_to_uint(velocity, proto["v_min"], proto["v_max"]).to_bytes(2, "big")
+        + signed_offset_to_uint(torque, proto["tau_min"], proto["tau_max"]).to_bytes(2, "big")
         + int(round(float(temp_c) * 10.0)).to_bytes(2, "big")
     )
     frame = CanFrame(can_id=can_id, data=data, timestamp=time.monotonic())
@@ -277,7 +280,7 @@ def assert_duplicate_id_feedback_mapping(policy_order, motor_ids, joint_can_bus,
     return True
 
 
-def assert_software_zero_calibration(policy_order, motor_ids, joint_can_bus):
+def assert_persistent_zero_direction_mapping(policy_order, motor_ids, joint_can_bus):
     joint = "FR_thigh_joint" if "FR_thigh_joint" in policy_order else policy_order[0]
     index = policy_order.index(joint)
     bus_name = joint_can_bus.get(joint, "front")
@@ -298,36 +301,57 @@ def assert_software_zero_calibration(policy_order, motor_ids, joint_can_bus):
         imu_sensor=None,
     )
 
-    raw_crouch = 0.73
+    raw_position = 5.80
     direction = float(layer.joint_directions[joint])
     offset = float(layer.joint_offsets[joint])
-    estimator.update_from_frames([
-        make_feedback_frame(bus_name, motor_id, layer.proto, raw_crouch)
-    ])
+    raw_velocity = 0.40
+    raw_torque = 2.50
+    estimator.update_from_frames([make_feedback_frame(
+        bus_name,
+        motor_id,
+        layer.proto,
+        raw_position,
+        velocity=raw_velocity,
+        torque=raw_torque,
+    )])
     expected_q = motor_position_to_joint_angle(
-        raw_crouch,
+        raw_position,
         offset=offset,
         direction=direction,
     )
     if abs(float(estimator.q_current[index]) - expected_q) > 0.004:
-        raise AssertionError("raw feedback should be used before software zero calibration")
-
-    updated, missing = estimator.apply_software_zero(active_joints=[joint])
-    if missing or joint not in updated:
-        raise AssertionError("software zero calibration did not update the active joint")
-    if abs(float(estimator.q_current[index])) > 0.004:
-        raise AssertionError("software zero calibration did not make current q equal zero")
+        raise AssertionError("direct motor feedback direction mapping is incorrect")
+    if abs(float(estimator.q_current[index])) < 3.0:
+        raise AssertionError("motor feedback was unexpectedly wrapped into a one-turn range")
+    feedback = estimator.last_feedback_by_joint[joint]
+    if abs(float(feedback["joint_velocity"]) - direction * raw_velocity) > 0.006:
+        raise AssertionError("motor direction was not applied to velocity feedback")
+    if abs(float(feedback["joint_torque"]) - direction * raw_torque) > 0.02:
+        raise AssertionError("motor direction was not applied to torque feedback")
 
     q_target = np.zeros(len(policy_order), dtype=np.float32)
     q_target[index] = 0.120
     commands = layer.build_mit_commands(
         q_target,
         phase="policy",
-        feedback_by_joint=estimator.last_feedback_by_joint,
     )
-    expected_p = raw_crouch + direction * float(q_target[index])
+    expected_p = offset + direction * float(q_target[index])
     if len(commands) != 1 or abs(float(commands[0]["p_des"]) - expected_p) > 0.010:
-        raise AssertionError("MIT command did not remain continuous after software zero")
+        raise AssertionError("MIT position command did not apply direction exactly once")
+
+    original_v_des = layer.feedforward["v_des"]
+    original_tau_ff = layer.feedforward["tau_ff"]
+    try:
+        layer.feedforward["v_des"] = 0.4
+        layer.feedforward["tau_ff"] = 0.5
+        directed = layer.build_mit_commands(q_target, phase="policy")[0]
+    finally:
+        layer.feedforward["v_des"] = original_v_des
+        layer.feedforward["tau_ff"] = original_tau_ff
+    if abs(float(directed["v_des"]) - direction * 0.4) > 1e-7:
+        raise AssertionError("motor direction was not applied to commanded velocity")
+    if abs(float(directed["tau_ff"]) - direction * 0.5) > 1e-7:
+        raise AssertionError("motor direction was not applied to feed-forward torque")
 
     reverse_layer = MotorCommandLayer(
         policy_order=policy_order,
@@ -345,14 +369,53 @@ def assert_software_zero_calibration(policy_order, motor_ids, joint_can_bus):
         imu_sensor=None,
     )
     reverse_estimator.update_from_frames([
-        make_feedback_frame(bus_name, motor_id, reverse_layer.proto, raw_crouch)
+        make_feedback_frame(bus_name, motor_id, reverse_layer.proto, raw_position)
     ])
-    reverse_estimator.apply_software_zero(active_joints=[joint])
-    reverse_estimator.update_from_frames([
-        make_feedback_frame(bus_name, motor_id, reverse_layer.proto, raw_crouch - 0.1)
-    ])
-    if abs(float(reverse_estimator.q_current[index]) - 0.1) > 0.006:
+    expected_reverse = -(raw_position - float(reverse_layer.joint_offsets[joint]))
+    if abs(float(reverse_estimator.q_current[index]) - expected_reverse) > 0.006:
         raise AssertionError("joint_direction=-1 did not invert encoder feedback consistently")
+
+
+def assert_rs04_wire_contract(proto):
+    expected = {
+        "p_min": -4.0 * np.pi,
+        "p_max": 4.0 * np.pi,
+        "v_min": -15.0,
+        "v_max": 15.0,
+        "kp_min": 0.0,
+        "kp_max": 5000.0,
+        "kd_min": 0.0,
+        "kd_max": 100.0,
+        "tau_min": -120.0,
+        "tau_max": 120.0,
+    }
+    for key, value in expected.items():
+        if not np.isclose(float(proto[key]), value, rtol=0.0, atol=1e-10):
+            raise AssertionError(
+                f"RS04 wire range {key}={proto[key]} does not match official value {value}"
+            )
+
+    values = {
+        "p_des": 0.73,
+        "v_des": -2.1,
+        "kp": 20.0,
+        "kd": 0.8,
+        "tau_ff": 3.4,
+    }
+    payload = pack_mit_command(
+        values["p_des"], values["v_des"], values["kp"], values["kd"], proto
+    )
+    can_id = mit_can_id(0x7F, proto, values["tau_ff"])
+    if payload.hex() != "876e6e130106020c" or can_id != 0x01839F7F:
+        raise AssertionError(
+            f"RS04 MIT encoding differs from official SDK: data={payload.hex()} id=0x{can_id:08X}"
+        )
+
+    feedback_id = (int(proto["comm_type_feedback"]) << 24) | (0x7F << 8) | int(proto["master_id"])
+    feedback_data = payload[:4] + ((can_id >> 8) & 0xFFFF).to_bytes(2, "big") + (350).to_bytes(2, "big")
+    decoded = decode_mit_feedback_frame(feedback_id, feedback_data, proto)
+    if decoded is None or decoded["motor_id"] != 0x7F:
+        raise AssertionError("RS04 MIT feedback frame did not decode")
 
 
 def q_midpoint_from_limits(layer, policy_order):
@@ -403,6 +466,7 @@ def main():
     assert_signal_routing(layer, mit_commands, bus_names)
 
     proto = layer.proto
+    assert_rs04_wire_contract(proto)
     enable_counts = assert_raw_routing(
         layer,
         layer.build_enable_commands(),
@@ -424,6 +488,13 @@ def main():
         bus_names,
         expected_comm_type=int(proto["comm_type_set_zero"]),
     )
+    save_counts = assert_raw_routing(
+        layer,
+        layer.build_save_parameter_commands(),
+        "save-parameter commands",
+        bus_names,
+        expected_comm_type=int(proto["comm_type_save_parameters"]),
+    )
     stop_counts = assert_raw_routing(
         layer,
         layer.build_stop_commands(),
@@ -438,7 +509,7 @@ def main():
         joint_can_bus,
         layer,
     )
-    assert_software_zero_calibration(policy_order, motor_ids, joint_can_bus)
+    assert_persistent_zero_direction_mapping(policy_order, motor_ids, joint_can_bus)
 
     bus_to_joints = {
         bus_name: [name for name in policy_order if joint_can_bus.get(name, "front") == bus_name]
@@ -455,13 +526,15 @@ def main():
     print("Enable command routing:   ", format_counts(enable_counts, bus_names))
     print("Feedback poll routing:    ", format_counts(poll_counts, bus_names))
     print("Set-zero command routing: ", format_counts(zero_counts, bus_names))
+    print("Save command routing:     ", format_counts(save_counts, bus_names))
     print("Stop command routing:     ", format_counts(stop_counts, bus_names))
     print("Shared-port de-duplication: OK")
     if duplicate_mapping_checked:
         print("Duplicate motor IDs on separate CAN buses: feedback mapping OK")
     else:
         print("Duplicate motor IDs on separate CAN buses: skipped for one-CAN topology")
-    print("Software zero calibration and joint direction handling: OK")
+    print("Persistent motor zero and direct joint direction handling: OK")
+    print("Official RS04 MIT wire scaling and byte contract: OK")
     return 0
 
 

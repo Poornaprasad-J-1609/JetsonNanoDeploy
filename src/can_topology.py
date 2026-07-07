@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""CAN adapter topology helpers for one, two, or four RobStride USB-CAN buses."""
+"""CAN topology helpers for one, two, or four RobStride CAN networks."""
 
 import os
 
-from robstride_can_interface import ATUsbCan
+from robstride_can_interface import ATUsbCan, SocketCan
 
 
 CAN_TOPOLOGY_BUS_NAMES = {
@@ -20,8 +20,8 @@ def add_can_topology_args(parser, default_port="/dev/ttyUSB0", default_can_count
         choices=sorted(CAN_TOPOLOGY_BUS_NAMES),
         default=int(default_can_count),
         help=(
-            "number of RobStride USB-CAN adapters: "
-            "1=all joints on one adapter, 2=front/back, 4=FR/FL/BR/BL"
+            "number of RobStride CAN networks: "
+            "1=all joints on one network, 2=front/back, 4=FR/FL/BR/BL"
         ),
     )
     parser.add_argument(
@@ -29,19 +29,34 @@ def add_can_topology_args(parser, default_port="/dev/ttyUSB0", default_can_count
         nargs="*",
         default=None,
         help=(
-            "ordered USB-CAN ports. Order: 1 CAN -> can0; "
+            "ordered CAN ports/channels. Order: 1 CAN -> can0; "
             "2 CAN -> front back; 4 CAN -> FR FL BR BL"
         ),
     )
     parser.add_argument(
+        "--can-backend",
+        choices=("auto", "socketcan", "serial-at"),
+        default="auto",
+        help=(
+            "CAN transport: auto selects serial-at for /dev/tty* and "
+            "SocketCAN otherwise"
+        ),
+    )
+    parser.add_argument(
+        "--can-bitrate",
+        type=int,
+        default=1_000_000,
+        help="SocketCAN bitrate (the channel must already be configured)",
+    )
+    parser.add_argument(
         "--port",
         default=default_port,
-        help="legacy fallback USB-CAN port used when topology-specific ports are not given",
+        help="legacy fallback CAN port/channel used when topology-specific values are not given",
     )
     parser.add_argument(
         "--port-can0",
         default=None,
-        help="USB-CAN port for one-CAN topology",
+        help="CAN port/channel for one-CAN topology",
     )
     parser.add_argument(
         "--port-can1",
@@ -61,12 +76,12 @@ def add_can_topology_args(parser, default_port="/dev/ttyUSB0", default_can_count
     parser.add_argument(
         "--port-front",
         default=None,
-        help="USB-CAN port for front legs in two-CAN topology; overrides --port",
+        help="CAN port/channel for front legs in two-CAN topology; overrides --port",
     )
     parser.add_argument(
         "--port-back",
         default=None,
-        help="USB-CAN port for back legs in two-CAN topology; overrides --port",
+        help="CAN port/channel for back legs in two-CAN topology; overrides --port",
     )
     parser.add_argument(
         "--port-fr",
@@ -225,7 +240,13 @@ def validate_unique_motor_ids_per_physical_bus(
         )
 
 
-def open_can_buses(port_by_bus, baud, timeout=None):
+def open_can_buses(
+    port_by_bus,
+    baud=921600,
+    timeout=None,
+    backend="auto",
+    bitrate=1_000_000,
+):
     buses = {}
     opened_by_port = {}
     try:
@@ -234,10 +255,25 @@ def open_can_buses(port_by_bus, baud, timeout=None):
                 buses[bus_name] = opened_by_port[port]
                 continue
 
-            kwargs = {"port": port, "baud": baud}
-            if timeout is not None:
-                kwargs["timeout"] = timeout
-            adapter = ATUsbCan(**kwargs).open()
+            selected_backend = str(backend)
+            if selected_backend == "auto":
+                selected_backend = "serial-at" if str(port).startswith("/dev/tty") else "socketcan"
+
+            if selected_backend == "socketcan":
+                kwargs = {
+                    "channel": port,
+                    "bitrate": int(bitrate),
+                }
+                if timeout is not None:
+                    kwargs["timeout"] = timeout
+                adapter = SocketCan(**kwargs).open()
+            elif selected_backend == "serial-at":
+                kwargs = {"port": port, "baud": baud}
+                if timeout is not None:
+                    kwargs["timeout"] = timeout
+                adapter = ATUsbCan(**kwargs).open()
+            else:
+                raise ValueError(f"Unsupported CAN backend: {selected_backend}")
             opened_by_port[port] = adapter
             buses[bus_name] = adapter
     except Exception:

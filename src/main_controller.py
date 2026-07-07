@@ -2942,7 +2942,12 @@ def main():
         )
     for line in topology_lines(args.can_count, port_by_bus):
         print(line)
-    print("Baud:", args.baud)
+    print("CAN backend:", args.can_backend)
+    print("CAN bitrate:", args.can_bitrate)
+    if args.can_backend == "serial-at" or any(
+        str(port).startswith("/dev/tty") for port in port_by_bus.values()
+    ):
+        print("Serial adapter baud:", args.baud)
     print("Feedback source:", feedback_source)
     print("IMU source:", active_imu_source)
     print(
@@ -3003,9 +3008,14 @@ def main():
                 print("MIT motor feedback is read when the motors reply.")
                 print("Use only with the robot secured or suspended for first tests.")
 
-            print("\nOpening USB-CAN serial ports...")
+            print("\nOpening CAN interfaces...")
             try:
-                buses = open_can_buses(active_port_by_bus, baud=args.baud)
+                buses = open_can_buses(
+                    active_port_by_bus,
+                    baud=args.baud,
+                    backend=args.can_backend,
+                    bitrate=args.can_bitrate,
+                )
             except Exception:
                 raise
             for bus_name, port in active_port_by_bus.items():
@@ -3224,7 +3234,7 @@ def main():
                 except Exception as exc:
                     print("\nWARNING: failed to send motor stop frames:", exc)
             close_can_buses(buses)
-            print("\nUSB-CAN closed.")
+            print("\nCAN interfaces closed.")
         if telemetry is not None:
             telemetry.close()
         if csv_logger is not None:

@@ -1,0 +1,25 @@
+# Motor rotation direction at the policy/motor boundary.
+#
+#   +1: positive policy angle follows the motor's positive encoder direction
+#       (clockwise from the calibrated motor viewpoint).
+#   -1: positive policy angle follows the opposite direction (anticlockwise).
+#
+# The same multiplier converts position, velocity, and torque feedback back
+# into policy joint coordinates. Only +1 and -1 are accepted.
+
+motor_directions:
+  FR_hip_joint: -1
+  FR_thigh_joint: -1
+  FR_calf_joint: 1
+
+  FL_hip_joint: -1
+  FL_thigh_joint: -1
+  FL_calf_joint: 1
+
+  BR_hip_joint: -1
+  BR_thigh_joint: -1
+  BR_calf_joint: 1
+
+  BL_hip_joint: -1
+  BL_thigh_joint: -1
+  BL_calf_joint: 1

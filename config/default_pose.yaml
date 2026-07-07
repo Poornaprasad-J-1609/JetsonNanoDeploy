@@ -2,7 +2,7 @@
 # RL default and stand therefore stay exactly zero. Edit only crouch_pose to
 # tune the keyboard C target in this fixed stand-zero coordinate frame.
 # All values in this file use IsaacSim/URDF joint coordinates. Do not manually
-# invert hip or thigh signs here: config/joint_offsets.yaml converts between
+# invert hip or thigh signs here: config/motor_directions.yaml converts between
 # these policy coordinates and the real encoder/motor convention.
 default_pose:
   BL_hip_joint: 0.0

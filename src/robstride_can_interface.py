@@ -28,6 +28,8 @@ def make_at_packet(can_id: int, data: bytes = b"") -> bytes:
 
 
 class ATUsbCan:
+    requires_frame_gap = True
+
     def __init__(self, port="/dev/ttyUSB0", baud=921600, timeout=0.02):
         self.port = port
         self.baud = baud
@@ -180,6 +182,93 @@ class ATUsbCan:
         can_id = int(motor_id) & 0x1FFFFFFF
         data = b""
         return self.send_raw(can_id, data)
+
+    def __enter__(self):
+        return self.open()
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+
+
+class SocketCan:
+    """RobStride raw-frame transport over a Linux SocketCAN channel."""
+
+    requires_frame_gap = False
+
+    def __init__(self, channel="can0", bitrate=1_000_000, timeout=0.02):
+        self.channel = str(channel)
+        self.bitrate = int(bitrate)
+        self.timeout = float(timeout)
+        self.bus = None
+
+    def open(self):
+        import can
+
+        self.bus = can.interface.Bus(
+            interface="socketcan",
+            channel=self.channel,
+            bitrate=self.bitrate,
+        )
+        return self
+
+    def close(self):
+        if self.bus is not None:
+            self.bus.shutdown()
+            self.bus = None
+
+    def send_raw(self, can_id: int, data: bytes = b""):
+        if self.bus is None:
+            raise RuntimeError("SocketCAN channel is not open")
+        if len(data) > 8:
+            raise ValueError("CAN data length must be <= 8 bytes")
+
+        import can
+
+        message = can.Message(
+            arbitration_id=int(can_id) & 0x1FFFFFFF,
+            data=bytes(data),
+            is_extended_id=True,
+        )
+        self.bus.send(message, timeout=self.timeout)
+        return message
+
+    def send_raw_batch(self, frames):
+        return [self.send_raw(can_id, data) for can_id, data in frames]
+
+    def send_raw_sequence(self, frames, frame_gap_s=0.0):
+        frames = list(frames)
+        sent = []
+        for index, (can_id, data) in enumerate(frames):
+            sent.append(self.send_raw(can_id, data))
+            if frame_gap_s > 0.0 and index + 1 < len(frames):
+                time.sleep(float(frame_gap_s))
+        return sent
+
+    def read_available_frames(self, timeout=0.0, max_frames=256):
+        if self.bus is None:
+            raise RuntimeError("SocketCAN channel is not open")
+
+        frames = []
+        deadline = time.monotonic() + max(0.0, float(timeout))
+        while len(frames) < int(max_frames):
+            remaining = max(0.0, deadline - time.monotonic())
+            wait = remaining if timeout > 0.0 else 0.0
+            message = self.bus.recv(timeout=wait)
+            if message is None:
+                break
+            if not message.is_extended_id:
+                continue
+            frames.append(CanFrame(
+                can_id=int(message.arbitration_id),
+                data=bytes(message.data),
+                timestamp=time.monotonic(),
+            ))
+            if timeout > 0.0 and time.monotonic() >= deadline:
+                break
+        return frames
+
+    def send_signal_frame(self, motor_id: int):
+        return self.send_raw(int(motor_id) & 0x1FFFFFFF, b"")
 
     def __enter__(self):
         return self.open()
