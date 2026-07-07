@@ -324,6 +324,10 @@ def assert_persistent_zero_direction_mapping(policy_order, motor_ids, joint_can_
     if abs(float(estimator.q_current[index])) < 3.0:
         raise AssertionError("motor feedback was unexpectedly wrapped into a one-turn range")
     feedback = estimator.last_feedback_by_joint[joint]
+    if abs(float(feedback["position"]) - expected_q) > 0.004:
+        raise AssertionError("downstream feedback position is not in joint radians")
+    if abs(float(feedback["position_raw"]) - raw_position) > 0.004:
+        raise AssertionError("raw motor position diagnostic was not preserved")
     if abs(float(feedback["joint_velocity"]) - direction * raw_velocity) > 0.006:
         raise AssertionError("motor direction was not applied to velocity feedback")
     if abs(float(feedback["joint_torque"]) - direction * raw_torque) > 0.02:

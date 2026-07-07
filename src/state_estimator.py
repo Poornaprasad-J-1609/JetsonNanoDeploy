@@ -202,8 +202,9 @@ class MitFeedbackStateEstimator(FakeStateEstimator):
         for joint_name, index, feedback, timestamp, bus_name in feedback_items:
             offset = float(self.motor_layer.joint_offsets[joint_name])
             direction = float(self.motor_layer.joint_directions[joint_name])
+            position_raw = float(feedback["position"])
             q_joint = motor_position_to_joint_angle(
-                feedback["position"],
+                position_raw,
                 offset=offset,
                 direction=direction,
             )
@@ -215,12 +216,15 @@ class MitFeedbackStateEstimator(FakeStateEstimator):
             feedback = dict(feedback)
             feedback["timestamp"] = timestamp
             feedback["bus_name"] = bus_name
-            feedback["position_raw"] = float(feedback["position"])
+            feedback["position_raw"] = position_raw
             feedback["velocity_raw"] = velocity_raw
             feedback["torque_raw"] = torque_raw
             feedback["joint_position"] = q_joint
             feedback["joint_velocity"] = direction * velocity_raw
             feedback["joint_torque"] = direction * torque_raw
+            # All unsuffixed feedback values exposed beyond the CAN decoder are
+            # joint-space values. Motor-space diagnostics remain under *_raw.
+            feedback["position"] = q_joint
             feedback["velocity"] = direction * velocity_raw
             feedback["torque"] = direction * torque_raw
             feedback["joint_direction"] = direction
@@ -261,6 +265,7 @@ class MitFeedbackStateEstimator(FakeStateEstimator):
             feedback = self.last_feedback_by_joint.get(joint_name)
             if feedback is not None:
                 feedback["joint_position"] = target_value
+                feedback["position"] = target_value
                 feedback["velocity"] = 0.0
                 feedback["joint_velocity"] = 0.0
         return updated, missing

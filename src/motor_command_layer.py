@@ -367,11 +367,14 @@ class MotorCommandLayer:
         missing = []
         for joint_name in active_joints:
             feedback = feedback_by_joint.get(joint_name)
-            if feedback is None or "position" not in feedback:
+            if feedback is None or (
+                "position_raw" not in feedback and "position" not in feedback
+            ):
                 missing.append(joint_name)
                 continue
             direction = float(self.joint_directions[joint_name])
-            new_offsets[joint_name] = float(feedback["position"]) - direction * target_value
+            motor_position = feedback.get("position_raw", feedback.get("position"))
+            new_offsets[joint_name] = float(motor_position) - direction * target_value
             new_shifts[joint_name] = target_value
 
         if missing:
@@ -448,7 +451,7 @@ class MotorCommandLayer:
             q_requested = float(q_target[i])
             q_des = self.apply_hard_joint_limit(joint_name, q_requested)
             feedback = feedback_by_joint.get(joint_name, {})
-            feedback_position = feedback.get("position") if isinstance(feedback, dict) else None
+            feedback_position = feedback.get("position_raw") if isinstance(feedback, dict) else None
             feedback_joint_position = feedback.get("joint_position") if isinstance(feedback, dict) else None
             feedback_joint_velocity = feedback.get("joint_velocity") if isinstance(feedback, dict) else None
             q_before_torque_limit = q_des
