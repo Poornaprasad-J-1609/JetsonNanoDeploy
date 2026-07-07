@@ -42,12 +42,12 @@ crouch_pose:
   FL_hip_joint: 0.0
   FR_hip_joint: 0.0
 
-  BL_thigh_joint: 0.30
-  BR_thigh_joint: -0.30
-  FL_thigh_joint: 0.30
-  FR_thigh_joint: -0.30
+  BL_thigh_joint: 0.50
+  BR_thigh_joint: -0.50
+  FL_thigh_joint: 0.50
+  FR_thigh_joint: -0.50
 
-  BL_calf_joint: 1.0
-  BR_calf_joint: -1.0
-  FL_calf_joint: 1.0
-  FR_calf_joint: -1.0
+  BL_calf_joint: 1.64
+  BR_calf_joint: -1.64
+  FL_calf_joint: 1.64
+  FR_calf_joint: -1.64
