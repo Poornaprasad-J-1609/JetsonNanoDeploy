@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import math
 import os
 import select
 import socket
@@ -726,7 +727,7 @@ def main():
     parser.add_argument("--no-clear", action="store_true",
                         help="do not clear/redraw the terminal table")
     args = parser.parse_args()
-    if not np.isclose(float(args.set_zero_value_rad), 0.0):
+    if not math.isclose(float(args.set_zero_value_rad), 0.0, abs_tol=1e-12):
         parser.error("--set-zero-value-rad must be 0.0 for persistent motor hardware zero")
     if args.gui_only:
         args.gui = True
