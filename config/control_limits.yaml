@@ -40,12 +40,16 @@ policy_deployment:
   # 40 Nm estimated-PD limits remain active.
   action_clip_abs: 3.0
   action_smoothing: 0.10
+  # Blend from the settled stand pose into the first walking targets. This
+  # prevents an immediate full-amplitude actor target when a movement key is
+  # pressed while the robot is carrying its weight.
+  policy_entry_ramp_seconds: 1.5
   # Before packing a walking MIT command, constrain its estimated joint-space
   # PD torque around fresh encoder feedback. The independent measured-feedback
   # emergency stop remains at 6.0 in safety_limits.yaml.
   # 40 Nm in official RS04 units reproduces the old limiter's normalized
   # position-error allowance after the 10x Kp wire-scale correction.
-  estimated_pd_torque_limit: 40.0
+  estimated_pd_torque_limit: 25.0
 
 joint_position:
   enabled: true

@@ -479,6 +479,8 @@ first tests. For simulation-match policy input, see section 12.
   --policy-command-yaw-max 0.0 \
   --policy-action-clip 2.0 \
   --policy-action-smoothing 0.25 \
+  --policy-entry-ramp-seconds 1.5 \
+  --policy-pd-torque-limit 25.0 \
   --enable-retries 3 \
   --enable-retry-delay 0.05 \
   --feedback-timeout 0.05 \
@@ -536,6 +538,8 @@ first tests. For simulation-match policy input, see section 12.
   --policy-command-yaw-max 0.0 \
   --policy-action-clip 2.0 \
   --policy-action-smoothing 0.25 \
+  --policy-entry-ramp-seconds 1.5 \
+  --policy-pd-torque-limit 25.0 \
   --enable-retries 3 \
   --enable-retry-delay 0.05 \
   --feedback-timeout 0.05 \

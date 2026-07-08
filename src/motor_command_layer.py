@@ -198,6 +198,7 @@ class MotorCommandLayer:
         self.mit_parameter_limits_enabled = True
         self.mit_parameter_limits = {}
         self.policy_pd_torque_limit = 0.0
+        self.policy_pd_torque_limit_override = None
         self.startup_pd_torque_limit = 0.0
         self.hold_pd_torque_limit = 0.0
         self.leveling_pd_torque_limit = 0.0
@@ -395,8 +396,13 @@ class MotorCommandLayer:
 
         cfg = load_yaml(self.control_limit_path)
         policy_cfg = cfg.get("policy_deployment", {})
-        self.policy_pd_torque_limit = float(
+        configured_policy_torque_limit = float(
             policy_cfg.get("estimated_pd_torque_limit", 0.0)
+        )
+        self.policy_pd_torque_limit = (
+            configured_policy_torque_limit
+            if self.policy_pd_torque_limit_override is None
+            else float(self.policy_pd_torque_limit_override)
         )
         if not np.isfinite(self.policy_pd_torque_limit) or self.policy_pd_torque_limit < 0.0:
             raise ValueError("policy_deployment.estimated_pd_torque_limit must be finite and >= 0")
@@ -437,6 +443,13 @@ class MotorCommandLayer:
 
         self.control_limit_mtime_ns = mtime_ns
         return True
+
+    def set_policy_pd_torque_limit(self, value):
+        value = float(value)
+        if not np.isfinite(value) or value <= 0.0:
+            raise ValueError("policy PD torque limit override must be finite and > 0")
+        self.policy_pd_torque_limit_override = value
+        self.policy_pd_torque_limit = value
 
     def reload_joint_limits(self, force=False):
         mtime_ns = self.joint_limit_path.stat().st_mtime_ns

@@ -1559,6 +1559,7 @@ def run_policy_loop(
     policy_command_yaw_max,
     policy_action_clip,
     policy_action_smoothing,
+    policy_entry_ramp_seconds,
     policy_sim_match,
     stand_policy_stabilization,
     hold_capture_seconds,
@@ -1578,6 +1579,9 @@ def run_policy_loop(
     previous_action = np.zeros(action_dim, dtype=np.float32)
     previous_sent_action = np.zeros(action_dim, dtype=np.float32)
     direct_leveling_correction = np.zeros(action_dim, dtype=np.float32)
+    policy_entry_elapsed_s = 0.0
+    policy_entry_scale = 0.0
+    previous_walk_requested = False
     direct_imu_stabilization_enabled = bool(
         motion_assist_cfg.get("imu_posture", {}).get("enabled", False)
     )
@@ -1707,6 +1711,7 @@ def run_policy_loop(
     )
     print("policy_action_clip:", float(policy_action_clip), "(0 disables)")
     print("policy_action_smoothing:", float(policy_action_smoothing), "(0 disables)")
+    print("policy_entry_ramp_seconds:", float(policy_entry_ramp_seconds))
     print(
         "policy_sim_match:",
         bool(policy_sim_match),
@@ -2194,6 +2199,21 @@ def run_policy_loop(
         if walk_requested:
             has_motion_target = True
 
+        if walk_requested:
+            if not previous_walk_requested:
+                policy_entry_elapsed_s = 0.0
+            policy_entry_elapsed_s += float(dt)
+            if float(policy_entry_ramp_seconds) > 0.0:
+                policy_entry_scale = smoothstep(
+                    min(1.0, policy_entry_elapsed_s / float(policy_entry_ramp_seconds))
+                )
+            else:
+                policy_entry_scale = 1.0
+        else:
+            policy_entry_elapsed_s = 0.0
+            policy_entry_scale = 0.0
+        previous_walk_requested = bool(walk_requested)
+
         if active_control_mode == "idle":
             q_safe_target = q_previous_target.copy()
             commands = []
@@ -2314,6 +2334,7 @@ def run_policy_loop(
                     clip_abs=policy_action_clip,
                     smoothing=policy_action_smoothing,
                 )
+            action = np.asarray(action, dtype=np.float32) * float(policy_entry_scale)
             q_policy_target = runner.action_to_q_target(action)
             imu_correction = imu_posture_correction(
                 projected_gravity_b=projected_gravity_b,
@@ -2994,6 +3015,18 @@ def main():
         help="blend current policy action with previous sent action; 0 disables, larger is smoother/slower",
     )
     parser.add_argument(
+        "--policy-entry-ramp-seconds",
+        type=float,
+        default=float(policy_deploy_defaults.get("policy_entry_ramp_seconds", 1.5)),
+        help="seconds used to blend smoothly from stand into policy walking targets",
+    )
+    parser.add_argument(
+        "--policy-pd-torque-limit",
+        type=float,
+        default=float(policy_deploy_defaults.get("estimated_pd_torque_limit", 25.0)),
+        help="estimated per-joint policy PD torque ceiling in Nm; must be positive",
+    )
+    parser.add_argument(
         "--policy-sim-match",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -3059,6 +3092,10 @@ def main():
     args.policy_command_yaw_max = max(0.0, float(args.policy_command_yaw_max))
     args.policy_action_clip = max(0.0, float(args.policy_action_clip))
     args.policy_action_smoothing = float(np.clip(args.policy_action_smoothing, 0.0, 0.98))
+    if not np.isfinite(args.policy_entry_ramp_seconds) or args.policy_entry_ramp_seconds < 0.0:
+        parser.error("--policy-entry-ramp-seconds must be finite and >= 0")
+    if not np.isfinite(args.policy_pd_torque_limit) or args.policy_pd_torque_limit <= 0.0:
+        parser.error("--policy-pd-torque-limit must be finite and > 0")
     if not np.isfinite(args.control_hz) or args.control_hz < 0.0:
         parser.error("--control-hz must be finite and >= 0")
     if 0.0 < args.control_hz < 10.0 or args.control_hz > 100.0:
@@ -3121,6 +3158,7 @@ def main():
         active_joints=active_joints,
         joint_can_bus=joint_can_bus,
     )
+    motor_layer.set_policy_pd_torque_limit(args.policy_pd_torque_limit)
     active_port_by_bus = ports_for_active_joints(
         port_by_bus,
         joint_can_bus,
@@ -3209,6 +3247,8 @@ def main():
     )
     print("Policy action clip:", f"{args.policy_action_clip:.3f}")
     print("Policy action smoothing:", f"{args.policy_action_smoothing:.2f}")
+    print("Policy entry ramp:", f"{args.policy_entry_ramp_seconds:.2f} s")
+    print("Policy PD torque limit:", f"{args.policy_pd_torque_limit:.2f} Nm")
     print("Start control mode:", args.start_control_mode)
     print("Startup action:", args.startup_action)
     print("Policy:", runner.policy_path)
@@ -3501,6 +3541,7 @@ def main():
             policy_command_yaw_max=args.policy_command_yaw_max,
             policy_action_clip=args.policy_action_clip,
             policy_action_smoothing=args.policy_action_smoothing,
+            policy_entry_ramp_seconds=args.policy_entry_ramp_seconds,
             policy_sim_match=bool(args.policy_sim_match),
             stand_policy_stabilization=bool(args.stand_policy_stabilization),
             hold_capture_seconds=max(0.02, args.hold_capture_seconds),
