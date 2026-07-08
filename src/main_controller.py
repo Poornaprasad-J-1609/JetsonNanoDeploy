@@ -2010,7 +2010,7 @@ def run_policy_loop(
             commands = (
                 motor_layer.build_mit_commands(
                     q_safe_target,
-                    phase="startup",
+                    phase="hold",
                     feedback_by_joint=getattr(estimator, "last_feedback_by_joint", None),
                 )
                 if has_motion_target

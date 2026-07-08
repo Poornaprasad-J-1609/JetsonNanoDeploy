@@ -1,3 +1,7 @@
+motor:
+  model: rs-04
+  use_official_mit_ranges: true
+
 mit_protocol:
   # RobStride / CyberGear-style MIT control frame.
   # master_id is used only for filtering/diagnostics; operation-control
@@ -47,6 +51,17 @@ gains:
     calf:
       kp: 75.0
       kd: 1.8
+
+  hold:
+    hip:
+      kp: 100.0
+      kd: 2.5
+    thigh:
+      kp: 80.0
+      kd: 2.5
+    calf:
+      kp: 100.0
+      kd: 2.5
 
   policy:
     hip:

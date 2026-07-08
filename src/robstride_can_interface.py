@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import errno
 import time
 from dataclasses import dataclass
 
@@ -191,30 +192,50 @@ class ATUsbCan:
 
 
 class SocketCan:
-    """RobStride raw-frame transport over a Linux SocketCAN channel."""
+    """RobStride official SDK transport over a Linux SocketCAN channel."""
 
     requires_frame_gap = False
 
-    def __init__(self, channel="can0", bitrate=1_000_000, timeout=0.02):
+    def __init__(
+        self,
+        channel="can0",
+        bitrate=1_000_000,
+        timeout=0.02,
+        tx_retry_count=20,
+        tx_retry_delay=0.002,
+    ):
         self.channel = str(channel)
         self.bitrate = int(bitrate)
         self.timeout = float(timeout)
+        self.tx_retry_count = int(max(0, tx_retry_count))
+        self.tx_retry_delay = float(max(0.0, tx_retry_delay))
+        self.driver = None
         self.bus = None
 
     def open(self):
-        import can
+        from robstride_dynamics import RobstrideBus
 
-        self.bus = can.interface.Bus(
-            interface="socketcan",
+        self.driver = RobstrideBus(
             channel=self.channel,
+            motors={},
             bitrate=self.bitrate,
         )
+        self.driver.connect(handshake=False)
+        self.bus = self.driver.channel_handler
         return self
 
     def close(self):
-        if self.bus is not None:
+        if self.driver is not None:
+            self.driver.disconnect(disable_torque=False)
+        elif self.bus is not None:
             self.bus.shutdown()
-            self.bus = None
+        self.driver = None
+        self.bus = None
+
+    @staticmethod
+    def _is_tx_queue_full(exc):
+        code = getattr(exc, "error_code", None)
+        return code == errno.ENOBUFS or "No buffer space available" in str(exc)
 
     def send_raw(self, can_id: int, data: bytes = b""):
         if self.bus is None:
@@ -222,15 +243,23 @@ class SocketCan:
         if len(data) > 8:
             raise ValueError("CAN data length must be <= 8 bytes")
 
-        import can
+        comm_type = (int(can_id) >> 24) & 0x1F
+        extra_data = (int(can_id) >> 8) & 0xFFFF
+        motor_id = int(can_id) & 0xFF
 
-        message = can.Message(
-            arbitration_id=int(can_id) & 0x1FFFFFFF,
-            data=bytes(data),
-            is_extended_id=True,
-        )
-        self.bus.send(message, timeout=self.timeout)
-        return message
+        for attempt in range(self.tx_retry_count + 1):
+            try:
+                self.driver.transmit(
+                    comm_type,
+                    extra_data,
+                    motor_id,
+                    bytes(data),
+                )
+                return int(can_id), bytes(data)
+            except Exception as exc:
+                if not self._is_tx_queue_full(exc) or attempt >= self.tx_retry_count:
+                    raise
+                time.sleep(self.tx_retry_delay)
 
     def send_raw_batch(self, frames):
         return [self.send_raw(can_id, data) for can_id, data in frames]

@@ -178,13 +178,17 @@ class MotorCommandLayer:
         self.mit_parameter_limits = {}
         self.policy_pd_torque_limit = 0.0
         self.startup_pd_torque_limit = 0.0
+        self.hold_pd_torque_limit = 0.0
         self.leveling_pd_torque_limit = 0.0
         self.hard_joint_limits = {}
 
         self.cfg = load_yaml(ROOT / "config" / "mit_motor_control.yaml")
         self.offset_cfg = load_yaml(ROOT / "config" / "joint_offsets.yaml")
         self.direction_cfg = load_yaml(ROOT / "config" / "motor_directions.yaml")
-        self.proto = self.cfg["mit_protocol"]
+        self.proto = dict(self.cfg["mit_protocol"])
+        motor_cfg = self.cfg.get("motor", {})
+        if bool(motor_cfg.get("use_official_mit_ranges", True)):
+            self._load_official_mit_ranges(str(motor_cfg.get("model", "rs-04")))
         self.gains = self.cfg["gains"]
         self.feedforward = self.cfg["feedforward"]
         communication_cfg = self.cfg.get("communication", {})
@@ -198,6 +202,46 @@ class MotorCommandLayer:
         self.joint_coordinate_shifts = {joint_name: 0.0 for joint_name in self.policy_order}
         self.reload_joint_limits(force=True)
         self.reload_control_limits(force=True)
+
+    def _load_official_mit_ranges(self, model):
+        try:
+            from robstride_dynamics.table import (
+                MODEL_MIT_KD_TABLE,
+                MODEL_MIT_KP_TABLE,
+                MODEL_MIT_POSITION_TABLE,
+                MODEL_MIT_TORQUE_TABLE,
+                MODEL_MIT_VELOCITY_TABLE,
+            )
+        except ImportError as exc:
+            raise ImportError(
+                "Install robstride-dynamics to load official MIT parameters"
+            ) from exc
+
+        tables = (
+            MODEL_MIT_POSITION_TABLE,
+            MODEL_MIT_VELOCITY_TABLE,
+            MODEL_MIT_KP_TABLE,
+            MODEL_MIT_KD_TABLE,
+            MODEL_MIT_TORQUE_TABLE,
+        )
+        if any(model not in table for table in tables):
+            raise KeyError(f"Official RobStride MIT table has no model '{model}'")
+
+        position = float(MODEL_MIT_POSITION_TABLE[model])
+        velocity = float(MODEL_MIT_VELOCITY_TABLE[model])
+        torque = float(MODEL_MIT_TORQUE_TABLE[model])
+        self.proto.update({
+            "p_min": -position,
+            "p_max": position,
+            "v_min": -velocity,
+            "v_max": velocity,
+            "kp_min": 0.0,
+            "kp_max": float(MODEL_MIT_KP_TABLE[model]),
+            "kd_min": 0.0,
+            "kd_max": float(MODEL_MIT_KD_TABLE[model]),
+            "tau_min": -torque,
+            "tau_max": torque,
+        })
 
     def _load_joint_directions(self):
         configured = self.direction_cfg.get("motor_directions", {}) or {}
@@ -261,6 +305,11 @@ class MotorCommandLayer:
         )
         if not np.isfinite(self.startup_pd_torque_limit) or self.startup_pd_torque_limit < 0.0:
             raise ValueError("mit_parameters.startup_pd_torque_limit must be finite and >= 0")
+        self.hold_pd_torque_limit = float(
+            mit_cfg.get("hold_pd_torque_limit", 0.0)
+        )
+        if not np.isfinite(self.hold_pd_torque_limit) or self.hold_pd_torque_limit < 0.0:
+            raise ValueError("mit_parameters.hold_pd_torque_limit must be finite and >= 0")
         self.leveling_pd_torque_limit = float(
             mit_cfg.get("leveling_pd_torque_limit", 0.0)
         )
@@ -440,6 +489,8 @@ class MotorCommandLayer:
         phase_torque_limit = 0.0
         if phase == "startup":
             phase_torque_limit = self.startup_pd_torque_limit
+        elif phase == "hold":
+            phase_torque_limit = self.hold_pd_torque_limit
         elif phase == "policy":
             phase_torque_limit = self.policy_pd_torque_limit
         elif phase == "leveling":
