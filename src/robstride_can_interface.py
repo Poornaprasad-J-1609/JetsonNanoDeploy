@@ -2,6 +2,7 @@
 import errno
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass
@@ -194,16 +195,18 @@ class ATUsbCan:
 class SocketCan:
     """RobStride official SDK transport over a Linux SocketCAN channel."""
 
-    # Preserve the stable pre-SocketCAN one-millisecond MIT frame cadence.
-    requires_frame_gap = True
+    # SocketCAN and the RobStride SDK already hand frames to the kernel CAN
+    # scheduler. A per-frame userspace sleep spreads a 12-motor command over a
+    # large fraction of the control period and makes pose motion look stepped.
+    requires_frame_gap = False
 
     def __init__(
         self,
         channel="can0",
         bitrate=1_000_000,
         timeout=0.02,
-        tx_retry_count=20,
-        tx_retry_delay=0.002,
+        tx_retry_count=4,
+        tx_retry_delay=0.0005,
     ):
         self.channel = str(channel)
         self.bitrate = int(bitrate)
@@ -215,6 +218,18 @@ class SocketCan:
 
     def open(self):
         from robstride_dynamics import RobstrideBus
+
+        tx_queue_path = Path("/sys/class/net") / self.channel / "tx_queue_len"
+        try:
+            tx_queue_len = int(tx_queue_path.read_text().strip())
+        except (OSError, ValueError):
+            tx_queue_len = None
+        if tx_queue_len is not None and tx_queue_len < 32:
+            print(
+                f"WARNING: {self.channel} txqueuelen={tx_queue_len} is too small "
+                "for synchronized 12-motor bursts. Before running motor control: "
+                f"sudo ip link set {self.channel} txqueuelen 256"
+            )
 
         self.driver = RobstrideBus(
             channel=self.channel,

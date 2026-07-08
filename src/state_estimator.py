@@ -170,7 +170,10 @@ class MitFeedbackStateEstimator(FakeStateEstimator):
         return None
 
     def update_from_frames(self, frames):
-        feedback_items = []
+        # A command cycle can produce more than one response from a motor. Keep
+        # only the newest response per routed joint so diagnostics and safety
+        # counts can never report more joints than physically exist.
+        feedback_by_joint = {}
 
         for frame in frames:
             feedback = decode_mit_feedback_frame(
@@ -190,16 +193,16 @@ class MitFeedbackStateEstimator(FakeStateEstimator):
                 continue
 
             index = self.joint_index_by_name[joint_name]
-            feedback_items.append((
+            feedback_by_joint[joint_name] = (
                 joint_name,
                 index,
                 feedback,
                 float(getattr(frame, "timestamp", time.monotonic())),
                 bus_name,
-            ))
+            )
 
         count = 0
-        for joint_name, index, feedback, timestamp, bus_name in feedback_items:
+        for joint_name, index, feedback, timestamp, bus_name in feedback_by_joint.values():
             offset = float(self.motor_layer.joint_offsets[joint_name])
             direction = float(self.motor_layer.joint_directions[joint_name])
             position_raw = float(feedback["position"])

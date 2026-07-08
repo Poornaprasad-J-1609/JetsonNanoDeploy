@@ -727,6 +727,104 @@ class CsvRunLogger:
             self._file = None
 
 
+def publish_run_log_to_git(log_path, remote="origin", timeout_s=20.0):
+    """Commit and push exactly one completed run log after motor shutdown."""
+    if log_path is None:
+        return False, "no CSV log was created"
+
+    log_path = Path(log_path).expanduser().resolve()
+    log_root = (ROOT / "logs").resolve()
+    try:
+        relative_path = log_path.relative_to(ROOT.resolve())
+        log_path.relative_to(log_root)
+    except ValueError:
+        return False, f"refusing to publish a log outside {log_root}"
+
+    if not log_path.is_file():
+        return False, f"log file does not exist: {log_path}"
+
+    def run_git(*arguments, check=True):
+        return subprocess.run(
+            ["git", *arguments],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            timeout=float(timeout_s),
+            check=check,
+        )
+
+    try:
+        branch = run_git("branch", "--show-current").stdout.strip()
+        if not branch:
+            return False, "repository is in detached HEAD state"
+
+        upstream = run_git(
+            "rev-parse",
+            "--abbrev-ref",
+            "--symbolic-full-name",
+            "@{upstream}",
+            check=False,
+        )
+        base_ref = upstream.stdout.strip() if upstream.returncode == 0 else ""
+        if not base_ref:
+            candidate = f"{remote}/{branch}"
+            exists = run_git("rev-parse", "--verify", candidate, check=False)
+            if exists.returncode == 0:
+                base_ref = candidate
+        if not base_ref:
+            return False, "no upstream or remote-tracking branch is configured"
+
+        ahead_paths = run_git(
+            "diff",
+            "--name-only",
+            f"{base_ref}..HEAD",
+        ).stdout.splitlines()
+        non_log_paths = [
+            path for path in ahead_paths
+            if not path.replace("\\", "/").startswith("logs/")
+        ]
+        if non_log_paths:
+            return False, (
+                "branch has unpushed non-log commits; refusing an automatic "
+                "push: " + ", ".join(non_log_paths[:4])
+            )
+        if ahead_paths:
+            print(
+                "CSV log Git push: retrying existing unpushed log-only "
+                f"commit(s): {len(ahead_paths)} file(s)"
+            )
+
+        run_git("add", "-f", "--", str(relative_path))
+        staged = run_git(
+            "diff",
+            "--cached",
+            "--quiet",
+            "--",
+            str(relative_path),
+            check=False,
+        )
+        if staged.returncode == 0:
+            return False, "log is unchanged"
+        if staged.returncode != 1:
+            return False, staged.stderr.strip() or "could not inspect staged log"
+
+        run_git(
+            "commit",
+            "-m",
+            f"log: {log_path.name}",
+            "--",
+            str(relative_path),
+        )
+        run_git("push", str(remote), f"HEAD:{branch}")
+        return True, f"pushed {relative_path} to {remote}/{branch}"
+    except subprocess.TimeoutExpired:
+        return False, f"git operation timed out after {float(timeout_s):.0f}s"
+    except (OSError, subprocess.CalledProcessError, ValueError) as exc:
+        stderr = getattr(exc, "stderr", "") or ""
+        detail = stderr.strip() or str(exc)
+        return False, detail
+
+
 def print_joystick_debug(command_source):
     if not hasattr(command_source, "raw_state"):
         return
@@ -2227,7 +2325,11 @@ def run_policy_loop(
                         0.0,
                         1.0,
                     )
-                    target_advance_scale = smoothstep(normalized)
+                    # Do not fully freeze a pose trajectory. A zero advance
+                    # creates the visible move-stop-move pulse when one loaded
+                    # joint follows more slowly than the others. Hard joint,
+                    # rate, torque, encoder, and tilt limits remain enforced.
+                    target_advance_scale = max(0.15, smoothstep(normalized))
                     if step % max(1, log_every) == 0:
                         print(
                             f"[SYNC] slowing pose trajectory: max joint lag "
@@ -2647,7 +2749,7 @@ def main():
         "--pose-sync-error-rad",
         type=float,
         default=0.12,
-        help="during sit/stand, hold the next target step until live feedback is within this max active-joint error; 0 disables",
+        help="during sit/stand, slow target progress when live feedback exceeds this max active-joint error; 0 disables",
     )
     parser.add_argument(
         "--walk-command-threshold",
@@ -2803,6 +2905,20 @@ def main():
         "--log-file",
         default=None,
         help="exact CSV log file path; overrides --log-dir",
+    )
+    parser.add_argument(
+        "--auto-push-log",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "after motors are stopped and the CSV is closed, commit and push "
+            "only that run log"
+        ),
+    )
+    parser.add_argument(
+        "--log-git-remote",
+        default="origin",
+        help="Git remote used by --auto-push-log (default: origin)",
     )
 
     args = parser.parse_args()
@@ -3275,6 +3391,17 @@ def main():
             csv_logger.close()
             if csv_path is not None:
                 print("CSV log saved:", csv_path)
+                if args.auto_push_log:
+                    pushed, message = publish_run_log_to_git(
+                        csv_path,
+                        remote=args.log_git_remote,
+                    )
+                    prefix = (
+                        "CSV log Git push:"
+                        if pushed
+                        else "WARNING: CSV log Git push skipped:"
+                    )
+                    print(prefix, message)
         if gui_proc is not None:
             gui_proc.terminate()
             try:

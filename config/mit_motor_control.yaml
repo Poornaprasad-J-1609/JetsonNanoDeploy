@@ -33,8 +33,8 @@ startup:
   standup_seconds: 3.0
 
 communication:
-  # Preserve the proven one-millisecond spacing between the 12 MIT frames.
-  # The official SocketCAN driver and legacy AT transport both use this cadence.
+  # Legacy serial-AT adapters need paced frames. SocketCAN bypasses this delay
+  # and submits each 12-motor command as one tightly grouped kernel CAN burst.
   batch_writes: false
   group_flush: true
   frame_gap_s: 0.0010
@@ -47,24 +47,24 @@ gains:
   startup:
     hip:
       kp: 75
-      kd: 1.2
+      kd: 1.8
     thigh:
-      kp: 75.0
-      kd: 1.2
+      kp: 50.0
+      kd: 1.8
     calf:
       kp: 75.0
-      kd: 1.2
+      kd: 1.8
 
   hold:
     hip:
       kp: 75.0
-      kd: 1.2
+      kd: 1.8
     thigh:
       kp: 50.0
-      kd: 1.2
+      kd: 1.8
     calf:
       kp: 75.0
-      kd: 1.2
+      kd: 1.8
 
   policy:
     hip:

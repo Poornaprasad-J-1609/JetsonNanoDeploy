@@ -18,6 +18,9 @@ export BL_CAN=can3
 export IMU_PORT=/dev/ttyUSB0
 export PYTHONPATH="$PWD/src"
 
+# Required for tightly synchronized 12-motor command bursts on slcan adapters.
+sudo ip link set "$CAN0" txqueuelen 256
+
 All policy, feedback, enable, stop, and motor-check traffic now uses the same
 29-bit extended-ID SocketCAN framing as src/robstride_official_zero.py. Use
 --can-backend socketcan explicitly when desired. The old /dev/ttyUSB AT packet
@@ -68,6 +71,12 @@ sent_action_00..11 (output after optional filtering), q_target_00..11 (MIT
 position target), and q_00..11/qd_00..11 (joint-radian feedback). Command,
 IMU status, torque summaries, policy SHA256, and policy_joint_order are also
 saved. Use --log-every 1 when every 50 Hz control step must be recorded.
+
+Add --auto-push-log to a main_controller command to commit and push only that
+completed CSV after motor stop frames are sent and CAN is closed. The Jetson
+must have Git SSH authentication configured. The publisher refuses to push if
+the branch contains any unpushed non-log commit, so source changes cannot be
+uploaded accidentally.
 
 The controller prints the selected policy SHA256 at startup. It refuses an
 unrecognized policy unless --allow-policy-hash-mismatch is passed explicitly
@@ -280,6 +289,8 @@ position, x = emergency stop. Startup is idle: no auto-zero and no auto-hold.
   --mode mit-signal \
   --can-count 2 \
   --can-ports "$FRONT_CAN" "$BACK_CAN" \
+  --can-backend socketcan \
+  --can-bitrate 1000000 \
   --feedback-source mit \
   --command-source keyboard \
   --imu-source fake \
@@ -296,6 +307,7 @@ position, x = emergency stop. Startup is idle: no auto-zero and no auto-hold.
   --crouch-calibration-value 0.0 \
   --stand-calibration-value 0.0 \
   --policy-steps 0 \
+  --control-hz 50 \
   --walk-command-threshold 999 \
   --max-vx 0.0 \
   --max-vy 0.0 \
@@ -308,10 +320,11 @@ position, x = emergency stop. Startup is idle: no auto-zero and no auto-hold.
   --enable-retry-delay 0.05 \
   --feedback-timeout 0.05 \
   --hold-capture-seconds 0.50 \
-  --hold-command-repeats 2 \
+  --hold-command-repeats 1 \
   --pose-sync-error-rad 0.25 \
   --log-every 5 \
   --joint-debug \
+  --auto-push-log \
   --gui
 
 
