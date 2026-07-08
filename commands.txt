@@ -68,9 +68,10 @@ Replay and compare IsaacLab policy/motor CSV logs against deployment:
 Every main_controller CSV includes the complete policy data path in verified
 policy joint order: obs_000..047 (input), action_00..11 (raw policy output),
 sent_action_00..11 (output after optional filtering), q_target_00..11 (MIT
-position target), and q_00..11/qd_00..11 (joint-radian feedback). Command,
-IMU status, torque summaries, policy SHA256, and policy_joint_order are also
-saved. Use --log-every 1 when every 50 Hz control step must be recorded.
+position target), qd_target_00..11 (MIT joint-velocity target), and
+q_00..11/qd_00..11 (joint-radian feedback). Command, IMU status, torque
+summaries, policy SHA256, and policy_joint_order are also saved. Use
+--log-every 1 when every 50 Hz control step must be recorded.
 
 Each main_controller run automatically commits and pushes only its completed
 CSV after motor stop frames are sent and CAN is closed. Use

@@ -567,13 +567,17 @@ def compact_telemetry_record(
         record["tau_fb_max"] = float(tau_fb[1])
 
     q_target_sent = q_target
+    qd_target_sent = None
     if q_target is not None and policy_order is not None and commands:
         q_target_sent = np.asarray(q_target, dtype=np.float32).copy()
+        qd_target_sent = np.zeros(len(policy_order), dtype=np.float32)
         index_by_joint = {name: index for index, name in enumerate(policy_order)}
         for command_item in commands:
             index = index_by_joint.get(command_item.get("joint_name"))
             if index is not None and "q_des" in command_item:
                 q_target_sent[index] = float(command_item["q_des"])
+            if index is not None and "joint_v_des" in command_item:
+                qd_target_sent[index] = float(command_item["joint_v_des"])
 
     arrays = {
         "obs": (observation, 48, 3),
@@ -582,6 +586,7 @@ def compact_telemetry_record(
         "q": (q_current, 12, 2),
         "qd": (qd_current, 12, 2),
         "q_target": (q_target_sent, 12, 2),
+        "qd_target": (qd_target_sent, 12, 2),
     }
     for prefix, (values, count, width) in arrays.items():
         if values is None:
@@ -690,6 +695,7 @@ class CsvRunLogger:
     FIELDNAMES += [f"q_{index:02d}" for index in range(12)]
     FIELDNAMES += [f"qd_{index:02d}" for index in range(12)]
     FIELDNAMES += [f"q_target_{index:02d}" for index in range(12)]
+    FIELDNAMES += [f"qd_target_{index:02d}" for index in range(12)]
 
     def __init__(self, enabled=True, log_dir=None, log_file=None):
         self.enabled = bool(enabled)
@@ -905,6 +911,7 @@ def print_joint_debug(commands, estimator):
             line += f" q_fb={q_fb:+.3f} q_err={q_err:+.3f}"
         if qd_fb is not None:
             line += f" qd_fb={qd_fb:+.3f}"
+        line += f" qd_des={float(cmd.get('joint_v_des', 0.0)):+.3f}"
         if tau_fb is not None:
             line += f" tau_fb={tau_fb:+.3f}"
         print(line)
@@ -1594,7 +1601,7 @@ def run_policy_loop(
     pose_transition_mode = None
     pose_transition_start = np.asarray(q_previous_target, dtype=np.float32).copy()
     pose_transition_target = pose_transition_start.copy()
-    pose_transition_start_step = 0
+    pose_transition_elapsed_s = 0.0
     pose_transition_duration_s = float(pose_transition_min_seconds)
 
     def final_pose_target(mode_name):
@@ -1618,7 +1625,7 @@ def run_policy_loop(
         nonlocal pose_transition_mode
         nonlocal pose_transition_start
         nonlocal pose_transition_target
-        nonlocal pose_transition_start_step
+        nonlocal pose_transition_elapsed_s
         nonlocal pose_transition_duration_s
 
         target_q = np.asarray(final_pose_target(mode_name), dtype=np.float32)
@@ -1634,7 +1641,7 @@ def run_policy_loop(
         pose_transition_mode = str(mode_name)
         pose_transition_start = start_q
         pose_transition_target = target_q
-        pose_transition_start_step = int(current_step)
+        pose_transition_elapsed_s = 0.0
         pose_transition_duration_s = duration
         print(
             f"[POSE] synchronized {mode_name} transition: "
@@ -1646,17 +1653,16 @@ def run_policy_loop(
         nonlocal pose_transition_mode
         if pose_transition_mode != mode_name:
             begin_pose_transition(mode_name, q_previous_target, current_step)
-        elapsed_s = max(0, int(current_step) - pose_transition_start_step) * float(dt)
         target_q, _ = synchronized_pose_trajectory(
             pose_transition_start,
             pose_transition_target,
-            elapsed_s,
+            pose_transition_elapsed_s,
             pose_transition_duration_s,
         )
         return target_q
 
     print("\n" + "#" * 80)
-    print("POLICY / POSE PHASE")
+    print("RUNTIME CONTROL PHASE")
     print("#" * 80)
     print("mode:", mode)
     print("Joystick buttons:")
@@ -1746,7 +1752,7 @@ def run_policy_loop(
                 estimator=estimator,
                 reason=joystick_emergency_reason,
                 action=np.zeros(action_dim, dtype=np.float32),
-                phase="policy",
+                phase="runtime",
             )
             break
 
@@ -2253,10 +2259,15 @@ def run_policy_loop(
                 q_previous_target,
                 q_coordinate_shift,
             )
+            pose_velocity_target = (
+                np.asarray(q_safe_target, dtype=np.float32)
+                - np.asarray(q_previous_target, dtype=np.float32)
+            ) / float(dt)
             commands = motor_layer.build_mit_commands(
                 q_safe_target,
                 phase=stand_command_phase,
                 feedback_by_joint=getattr(estimator, "last_feedback_by_joint", None),
+                joint_velocity_target=pose_velocity_target,
             )
 
         elif active_control_mode == "sit":
@@ -2267,10 +2278,15 @@ def run_policy_loop(
                 q_previous_target,
                 q_coordinate_shift,
             )
+            pose_velocity_target = (
+                np.asarray(q_safe_target, dtype=np.float32)
+                - np.asarray(q_previous_target, dtype=np.float32)
+            ) / float(dt)
             commands = motor_layer.build_mit_commands(
                 q_safe_target,
                 phase="startup",
                 feedback_by_joint=getattr(estimator, "last_feedback_by_joint", None),
+                joint_velocity_target=pose_velocity_target,
             )
             action = np.zeros(action_dim, dtype=np.float32)
 
@@ -2546,7 +2562,13 @@ def run_policy_loop(
                 estimator=estimator,
                 action=action,
                 policy_command=policy_command,
-                phase="policy",
+                phase=(
+                    "policy"
+                    if active_control_mode == "policy"
+                    else "pose"
+                    if active_control_mode in ("stand", "sit", "hold")
+                    else "runtime"
+                ),
                 observation=observation_for_log,
                 raw_action=raw_action,
                 sent_action=action,
@@ -2576,14 +2598,22 @@ def run_policy_loop(
             previous_action = np.zeros(action_dim, dtype=np.float32)
             previous_sent_action = np.zeros(action_dim, dtype=np.float32)
 
-        q_previous_target = (
-            np.asarray(q_previous_target, dtype=np.float32)
-            + float(target_advance_scale)
-            * (
-                np.asarray(q_safe_target, dtype=np.float32)
-                - np.asarray(q_previous_target, dtype=np.float32)
+        if (
+            active_control_mode in ("stand", "sit")
+            and pose_transition_mode == active_control_mode
+        ):
+            # Lag slows one shared body trajectory clock. Never scale joints
+            # independently here: that destroys synchronized pose phase and
+            # produces visible stair-step corrections between legs.
+            pose_transition_elapsed_s = min(
+                pose_transition_duration_s,
+                pose_transition_elapsed_s
+                + float(dt) * float(target_advance_scale),
             )
-        ).astype(np.float32)
+
+        # q_safe_target is the exact joint-space target used to build this
+        # cycle's MIT frames. It must be the sole next-cycle slew reference.
+        q_previous_target = np.asarray(q_safe_target, dtype=np.float32).copy()
 
         if telemetry is not None and step % 2 == 0:
             telemetry.send(
@@ -2600,7 +2630,7 @@ def run_policy_loop(
         cycle_elapsed = time.monotonic() - cycle_start
         time.sleep(max(0.0, dt - cycle_elapsed))
 
-    print("\nPolicy / pose phase completed.")
+    print("\nRuntime control phase completed.")
 
 
 def main():
@@ -3227,7 +3257,8 @@ def main():
             print(
                 "CSV policy I/O: input=obs_000..047, "
                 "raw_output=action_00..11, sent_output=sent_action_00..11, "
-                "motor_target=q_target_00..11, feedback=q_00..11/qd_00..11"
+                "motor_target=q_target_00..11/qd_target_00..11, "
+                "feedback=q_00..11/qd_00..11"
             )
 
         imu_sensor = create_imu_sensor(

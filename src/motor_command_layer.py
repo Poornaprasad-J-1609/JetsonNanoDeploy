@@ -469,7 +469,13 @@ class MotorCommandLayer:
             float(np.clip(tau_ff, lim["tau_ff_min"], lim["tau_ff_max"])),
         )
 
-    def build_mit_commands(self, q_target, phase="policy", feedback_by_joint=None):
+    def build_mit_commands(
+        self,
+        q_target,
+        phase="policy",
+        feedback_by_joint=None,
+        joint_velocity_target=None,
+    ):
         self.reload_control_limits()
         q_target = np.asarray(q_target, dtype=np.float32)
         if q_target.shape != (len(self.policy_order),):
@@ -479,6 +485,19 @@ class MotorCommandLayer:
             )
         if not np.all(np.isfinite(q_target)):
             raise ValueError("q_target contains NaN or Inf")
+        if joint_velocity_target is not None:
+            joint_velocity_target = np.asarray(
+                joint_velocity_target,
+                dtype=np.float32,
+            )
+            if joint_velocity_target.shape != q_target.shape:
+                raise ValueError(
+                    "joint_velocity_target has shape "
+                    f"{list(joint_velocity_target.shape)}, expected "
+                    f"{list(q_target.shape)}"
+                )
+            if not np.all(np.isfinite(joint_velocity_target)):
+                raise ValueError("joint_velocity_target contains NaN or Inf")
 
         commands = []
         feedback_by_joint = feedback_by_joint or {}
@@ -505,7 +524,11 @@ class MotorCommandLayer:
 
             kp = float(self.gains[phase][group]["kp"])
             kd = float(self.gains[phase][group]["kd"])
-            joint_v_des = float(self.feedforward["v_des"])
+            joint_v_des = (
+                float(self.feedforward["v_des"])
+                if joint_velocity_target is None
+                else float(joint_velocity_target[i])
+            )
             joint_tau_ff = float(self.feedforward["tau_ff"])
             q_requested = float(q_target[i])
             q_des = self.apply_hard_joint_limit(joint_name, q_requested)
