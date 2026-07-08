@@ -47,24 +47,24 @@ gains:
   startup:
     hip:
       kp: 75
-      kd: 1.8
+      kd: 1.2
     thigh:
       kp: 75.0
-      kd: 1.8
+      kd: 1.2
     calf:
       kp: 75.0
-      kd: 1.8
+      kd: 1.2
 
   hold:
     hip:
       kp: 75.0
-      kd: 1.8
+      kd: 1.2
     thigh:
       kp: 50.0
-      kd: 1.8
+      kd: 1.2
     calf:
       kp: 75.0
-      kd: 1.8
+      kd: 1.2
 
   policy:
     hip:
