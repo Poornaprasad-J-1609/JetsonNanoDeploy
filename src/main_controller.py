@@ -2839,7 +2839,10 @@ def main():
     if args.gait_assist is not None:
         motion_assist_cfg.setdefault("gait_assist", {})["enabled"] = bool(args.gait_assist)
 
-    safety = SafetyMonitor(runner.policy_order)
+    safety = SafetyMonitor(
+        runner.policy_order,
+        control_dt=runner.control_dt,
+    )
     motor_ids = load_motor_ids()
     joint_can_bus = resolve_joint_can_bus(runner.policy_order, args.can_count)
     active_joints = args.active_joints if args.active_joints is not None else load_active_joints()

@@ -3,8 +3,9 @@
 # Edit this file to tune per-joint command limits. The controller clips every
 # policy, sit, and stand target through these limits before MIT packets are sent.
 #
-# dq_max_per_step is the maximum target change per 20 ms control step by default
-# because config/joint_map.yaml currently sets control_dt: 0.02.
+# dq_max_per_step is specified for the 20 ms reference step in joint_map.yaml.
+# Runtime scales it by actual control_dt, keeping the physical rad/s limit
+# unchanged at 25, 50, or 100 Hz.
 # These values are target slew limits, not hard joint angles. Hard angle limits
 # below are still always applied before MIT packets are sent.
 #

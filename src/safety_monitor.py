@@ -18,7 +18,7 @@ def load_yaml(path):
 
 
 class SafetyMonitor:
-    def __init__(self, policy_order):
+    def __init__(self, policy_order, control_dt=None):
         self.root = ROOT
         self.policy_order = policy_order
         self.limit_path = self.root / "config" / "joint_limits.yaml"
@@ -27,6 +27,21 @@ class SafetyMonitor:
         self.limit_mtime_ns = None
         self.control_limit_mtime_ns = None
         self.safety_limit_mtime_ns = None
+
+        joint_map = load_yaml(self.root / "config" / "joint_map.yaml")
+        self.reference_control_dt = float(joint_map["control_dt"])
+        self.control_dt = (
+            self.reference_control_dt
+            if control_dt is None
+            else float(control_dt)
+        )
+        if (
+            not np.isfinite(self.reference_control_dt)
+            or self.reference_control_dt <= 0.0
+            or not np.isfinite(self.control_dt)
+            or self.control_dt <= 0.0
+        ):
+            raise ValueError("control_dt and reference control_dt must be finite and > 0")
 
         self.q_min = None
         self.q_max = None
@@ -79,7 +94,9 @@ class SafetyMonitor:
 
             q_min.append(q_lo)
             q_max.append(q_hi)
-            dq_max.append(dq_step)
+            dq_max.append(
+                dq_step * self.control_dt / self.reference_control_dt
+            )
 
         self.q_min = np.asarray(q_min, dtype=np.float32)
         self.q_max = np.asarray(q_max, dtype=np.float32)
