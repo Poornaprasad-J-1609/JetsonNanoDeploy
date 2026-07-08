@@ -2199,7 +2199,7 @@ def run_policy_loop(
             )
             break
 
-        advance_target = True
+        target_advance_scale = 1.0
         if (
             active_control_mode in ("stand", "sit")
             and encoder_feedback_required(mode, estimator)
@@ -2218,12 +2218,21 @@ def run_policy_loop(
                     if index is not None and "q_des" in command_item:
                         q_sync_target[index] = float(command_item["q_des"])
                 sync_error = max_active_error(q_feedback, q_sync_target, active_indices)
-                if sync_error > float(pose_sync_error_rad):
-                    advance_target = False
+                sync_limit = float(pose_sync_error_rad)
+                if sync_error > sync_limit:
+                    hard_stop_error = 1.5 * sync_limit
+                    normalized = np.clip(
+                        (hard_stop_error - sync_error)
+                        / max(1.0e-6, hard_stop_error - sync_limit),
+                        0.0,
+                        1.0,
+                    )
+                    target_advance_scale = smoothstep(normalized)
                     if step % max(1, log_every) == 0:
                         print(
-                            f"[SYNC] holding pose target: max joint lag "
-                            f"{sync_error:.3f} rad > {float(pose_sync_error_rad):.3f} rad"
+                            f"[SYNC] slowing pose trajectory: max joint lag "
+                            f"{sync_error:.3f} rad, advance="
+                            f"{100.0 * target_advance_scale:.0f}%"
                         )
 
         if active_control_mode == "stand" and stand_zero_pending:
@@ -2394,8 +2403,14 @@ def run_policy_loop(
             previous_action = np.zeros(action_dim, dtype=np.float32)
             previous_sent_action = np.zeros(action_dim, dtype=np.float32)
 
-        if advance_target:
-            q_previous_target = q_safe_target.copy()
+        q_previous_target = (
+            np.asarray(q_previous_target, dtype=np.float32)
+            + float(target_advance_scale)
+            * (
+                np.asarray(q_safe_target, dtype=np.float32)
+                - np.asarray(q_previous_target, dtype=np.float32)
+            )
+        ).astype(np.float32)
 
         if telemetry is not None and step % 2 == 0:
             telemetry.send(
