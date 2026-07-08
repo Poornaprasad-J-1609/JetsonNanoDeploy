@@ -195,9 +195,9 @@ class ATUsbCan:
 class SocketCan:
     """RobStride official SDK transport over a Linux SocketCAN channel."""
 
-    # SocketCAN and the RobStride SDK already hand frames to the kernel CAN
-    # scheduler. A per-frame userspace sleep spreads a 12-motor command over a
-    # large fraction of the control period and makes pose motion look stepped.
+    # The 1 ms frame gap belongs to the old serial-AT packet adapter. SocketCAN
+    # already serializes frames at the configured CAN bitrate; retaining that
+    # userspace gap spreads one 12-motor target over most of a 50 Hz cycle.
     requires_frame_gap = False
 
     def __init__(
@@ -215,6 +215,10 @@ class SocketCan:
         self.tx_retry_delay = float(max(0.0, tx_retry_delay))
         self.driver = None
         self.bus = None
+        self.tx_queue_len = None
+        self.last_sequence_duration_s = 0.0
+        self.max_sequence_duration_s = 0.0
+        self._last_tx_stall_warning_s = -float("inf")
 
     def open(self):
         from robstride_dynamics import RobstrideBus
@@ -224,11 +228,19 @@ class SocketCan:
             tx_queue_len = int(tx_queue_path.read_text().strip())
         except (OSError, ValueError):
             tx_queue_len = None
-        if tx_queue_len is not None and tx_queue_len < 32:
+        self.tx_queue_len = tx_queue_len
+        if tx_queue_len is not None and tx_queue_len < 16:
             print(
-                f"WARNING: {self.channel} txqueuelen={tx_queue_len} is too small "
-                "for synchronized 12-motor bursts. Before running motor control: "
-                f"sudo ip link set {self.channel} txqueuelen 256"
+                f"WARNING: {self.channel} txqueuelen={tx_queue_len} can reject "
+                "a complete 12-motor command set. Before motor control run: "
+                f"sudo ip link set {self.channel} txqueuelen 32"
+            )
+        elif tx_queue_len is not None and tx_queue_len > 64:
+            print(
+                f"WARNING: {self.channel} txqueuelen={tx_queue_len} permits stale "
+                "motor targets to accumulate and can cause delayed, stepped motion. "
+                f"Before motor control run: sudo ip link set {self.channel} "
+                "txqueuelen 32"
             )
 
         self.driver = RobstrideBus(
@@ -259,18 +271,21 @@ class SocketCan:
         if len(data) > 8:
             raise ValueError("CAN data length must be <= 8 bytes")
 
-        comm_type = (int(can_id) >> 24) & 0x1F
-        extra_data = (int(can_id) >> 8) & 0xFFFF
-        motor_id = int(can_id) & 0xFF
+        import can
 
+        message = can.Message(
+            arbitration_id=int(can_id),
+            data=bytes(data),
+            is_extended_id=True,
+        )
         for attempt in range(self.tx_retry_count + 1):
             try:
-                self.driver.transmit(
-                    comm_type,
-                    extra_data,
-                    motor_id,
-                    bytes(data),
-                )
+                # RobstrideBus.transmit() uses a zero-timeout python-can send,
+                # which intermittently raises ENOBUFS under a 12-motor burst.
+                # Use its connected official SocketCAN channel with a bounded
+                # wait so the current command set is submitted or fails now;
+                # it is never stored in an unbounded Python retry queue.
+                self.bus.send(message, timeout=self.timeout)
                 return int(can_id), bytes(data)
             except Exception as exc:
                 if not self._is_tx_queue_full(exc) or attempt >= self.tx_retry_count:
@@ -283,10 +298,29 @@ class SocketCan:
     def send_raw_sequence(self, frames, frame_gap_s=0.0):
         frames = list(frames)
         sent = []
+        started = time.monotonic()
         for index, (can_id, data) in enumerate(frames):
             sent.append(self.send_raw(can_id, data))
             if frame_gap_s > 0.0 and index + 1 < len(frames):
-                time.sleep(float(frame_gap_s))
+                deadline = started + (index + 1) * float(frame_gap_s)
+                time.sleep(max(0.0, deadline - time.monotonic()))
+        self.last_sequence_duration_s = time.monotonic() - started
+        self.max_sequence_duration_s = max(
+            self.max_sequence_duration_s,
+            self.last_sequence_duration_s,
+        )
+        expected_s = max(0.002, len(frames) * 0.00025)
+        now = time.monotonic()
+        if (
+            self.last_sequence_duration_s > max(0.050, 4.0 * expected_s)
+            and now - self._last_tx_stall_warning_s >= 1.0
+        ):
+            self._last_tx_stall_warning_s = now
+            print(
+                f"WARNING: {self.channel} SocketCAN command submission took "
+                f"{1000.0 * self.last_sequence_duration_s:.1f} ms; check "
+                "txqueuelen, bitrate, adapter load, and CAN termination."
+            )
         return sent
 
     def read_available_frames(self, timeout=0.0, max_frames=256):

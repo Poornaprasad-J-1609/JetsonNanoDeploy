@@ -422,6 +422,44 @@ def assert_rs04_wire_contract(proto):
         raise AssertionError("RS04 MIT feedback frame did not decode")
 
 
+def assert_command_wire_contract(layer):
+    if layer.command_encoding != "legacy_9b03a77":
+        if layer.command_proto != layer.proto:
+            raise AssertionError("official command protocol differs from feedback protocol")
+        return "official RS04"
+
+    expected = {
+        "p_min": -12.5,
+        "p_max": 12.5,
+        "v_min": -30.0,
+        "v_max": 30.0,
+        "kp_min": 0.0,
+        "kp_max": 500.0,
+        "kd_min": 0.0,
+        "kd_max": 5.0,
+        "tau_min": -12.0,
+        "tau_max": 12.0,
+    }
+    proto = layer.command_proto
+    for key, value in expected.items():
+        if not np.isclose(float(proto[key]), value, rtol=0.0, atol=1e-12):
+            raise AssertionError(
+                f"legacy command range {key}={proto[key]} differs from "
+                f"commit 9b03a77 value {value}"
+            )
+    if not bool(proto.get("use_float_to_uint", False)):
+        raise AssertionError("legacy command protocol must use float_to_uint")
+
+    payload = pack_mit_command(-1.64, 0.0, 75.0, 1.8, proto)
+    can_id = mit_can_id(0x7F, proto, 1.0)
+    if payload.hex() != "6f347fff26665c28" or can_id != 0x018AAA7F:
+        raise AssertionError(
+            "legacy MIT command bytes differ from commit 9b03a77: "
+            f"data={payload.hex()} id=0x{can_id:08X}"
+        )
+    return "legacy 9b03a77"
+
+
 def q_midpoint_from_limits(layer, policy_order):
     return np.array(
         [
@@ -471,6 +509,7 @@ def main():
 
     proto = layer.proto
     assert_rs04_wire_contract(proto)
+    command_contract = assert_command_wire_contract(layer)
     enable_counts = assert_raw_routing(
         layer,
         layer.build_enable_commands(),
@@ -538,7 +577,8 @@ def main():
     else:
         print("Duplicate motor IDs on separate CAN buses: skipped for one-CAN topology")
     print("Persistent motor zero and direct joint direction handling: OK")
-    print("Official RS04 MIT wire scaling and byte contract: OK")
+    print("Official RS04 feedback scaling and byte contract: OK")
+    print(f"Motor command wire contract: {command_contract} OK")
     return 0
 
 

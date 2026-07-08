@@ -2259,15 +2259,10 @@ def run_policy_loop(
                 q_previous_target,
                 q_coordinate_shift,
             )
-            pose_velocity_target = (
-                np.asarray(q_safe_target, dtype=np.float32)
-                - np.asarray(q_previous_target, dtype=np.float32)
-            ) / float(dt)
             commands = motor_layer.build_mit_commands(
                 q_safe_target,
                 phase=stand_command_phase,
                 feedback_by_joint=getattr(estimator, "last_feedback_by_joint", None),
-                joint_velocity_target=pose_velocity_target,
             )
 
         elif active_control_mode == "sit":
@@ -2278,15 +2273,10 @@ def run_policy_loop(
                 q_previous_target,
                 q_coordinate_shift,
             )
-            pose_velocity_target = (
-                np.asarray(q_safe_target, dtype=np.float32)
-                - np.asarray(q_previous_target, dtype=np.float32)
-            ) / float(dt)
             commands = motor_layer.build_mit_commands(
                 q_safe_target,
                 phase="startup",
                 feedback_by_joint=getattr(estimator, "last_feedback_by_joint", None),
-                joint_velocity_target=pose_velocity_target,
             )
             action = np.zeros(action_dim, dtype=np.float32)
 

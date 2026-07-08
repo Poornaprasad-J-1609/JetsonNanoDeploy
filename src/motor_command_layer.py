@@ -87,10 +87,19 @@ def pack_mit_command(p_des, v_des, kp, kd, proto):
     Feed-forward torque is NOT in these 8 bytes; it lives in the extended CAN
     ID extra-data field and is handled separately by mit_can_id().
     """
-    p_int = signed_offset_to_uint(p_des, proto["p_min"], proto["p_max"])
-    v_int = signed_offset_to_uint(v_des, proto["v_min"], proto["v_max"])
-    kp_int = unsigned_to_uint(kp, proto["kp_min"], proto["kp_max"])
-    kd_int = unsigned_to_uint(kd, proto["kd_min"], proto["kd_max"])
+    if bool(proto.get("use_float_to_uint", False)):
+        # Exact command quantization used by the proven pre-SocketCAN MIT path
+        # at commit 9b03a77. Feedback decoding remains on the official RS04
+        # ranges and is intentionally independent of this compatibility path.
+        p_int = float_to_uint(p_des, proto["p_min"], proto["p_max"], 16)
+        v_int = float_to_uint(v_des, proto["v_min"], proto["v_max"], 16)
+        kp_int = float_to_uint(kp, proto["kp_min"], proto["kp_max"], 16)
+        kd_int = float_to_uint(kd, proto["kd_min"], proto["kd_max"], 16)
+    else:
+        p_int = signed_offset_to_uint(p_des, proto["p_min"], proto["p_max"])
+        v_int = signed_offset_to_uint(v_des, proto["v_min"], proto["v_max"])
+        kp_int = unsigned_to_uint(kp, proto["kp_min"], proto["kp_max"])
+        kd_int = unsigned_to_uint(kd, proto["kd_min"], proto["kd_max"])
 
     return (
         p_int.to_bytes(2, "big") +
@@ -102,7 +111,19 @@ def pack_mit_command(p_des, v_des, kp, kd, proto):
 
 def mit_can_id(motor_id, proto, tau_ff=0.0):
     comm_type = int(proto["comm_type_mit_control"])
-    tau_int = signed_offset_to_uint(tau_ff, proto["tau_min"], proto["tau_max"])
+    if bool(proto.get("use_float_to_uint", False)):
+        tau_int = float_to_uint(
+            tau_ff,
+            proto["tau_min"],
+            proto["tau_max"],
+            16,
+        )
+    else:
+        tau_int = signed_offset_to_uint(
+            tau_ff,
+            proto["tau_min"],
+            proto["tau_max"],
+        )
     motor_id = int(motor_id)
 
     # RobStride/CyberGear-style extended ID layout:
@@ -189,6 +210,31 @@ class MotorCommandLayer:
         motor_cfg = self.cfg.get("motor", {})
         if bool(motor_cfg.get("use_official_mit_ranges", True)):
             self._load_official_mit_ranges(str(motor_cfg.get("model", "rs-04")))
+        self.command_proto = dict(self.proto)
+        self.command_encoding = str(
+            motor_cfg.get("command_encoding", "official")
+        ).strip().lower()
+        if self.command_encoding == "legacy_9b03a77":
+            legacy_proto = self.cfg.get("legacy_command_protocol", {})
+            required = (
+                "p_min", "p_max", "v_min", "v_max", "kp_min", "kp_max",
+                "kd_min", "kd_max", "tau_min", "tau_max",
+            )
+            missing = [key for key in required if key not in legacy_proto]
+            if missing:
+                raise KeyError(
+                    "legacy_command_protocol is missing: " + ", ".join(missing)
+                )
+            self.command_proto.update({
+                key: float(legacy_proto[key]) for key in required
+            })
+            self.command_proto["use_float_to_uint"] = bool(
+                legacy_proto.get("use_float_to_uint", True)
+            )
+        elif self.command_encoding != "official":
+            raise ValueError(
+                "motor.command_encoding must be official or legacy_9b03a77"
+            )
         self.gains = self.cfg["gains"]
         self.feedforward = self.cfg["feedforward"]
         communication_cfg = self.cfg.get("communication", {})
@@ -586,8 +632,8 @@ class MotorCommandLayer:
                 direction=direction,
                 feedback_position=feedback_position,
                 feedback_joint_position=feedback_joint_position,
-                p_min=self.proto["p_min"],
-                p_max=self.proto["p_max"],
+                p_min=self.command_proto["p_min"],
+                p_max=self.command_proto["p_max"],
             )
             motor_v_des = direction * joint_v_des
             motor_tau_ff = direction * joint_tau_ff
@@ -600,13 +646,17 @@ class MotorCommandLayer:
             )
             q_des_sent = q_des
 
-            can_id = mit_can_id(motor_id, self.proto, tau_ff=motor_tau_ff)
+            can_id = mit_can_id(
+                motor_id,
+                self.command_proto,
+                tau_ff=motor_tau_ff,
+            )
             data = pack_mit_command(
                 p_des=p_des,
                 v_des=motor_v_des,
                 kp=kp,
                 kd=kd,
-                proto=self.proto,
+                proto=self.command_proto,
             )
 
             commands.append({

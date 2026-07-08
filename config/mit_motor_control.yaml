@@ -1,6 +1,23 @@
 motor:
   model: rs-04
   use_official_mit_ranges: true
+  # Reproduce the operation-control bytes used by commit 9b03a77 while still
+  # decoding feedback with the official RS04 ranges below. This preserves the
+  # proven motor-side impedance across the serial-AT -> SocketCAN migration.
+  command_encoding: legacy_9b03a77
+
+legacy_command_protocol:
+  use_float_to_uint: true
+  p_min: -12.5
+  p_max: 12.5
+  v_min: -30.0
+  v_max: 30.0
+  kp_min: 0.0
+  kp_max: 500.0
+  kd_min: 0.0
+  kd_max: 5.0
+  tau_min: -12.0
+  tau_max: 12.0
 
 mit_protocol:
   # RobStride / CyberGear-style MIT control frame.
@@ -33,17 +50,16 @@ startup:
   standup_seconds: 3.0
 
 communication:
-  # Legacy serial-AT adapters need paced frames. SocketCAN bypasses this delay
-  # and submits each 12-motor command as one tightly grouped kernel CAN burst.
+  # The old serial-AT backend uses this proven inter-packet gap. SocketCAN
+  # bypasses it and lets the kernel serialize one compact 12-frame command set.
   batch_writes: false
   group_flush: true
   frame_gap_s: 0.0010
 
 gains:
-  # These are explicit RS04 gains in official SDK units. The pre-SocketCAN
-  # deployment encoded 75/1.8 through 500/5 ranges; RS04 firmware interpreted
-  # those same bits as approximately 750/36. Use those effective values here
-  # so changing transport does not change actuator behavior.
+  # Keep the exact numerical gains used by the proven pre-SocketCAN MIT path.
+  # legacy_command_protocol above preserves their original wire encoding;
+  # changing transport therefore does not silently rescale motor impedance.
   startup:
     hip:
       kp: 75
@@ -70,27 +86,27 @@ gains:
     hip:
       # Low suspended-test gains: enough to reveal the policy gait without
       # aggressively loading a joint when target tracking is imperfect.
-      kp: 75.0
-      kd: 1.8
+      kp: 20.0
+      kd: 0.8
     thigh:
-      kp: 75.0
-      kd: 1.8
+      kp: 20.0
+      kd: 0.8
     calf:
-      kp: 75.0
-      kd: 1.8
+      kp: 20.0
+      kd: 0.8
 
   # Direct IMU body-leveling gains. Stand-up itself continues to use the
   # startup gains above; these take over only after stand has settled.
   leveling:
     hip:
-      kp: 75.0
-      kd: 1.8
+      kp: 18.0
+      kd: 0.6
     thigh:
-      kp: 75.0
-      kd: 1.8
+      kp: 18.0
+      kd: 0.6
     calf:
-      kp: 75.0
-      kd: 1.8
+      kp: 18.0
+      kd: 0.6
 
 feedforward:
   tau_ff: 0.0
