@@ -1,0 +1,72 @@
+Policy: /home/poornaprasad/Work/WORKSPACE/Issacsim/isaaclab/GRALLATOR_DEPLOY/policy/policy.pt
+Policy SHA256: 330e02f2406e129bb6ed6ec4a6c6bcd5f80d7e7799a2ab087e81eda65d2fae69
+Rows: 740
+Joint order: BL_hip_joint, BR_hip_joint, FL_hip_joint, FR_hip_joint, BL_thigh_joint, BR_thigh_joint, FL_thigh_joint, FR_thigh_joint, BL_calf_joint, BR_calf_joint, FL_calf_joint, FR_calf_joint
+Segments:
+   0 stop      steps=0001..0070 duration=1.40s cmd=[+0.000,+0.000,+0.000]
+   1 forward   steps=0071..0217 duration=2.94s cmd=[+0.600,+0.000,+0.000]
+   2 stop      steps=0218..0238 duration=0.42s cmd=[+0.000,+0.000,+0.000]
+   3 backward  steps=0239..0338 duration=2.00s cmd=[-0.600,+0.000,+0.000]
+   4 stop      steps=0339..0469 duration=2.62s cmd=[+0.000,+0.000,+0.000]
+   5 backward  steps=0470..0507 duration=0.76s cmd=[-0.600,+0.000,+0.000]
+   6 stop      steps=0508..0509 duration=0.04s cmd=[+0.000,+0.000,+0.000]
+   7 left      steps=0510..0551 duration=0.84s cmd=[+0.000,+0.400,+0.000]
+   8 stop      steps=0552..0573 duration=0.44s cmd=[+0.000,+0.000,+0.000]
+   9 yaw_left  steps=0574..0630 duration=1.14s cmd=[+0.000,+0.000,+0.800]
+  10 stop      steps=0631..0665 duration=0.70s cmd=[+0.000,+0.000,+0.000]
+  11 yaw_right steps=0666..0668 duration=0.06s cmd=[+0.000,+0.000,-0.800]
+  12 stop      steps=0669..0672 duration=0.08s cmd=[+0.000,+0.000,+0.000]
+  13 yaw_right steps=0673..0702 duration=0.60s cmd=[+0.000,+0.000,-0.800]
+  14 stop      steps=0703..0740 duration=0.76s cmd=[+0.000,+0.000,+0.000]
+Comparison:
+  obs[0:3] absolute max: 0.0
+  actor command source: obs[9:12]
+  logged command metadata max error: 1.600000023841858
+  logged command metadata mismatched rows: 714
+  previous raw action max error (continuous rows): 0.0
+  simulator reset rows with zero previous action: 0
+  runtime command-limit max adjustment: 0.0
+  policy replay action max error: 0.15259647369384766
+  policy replay action mean error: 0.0236293263733387
+  policy vs motor-log action max error: 0.0
+  deployment vs sim q_target max error: 0.038149118423461914
+  final limited target vs sim during walking max error: 1.1767512559890747
+  hard position clips (all rows / walking rows): 2285 / 1087
+  simulated measured-q max outside deployment bounds: 0.0003812474897131324
+  simulated measured-q samples outside bounds by >0.01 rad: 0
+  simulation default_q max abs: 0.0
+  missing final motor rows: 0
+Deployment shaping (always-policy dry replay):
+  configured action clip: 3.0
+  configured action smoothing: 0.1
+  logged action samples beyond clip: 309 / 8880
+  action shaping max/mean error: 5.644376277923584 / 0.07752116024494171
+  hard-limit adjusted samples: 2240
+  rate-limit adjusted samples: 1740
+  rate-limit max/mean target error: 1.167206883430481 / 0.040349021553993225
+  full runtime-vs-sim target max/mean error: 1.8998515605926514 / 0.12212565541267395
+  policy-to-motor-to-policy sign roundtrip max error: 0.0
+  joint/motor torque sign roundtrip max error: 0.0
+  motor directions: BL_hip_joint=-1, BR_hip_joint=-1, FL_hip_joint=-1, FR_hip_joint=-1, BL_thigh_joint=-1, BR_thigh_joint=-1, FL_thigh_joint=-1, FR_thigh_joint=-1, BL_calf_joint=+1, BR_calf_joint=+1, FL_calf_joint=+1, FR_calf_joint=+1
+Simulation-match path on logged physical state:
+  estimated PD torque limit: 40.0
+  sent-vs-sim target max/mean error: 1.7841782569885254 / 0.09138559550046921
+  estimated-vs-sim applied torque max/mean error: 112.29924011230469 / 9.765560150146484
+  estimated torque absolute max: 40.0
+Simulation actuator identification and deployment wire gains:
+  BL_hip_joint     sim_fit_kp/kd=  80.2/ 4.47 R2=0.999 deploy_cfg=80.0/4.50 official_wire=80.0/4.50 tau_p95/max=74.8/75.0 sim_saturation=5.0%
+  BR_hip_joint     sim_fit_kp/kd=  80.1/ 4.43 R2=1.000 deploy_cfg=80.0/4.50 official_wire=80.0/4.50 tau_p95/max=73.3/75.0 sim_saturation=4.2%
+  FL_hip_joint     sim_fit_kp/kd=  80.1/ 4.49 R2=0.999 deploy_cfg=80.0/4.50 official_wire=80.0/4.50 tau_p95/max=60.0/60.0 sim_saturation=7.6%
+  FR_hip_joint     sim_fit_kp/kd=  79.9/ 4.56 R2=0.999 deploy_cfg=80.0/4.50 official_wire=80.0/4.50 tau_p95/max=50.8/60.0 sim_saturation=3.9%
+  BL_thigh_joint   sim_fit_kp/kd= 129.7/ 6.85 R2=0.996 deploy_cfg=130.0/7.20 official_wire=129.9/7.20 tau_p95/max=66.4/99.1 sim_saturation=0.0%
+  BR_thigh_joint   sim_fit_kp/kd= 130.1/ 6.89 R2=0.995 deploy_cfg=130.0/7.20 official_wire=129.9/7.20 tau_p95/max=53.5/110.9 sim_saturation=0.0%
+  FL_thigh_joint   sim_fit_kp/kd= 111.8/ 6.33 R2=0.999 deploy_cfg=112.0/6.20 official_wire=111.9/6.20 tau_p95/max=70.7/90.0 sim_saturation=1.1%
+  FR_thigh_joint   sim_fit_kp/kd= 111.5/ 6.10 R2=0.998 deploy_cfg=112.0/6.20 official_wire=111.9/6.20 tau_p95/max=62.4/90.0 sim_saturation=1.4%
+  BL_calf_joint    sim_fit_kp/kd= 135.1/ 7.45 R2=0.983 deploy_cfg=135.0/7.60 official_wire=135.0/7.60 tau_p95/max=71.0/130.0 sim_saturation=0.8%
+  BR_calf_joint    sim_fit_kp/kd= 133.8/ 7.66 R2=0.989 deploy_cfg=135.0/7.60 official_wire=135.0/7.60 tau_p95/max=57.8/130.0 sim_saturation=0.5%
+  FL_calf_joint    sim_fit_kp/kd= 111.7/ 6.48 R2=0.997 deploy_cfg=113.0/6.30 official_wire=113.0/6.30 tau_p95/max=84.6/95.0 sim_saturation=3.8%
+  FR_calf_joint    sim_fit_kp/kd= 113.4/ 6.34 R2=0.991 deploy_cfg=113.0/6.30 official_wire=113.0/6.30 tau_p95/max=57.0/95.0 sim_saturation=2.0%
+  motor rows without a policy-input row: 9
+Replay CSV: logs/sim_comparison/hil_replay_20260708.csv
+SIMULATION POLICY REPLAY COMPARISON HAS MISMATCHES (allowed)
+NOTE: safety-limit clipping is reported above but is not a policy-contract failure.

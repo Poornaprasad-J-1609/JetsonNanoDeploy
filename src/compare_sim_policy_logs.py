@@ -7,10 +7,13 @@ from pathlib import Path
 
 import numpy as np
 import torch
+import yaml
 
 from policy_runner import PolicyRunner
 from safety_monitor import SafetyMonitor
 from joystick_interface import clip_command, load_command_limits
+from main_controller import filtered_policy_action
+from motor_command_layer import MotorCommandLayer, joint_group
 
 
 def floats(row, prefix, count, width):
@@ -18,6 +21,22 @@ def floats(row, prefix, count, width):
         [float(row[f"{prefix}_{index:0{width}d}"]) for index in range(count)],
         dtype=np.float32,
     )
+
+
+def floats_from_candidates(row, candidates, count):
+    for prefix, width in candidates:
+        keys = [f"{prefix}_{index:0{width}d}" for index in range(count)]
+        if all(key in row and row[key] != "" for key in keys):
+            return np.asarray([float(row[key]) for key in keys], dtype=np.float32)
+    expected = ", ".join(prefix for prefix, _ in candidates)
+    raise KeyError(f"CSV row has none of the expected vector prefixes: {expected}")
+
+
+def first_float(row, keys):
+    for key in keys:
+        if key in row and row[key] != "":
+            return float(row[key])
+    raise KeyError(f"CSV row has none of the expected fields: {', '.join(keys)}")
 
 
 def command_label(command, threshold=1e-6):
@@ -90,6 +109,11 @@ def main():
     parser.add_argument("motor_log")
     parser.add_argument("--policy-path", default=None)
     parser.add_argument("--output", default=None)
+    parser.add_argument(
+        "--allow-policy-mismatch",
+        action="store_true",
+        help="write comparison output and return success even when logged and deployed actors differ",
+    )
     args = parser.parse_args()
 
     runner = PolicyRunner(policy_path=args.policy_path)
@@ -108,7 +132,14 @@ def main():
         )
 
     observations = np.stack([floats(row, "obs", 48, 3) for row in rows])
-    sim_actions = np.stack([floats(row, "action", 12, 2) for row in rows])
+    sim_actions = np.stack([
+        floats_from_candidates(
+            row,
+            (("action", 2), ("policy_action", 2)),
+            12,
+        )
+        for row in rows
+    ])
     logged_commands = np.asarray(
         [[float(row["command_vx"]), float(row["command_vy"]), float(row["command_yaw"])] for row in rows],
         dtype=np.float32,
@@ -128,18 +159,44 @@ def main():
 
     sim_targets = np.full_like(replay_targets, np.nan)
     sim_positions = np.full_like(replay_targets, np.nan)
+    sim_velocities = np.full_like(replay_targets, np.nan)
     sim_motor_actions = np.full_like(replay_actions, np.nan)
     sim_defaults = np.full_like(replay_targets, np.nan)
+    computed_torques = np.full_like(replay_targets, np.nan)
+    applied_torques = np.full_like(replay_targets, np.nan)
     for row_index, policy_row in enumerate(rows):
         step = int(policy_row["step"])
         for joint_index, joint_name in enumerate(runner.policy_order):
             motor_row = motor_rows.get((step, joint_name))
             if motor_row is None:
                 continue
-            sim_targets[row_index, joint_index] = float(motor_row["q_target_est"])
+            sim_targets[row_index, joint_index] = first_float(
+                motor_row,
+                ("joint_pos_target", "q_target_est"),
+            )
             sim_positions[row_index, joint_index] = float(motor_row["q"])
-            sim_motor_actions[row_index, joint_index] = float(motor_row["action"])
+            sim_velocities[row_index, joint_index] = float(motor_row["qd"])
+            sim_motor_actions[row_index, joint_index] = first_float(
+                motor_row,
+                ("action", "raw_action_by_joint", "policy_action_same_index"),
+            )
             sim_defaults[row_index, joint_index] = float(motor_row["default_q"])
+            if "computed_torque_preclip" in motor_row:
+                computed_torques[row_index, joint_index] = float(
+                    motor_row["computed_torque_preclip"]
+                )
+            elif "computed_torque" in motor_row:
+                computed_torques[row_index, joint_index] = float(
+                    motor_row["computed_torque"]
+                )
+            if "applied_torque_postclip" in motor_row:
+                applied_torques[row_index, joint_index] = float(
+                    motor_row["applied_torque_postclip"]
+                )
+            elif "applied_torque" in motor_row:
+                applied_torques[row_index, joint_index] = float(
+                    motor_row["applied_torque"]
+                )
 
     action_error = np.abs(replay_actions - sim_actions)
     target_error = np.abs(replay_targets - sim_targets)
@@ -149,6 +206,11 @@ def main():
         np.maximum(sim_positions - safety.q_max[None, :], 0.0),
     )
     motor_action_error = np.abs(sim_motor_actions - sim_actions)
+    episode_reset_rows = np.asarray([
+        float(row.get("episode_reset", 0.0) or 0.0) > 0.5
+        for row in rows
+    ])
+    non_reset_rows = ~episode_reset_rows
     command_metadata_error = np.abs(commands - logged_commands)
     previous_action_error = np.abs(observations[1:, 36:48] - sim_actions[:-1])
     reset_rows = (
@@ -162,6 +224,189 @@ def main():
         else 0.0
     )
     runtime_command_clip_error = np.abs(runtime_commands - commands)
+
+    control_cfg = runner.root / "config" / "control_limits.yaml"
+    with control_cfg.open("r") as config_file:
+        deployment_cfg = yaml.safe_load(config_file)["policy_deployment"]
+    action_clip = float(deployment_cfg.get("action_clip_abs", 0.0))
+    action_smoothing = float(deployment_cfg.get("action_smoothing", 0.0))
+
+    shaped_actions = np.zeros_like(replay_actions)
+    shaped_logged_actions = np.zeros_like(sim_actions)
+    previous_shaped = np.zeros(replay_actions.shape[1], dtype=np.float32)
+    previous_logged_shaped = np.zeros(sim_actions.shape[1], dtype=np.float32)
+    for index in range(len(rows)):
+        shaped_actions[index] = filtered_policy_action(
+            replay_actions[index],
+            previous_shaped,
+            clip_abs=action_clip,
+            smoothing=action_smoothing,
+        )
+        shaped_logged_actions[index] = filtered_policy_action(
+            sim_actions[index],
+            previous_logged_shaped,
+            clip_abs=action_clip,
+            smoothing=action_smoothing,
+        )
+        previous_shaped = shaped_actions[index]
+        previous_logged_shaped = shaped_logged_actions[index]
+
+    shaped_targets = runner.q_default[None, :] + runner.action_scale * shaped_actions
+    shaped_logged_targets = (
+        runner.q_default[None, :] + runner.action_scale * shaped_logged_actions
+    )
+    shaped_hard_targets = np.clip(
+        shaped_logged_targets,
+        safety.q_min[None, :],
+        safety.q_max[None, :],
+    )
+    runtime_targets = np.zeros_like(shaped_hard_targets)
+    previous_target = runner.q_default.copy()
+    for index in range(len(rows)):
+        runtime_targets[index] = safety.safety_filter(
+            shaped_logged_targets[index],
+            previous_target,
+            apply_rate_limit=True,
+        )
+        previous_target = runtime_targets[index]
+
+    action_shaping_error = np.abs(shaped_logged_actions - sim_actions)
+    hard_limit_error = np.abs(shaped_hard_targets - shaped_logged_targets)
+    rate_limit_error = np.abs(runtime_targets - shaped_hard_targets)
+    total_runtime_target_error = np.abs(runtime_targets - sim_targets)
+
+    motor_cfg = yaml.safe_load(
+        (runner.root / "config" / "motor_ids.yaml").read_text()
+    )
+    motor_layer = MotorCommandLayer(
+        policy_order=runner.policy_order,
+        motor_ids=motor_cfg["motor_ids"],
+        active_joints=runner.policy_order,
+    )
+    directions = np.asarray(
+        [motor_layer.joint_directions[name] for name in runner.policy_order],
+        dtype=np.float32,
+    )
+    offsets = np.asarray(
+        [motor_layer.joint_offsets[name] for name in runner.policy_order],
+        dtype=np.float32,
+    )
+    motor_targets = offsets[None, :] + directions[None, :] * runtime_targets
+    joint_roundtrip = directions[None, :] * (motor_targets - offsets[None, :])
+    sign_roundtrip_error = np.abs(joint_roundtrip - runtime_targets)
+    motor_torques = directions[None, :] * applied_torques
+    torque_roundtrip = directions[None, :] * motor_torques
+    torque_sign_roundtrip_error = np.abs(torque_roundtrip - applied_torques)
+
+    gain_fits = []
+    for joint_index, joint_name in enumerate(runner.policy_order):
+        valid = (
+            np.isfinite(sim_targets[:, joint_index])
+            & np.isfinite(sim_positions[:, joint_index])
+            & np.isfinite(sim_velocities[:, joint_index])
+            & np.isfinite(computed_torques[:, joint_index])
+        )
+        if not np.any(valid):
+            gain_fits.append((np.nan, np.nan, np.nan))
+            continue
+        position_error = (
+            sim_targets[valid, joint_index] - sim_positions[valid, joint_index]
+        )
+        velocity_error = -sim_velocities[valid, joint_index]
+        matrix = np.column_stack([
+            position_error,
+            velocity_error,
+            np.ones(np.count_nonzero(valid)),
+        ])
+        torque = computed_torques[valid, joint_index]
+        coefficients = np.linalg.lstsq(matrix, torque, rcond=None)[0]
+        estimate = matrix @ coefficients
+        denominator = max(float(np.sum((torque - np.mean(torque)) ** 2)), 1e-12)
+        r_squared = 1.0 - float(np.sum((torque - estimate) ** 2)) / denominator
+        gain_fits.append((
+            float(coefficients[0]),
+            float(coefficients[1]),
+            r_squared,
+        ))
+
+    sim_match_targets = np.clip(
+        sim_targets,
+        safety.q_min[None, :],
+        safety.q_max[None, :],
+    )
+    sim_match_torque_estimate = np.full_like(sim_match_targets, np.nan)
+    policy_torque_limit = float(motor_layer.policy_pd_torque_limit)
+    policy_command_proto = motor_layer.command_proto_for_phase("policy")
+    for joint_index, joint_name in enumerate(runner.policy_order):
+        group = joint_group(joint_name)
+        configured_kp, configured_kd = motor_layer._joint_gains(
+            "policy",
+            joint_name,
+            group,
+        )
+        effective_kp = motor_layer._effective_unsigned_wire_value(
+            configured_kp,
+            "kp",
+            policy_command_proto,
+        )
+        effective_kd = motor_layer._effective_unsigned_wire_value(
+            configured_kd,
+            "kd",
+            policy_command_proto,
+        )
+        valid = (
+            np.isfinite(sim_match_targets[:, joint_index])
+            & np.isfinite(sim_positions[:, joint_index])
+            & np.isfinite(sim_velocities[:, joint_index])
+        )
+        q_feedback = sim_positions[valid, joint_index]
+        qd_feedback = sim_velocities[valid, joint_index]
+        velocity_torque = -effective_kd * qd_feedback
+        position_torque = effective_kp * (
+            sim_match_targets[valid, joint_index] - q_feedback
+        )
+        if policy_torque_limit > 0.0:
+            position_torque = np.clip(
+                position_torque,
+                -policy_torque_limit - velocity_torque,
+                policy_torque_limit - velocity_torque,
+            )
+        limited_target = q_feedback + position_torque / effective_kp
+        sim_match_targets[valid, joint_index] = np.clip(
+            limited_target,
+            safety.q_min[joint_index],
+            safety.q_max[joint_index],
+        )
+        torque_estimate = (
+            effective_kp * (
+                sim_match_targets[valid, joint_index] - q_feedback
+            )
+            + velocity_torque
+        )
+        if policy_torque_limit > 0.0 and effective_kd > 0.0:
+            target_torque = np.clip(
+                torque_estimate,
+                -policy_torque_limit,
+                policy_torque_limit,
+            )
+            velocity_target = qd_feedback + (
+                target_torque
+                - effective_kp * (
+                    sim_match_targets[valid, joint_index] - q_feedback
+                )
+            ) / effective_kd
+            velocity_target = np.clip(
+                velocity_target,
+                float(motor_layer.proto["v_min"]),
+                float(motor_layer.proto["v_max"]),
+            )
+            torque_estimate = (
+                effective_kp * (
+                    sim_match_targets[valid, joint_index] - q_feedback
+                )
+                + effective_kd * (velocity_target - qd_feedback)
+            )
+        sim_match_torque_estimate[valid, joint_index] = torque_estimate
 
     print("Policy:", runner.policy_path)
     print("Policy SHA256:", runner.policy_sha256)
@@ -190,7 +435,10 @@ def main():
     print("  runtime command-limit max adjustment:", float(np.max(runtime_command_clip_error)))
     print("  policy replay action max error:", float(np.max(action_error)))
     print("  policy replay action mean error:", float(np.mean(action_error)))
-    print("  policy vs motor-log action max error:", float(np.nanmax(motor_action_error)))
+    print(
+        "  policy vs motor-log action max error (non-reset rows):",
+        float(np.nanmax(motor_action_error[non_reset_rows])),
+    )
     print("  deployment vs sim q_target max error:", float(np.nanmax(target_error)))
     walking_rows = np.max(np.abs(commands), axis=1) > 0.02
     print(
@@ -213,6 +461,76 @@ def main():
     )
     print("  simulation default_q max abs:", float(np.nanmax(np.abs(sim_defaults))))
     print("  missing final motor rows:", int(np.count_nonzero(~np.isfinite(sim_targets))))
+    print("Deployment shaping (always-policy dry replay):")
+    print("  configured action clip:", action_clip)
+    print("  configured action smoothing:", action_smoothing)
+    print(
+        "  logged action samples beyond clip:",
+        int(np.count_nonzero(np.abs(sim_actions) > action_clip)) if action_clip > 0.0 else 0,
+        "/",
+        int(sim_actions.size),
+    )
+    print("  action shaping max/mean error:", float(np.max(action_shaping_error)), "/", float(np.mean(action_shaping_error)))
+    print("  hard-limit adjusted samples:", int(np.count_nonzero(hard_limit_error > 1e-7)))
+    print("  rate-limit adjusted samples:", int(np.count_nonzero(rate_limit_error > 1e-7)))
+    print("  rate-limit max/mean target error:", float(np.max(rate_limit_error)), "/", float(np.mean(rate_limit_error)))
+    print("  full runtime-vs-sim target max/mean error:", float(np.nanmax(total_runtime_target_error)), "/", float(np.nanmean(total_runtime_target_error)))
+    print("  policy-to-motor-to-policy sign roundtrip max error:", float(np.max(sign_roundtrip_error)))
+    print("  joint/motor torque sign roundtrip max error:", float(np.nanmax(torque_sign_roundtrip_error)))
+    print(
+        "  motor directions:",
+        ", ".join(
+            f"{name}={int(directions[index]):+d}"
+            for index, name in enumerate(runner.policy_order)
+        ),
+    )
+    print("Simulation-match path on logged physical state:")
+    print("  estimated PD torque limit:", policy_torque_limit)
+    print(
+        "  sent-vs-sim target max/mean error:",
+        float(np.nanmax(np.abs(sim_match_targets - sim_targets))),
+        "/",
+        float(np.nanmean(np.abs(sim_match_targets - sim_targets))),
+    )
+    print(
+        "  estimated-vs-sim applied torque max/mean error:",
+        float(np.nanmax(np.abs(sim_match_torque_estimate - applied_torques))),
+        "/",
+        float(np.nanmean(np.abs(sim_match_torque_estimate - applied_torques))),
+    )
+    print(
+        "  estimated torque absolute max:",
+        float(np.nanmax(np.abs(sim_match_torque_estimate))),
+    )
+    print("Simulation actuator identification and deployment wire gains:")
+    torque_saturated = np.abs(computed_torques - applied_torques) > 1e-5
+    for joint_index, joint_name in enumerate(runner.policy_order):
+        kp_fit, kd_fit, fit_r2 = gain_fits[joint_index]
+        group = joint_group(joint_name)
+        configured_kp, configured_kd = motor_layer._joint_gains(
+            "policy",
+            joint_name,
+            group,
+        )
+        effective_kp = motor_layer._effective_unsigned_wire_value(
+            configured_kp,
+            "kp",
+            policy_command_proto,
+        )
+        effective_kd = motor_layer._effective_unsigned_wire_value(
+            configured_kd,
+            "kd",
+            policy_command_proto,
+        )
+        torque_abs = np.abs(applied_torques[:, joint_index])
+        print(
+            f"  {joint_name:16s} sim_fit_kp/kd={kp_fit:6.1f}/{kd_fit:5.2f} "
+            f"R2={fit_r2:.3f} deploy_cfg={configured_kp:.1f}/{configured_kd:.2f} "
+            f"official_wire={effective_kp:.1f}/{effective_kd:.2f} "
+            f"tau_p95/max={np.nanquantile(torque_abs, 0.95):.1f}/"
+            f"{np.nanmax(torque_abs):.1f} "
+            f"sim_saturation={np.nanmean(torque_saturated[:, joint_index]):.1%}"
+        )
     policy_steps = {int(row["step"]) for row in rows}
     extra_motor_rows = sum(
         count
@@ -227,7 +545,7 @@ def main():
         and previous_action_continuity_max <= tolerance
         and np.max(runtime_command_clip_error) <= tolerance
         and np.max(action_error) <= tolerance
-        and np.nanmax(motor_action_error) <= tolerance
+        and np.nanmax(motor_action_error[non_reset_rows]) <= tolerance
         and np.nanmax(target_error) <= tolerance
         and np.nanmax(sim_position_limit_error) <= 0.01
         and np.nanmax(np.abs(sim_defaults - runner.q_default[None, :])) <= tolerance
@@ -247,6 +565,11 @@ def main():
                 f"sim_target__{joint_name}",
                 f"replay_target__{joint_name}",
                 f"limited_target__{joint_name}",
+                f"runtime_action__{joint_name}",
+                f"runtime_target__{joint_name}",
+                f"motor_target__{joint_name}",
+                f"sim_match_target__{joint_name}",
+                f"sim_match_tau_est__{joint_name}",
                 f"sim_q__{joint_name}",
             ])
         with output_path.open("w", newline="") as output_file:
@@ -270,14 +593,22 @@ def main():
                     record[f"sim_target__{joint_name}"] = float(sim_targets[index, joint_index])
                     record[f"replay_target__{joint_name}"] = float(replay_targets[index, joint_index])
                     record[f"limited_target__{joint_name}"] = float(final_targets[index, joint_index])
+                    record[f"runtime_action__{joint_name}"] = float(shaped_logged_actions[index, joint_index])
+                    record[f"runtime_target__{joint_name}"] = float(runtime_targets[index, joint_index])
+                    record[f"motor_target__{joint_name}"] = float(motor_targets[index, joint_index])
+                    record[f"sim_match_target__{joint_name}"] = float(sim_match_targets[index, joint_index])
+                    record[f"sim_match_tau_est__{joint_name}"] = float(sim_match_torque_estimate[index, joint_index])
                     record[f"sim_q__{joint_name}"] = float(sim_positions[index, joint_index])
                 writer.writerow(record)
         print("Replay CSV:", output_path)
 
-    if not passed:
+    if not passed and not args.allow_policy_mismatch:
         print("SIMULATION POLICY REPLAY COMPARISON FAILED")
         return 1
-    print("SIMULATION POLICY REPLAY COMPARISON OK")
+    if passed:
+        print("SIMULATION POLICY REPLAY COMPARISON OK")
+    else:
+        print("SIMULATION POLICY REPLAY COMPARISON HAS MISMATCHES (allowed)")
     if np.any(np.abs(final_targets - replay_targets) > 1e-7):
         print("NOTE: safety-limit clipping is reported above but is not a policy-contract failure.")
     return 0

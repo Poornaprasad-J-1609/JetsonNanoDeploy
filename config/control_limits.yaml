@@ -34,10 +34,12 @@ policy_deployment:
   command_vx_abs_max: 0.0
   command_vy_abs_max: 0.0
   command_yaw_abs_max: 0.0
-  # Real encoder/IMU mismatch can push the actor far outside its nominal range.
-  # Clip before action_scale and smooth the sent action for hardware safety.
-  action_clip_abs: 0.8
-  action_smoothing: 0.50
+  # The supplied IsaacLab logs use raw actions up to about 8.6, with roughly
+  # 45% above 0.8. A 0.8 clip suppresses the learned gait. This middle profile
+  # preserves over 96% of logged samples while the independent hard joint and
+  # 40 Nm estimated-PD limits remain active.
+  action_clip_abs: 3.0
+  action_smoothing: 0.10
   # Before packing a walking MIT command, constrain its estimated joint-space
   # PD torque around fresh encoder feedback. The independent measured-feedback
   # emergency stop remains at 6.0 in safety_limits.yaml.

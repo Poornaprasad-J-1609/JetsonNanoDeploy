@@ -1559,6 +1559,7 @@ def run_policy_loop(
     policy_command_yaw_max,
     policy_action_clip,
     policy_action_smoothing,
+    policy_sim_match,
     stand_policy_stabilization,
     hold_capture_seconds,
     hold_command_repeats,
@@ -1703,6 +1704,11 @@ def run_policy_loop(
     )
     print("policy_action_clip:", float(policy_action_clip), "(0 disables)")
     print("policy_action_smoothing:", float(policy_action_smoothing), "(0 disables)")
+    print(
+        "policy_sim_match:",
+        bool(policy_sim_match),
+        "(hard joint, encoder, tilt, and torque safety remain active)",
+    )
     print("stand_policy_stabilization:", bool(stand_policy_stabilization))
     print("walking_armed:", bool(walking_armed))
     print("hold_capture_seconds:", float(hold_capture_seconds))
@@ -2292,12 +2298,15 @@ def run_policy_loop(
 
             raw_action = runner.infer_action(obs)
             observation_for_log = obs.copy()
-            action = filtered_policy_action(
-                raw_action=raw_action,
-                previous_action=previous_sent_action,
-                clip_abs=policy_action_clip,
-                smoothing=policy_action_smoothing,
-            )
+            if policy_sim_match:
+                action = np.asarray(raw_action, dtype=np.float32).copy()
+            else:
+                action = filtered_policy_action(
+                    raw_action=raw_action,
+                    previous_action=previous_sent_action,
+                    clip_abs=policy_action_clip,
+                    smoothing=policy_action_smoothing,
+                )
             q_policy_target = runner.action_to_q_target(action)
             imu_correction = imu_posture_correction(
                 projected_gravity_b=projected_gravity_b,
@@ -2319,7 +2328,7 @@ def run_policy_loop(
                 q_policy_target,
                 q_previous_target,
                 q_coordinate_shift,
-                apply_rate_limit=True,
+                apply_rate_limit=not policy_sim_match,
             )
             commands = motor_layer.build_mit_commands(
                 q_safe_target,
@@ -2978,6 +2987,15 @@ def main():
         help="blend current policy action with previous sent action; 0 disables, larger is smoother/slower",
     )
     parser.add_argument(
+        "--policy-sim-match",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "use raw policy actions and bypass policy-target slew limiting; "
+            "hard joint, encoder, tilt, and torque safety remain active"
+        ),
+    )
+    parser.add_argument(
         "--fake-start",
         choices=["stand", "crouch", "random_small"],
         default="stand",
@@ -3476,6 +3494,7 @@ def main():
             policy_command_yaw_max=args.policy_command_yaw_max,
             policy_action_clip=args.policy_action_clip,
             policy_action_smoothing=args.policy_action_smoothing,
+            policy_sim_match=bool(args.policy_sim_match),
             stand_policy_stabilization=bool(args.stand_policy_stabilization),
             hold_capture_seconds=max(0.02, args.hold_capture_seconds),
             hold_command_repeats=max(1, args.hold_command_repeats),

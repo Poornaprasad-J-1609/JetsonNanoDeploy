@@ -327,6 +327,14 @@ class XsensBinaryImuSensor:
         )
         if self.sensor_to_base_rotation.shape != (3, 3):
             raise ValueError("sensor_to_base_rotation must be a 3x3 matrix")
+        self.gyro_axis_signs = as_vector3(
+            self.cfg.get("gyro_axis_signs", [1.0, 1.0, 1.0]),
+            "gyro_axis_signs",
+        )
+        self.gravity_axis_signs = as_vector3(
+            self.cfg.get("gravity_axis_signs", [1.0, 1.0, 1.0]),
+            "gravity_axis_signs",
+        )
 
         self.ser = None
         self.buffer = bytearray()
@@ -403,11 +411,15 @@ class XsensBinaryImuSensor:
             self.latest_abs["projected_gravity"],
             dtype=np.float32,
         )
-        projected_gravity = self.sensor_to_base_rotation @ projected_gravity_sensor
+        projected_gravity = (
+            self.sensor_to_base_rotation @ projected_gravity_sensor
+        ) * self.gravity_axis_signs
         if self.latest_gyro_sensor is None:
             base_ang_vel = np.zeros(3, dtype=np.float32)
         else:
-            base_ang_vel = self.sensor_to_base_rotation @ self.latest_gyro_sensor
+            base_ang_vel = (
+                self.sensor_to_base_rotation @ self.latest_gyro_sensor
+            ) * self.gyro_axis_signs
 
         base_lin_vel = np.zeros(3, dtype=np.float32)
 

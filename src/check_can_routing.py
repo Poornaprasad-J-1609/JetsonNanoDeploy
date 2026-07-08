@@ -457,7 +457,13 @@ def assert_command_wire_contract(layer):
             "legacy MIT command bytes differ from commit 9b03a77: "
             f"data={payload.hex()} id=0x{can_id:08X}"
         )
-    return "legacy 9b03a77"
+
+    for phase in ("policy", "leveling"):
+        phase_proto = layer.command_proto_for_phase(phase)
+        assert_rs04_wire_contract(phase_proto)
+        if layer.phase_command_encoding.get(phase) != "official":
+            raise AssertionError(f"{phase} must use official RS04 command encoding")
+    return "startup/hold legacy 9b03a77; policy/leveling official RS04"
 
 
 def q_midpoint_from_limits(layer, policy_order):

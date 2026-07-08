@@ -210,31 +210,19 @@ class MotorCommandLayer:
         motor_cfg = self.cfg.get("motor", {})
         if bool(motor_cfg.get("use_official_mit_ranges", True)):
             self._load_official_mit_ranges(str(motor_cfg.get("model", "rs-04")))
-        self.command_proto = dict(self.proto)
         self.command_encoding = str(
             motor_cfg.get("command_encoding", "official")
         ).strip().lower()
-        if self.command_encoding == "legacy_9b03a77":
-            legacy_proto = self.cfg.get("legacy_command_protocol", {})
-            required = (
-                "p_min", "p_max", "v_min", "v_max", "kp_min", "kp_max",
-                "kd_min", "kd_max", "tau_min", "tau_max",
-            )
-            missing = [key for key in required if key not in legacy_proto]
-            if missing:
-                raise KeyError(
-                    "legacy_command_protocol is missing: " + ", ".join(missing)
-                )
-            self.command_proto.update({
-                key: float(legacy_proto[key]) for key in required
-            })
-            self.command_proto["use_float_to_uint"] = bool(
-                legacy_proto.get("use_float_to_uint", True)
-            )
-        elif self.command_encoding != "official":
-            raise ValueError(
-                "motor.command_encoding must be official or legacy_9b03a77"
-            )
+        self.command_proto = self._command_proto_for_encoding(self.command_encoding)
+        phase_encodings = motor_cfg.get("phase_command_encoding", {}) or {}
+        self.phase_command_encoding = {
+            str(phase): str(encoding).strip().lower()
+            for phase, encoding in phase_encodings.items()
+        }
+        self.phase_command_proto = {
+            phase: self._command_proto_for_encoding(encoding)
+            for phase, encoding in self.phase_command_encoding.items()
+        }
         self.gains = self.cfg["gains"]
         self.feedforward = self.cfg["feedforward"]
         communication_cfg = self.cfg.get("communication", {})
@@ -289,6 +277,36 @@ class MotorCommandLayer:
             "tau_max": torque,
         })
 
+    def _command_proto_for_encoding(self, encoding):
+        encoding = str(encoding).strip().lower()
+        command_proto = dict(self.proto)
+        if encoding == "official":
+            command_proto["use_float_to_uint"] = False
+            return command_proto
+        if encoding != "legacy_9b03a77":
+            raise ValueError(
+                "command encoding must be official or legacy_9b03a77"
+            )
+
+        legacy_proto = self.cfg.get("legacy_command_protocol", {})
+        required = (
+            "p_min", "p_max", "v_min", "v_max", "kp_min", "kp_max",
+            "kd_min", "kd_max", "tau_min", "tau_max",
+        )
+        missing = [key for key in required if key not in legacy_proto]
+        if missing:
+            raise KeyError(
+                "legacy_command_protocol is missing: " + ", ".join(missing)
+            )
+        command_proto.update({key: float(legacy_proto[key]) for key in required})
+        command_proto["use_float_to_uint"] = bool(
+            legacy_proto.get("use_float_to_uint", True)
+        )
+        return command_proto
+
+    def command_proto_for_phase(self, phase):
+        return self.phase_command_proto.get(str(phase), self.command_proto)
+
     def _load_joint_directions(self):
         configured = self.direction_cfg.get("motor_directions", {}) or {}
         directions = {}
@@ -309,6 +327,43 @@ class MotorCommandLayer:
                 + ", ".join(missing)
             )
         return directions
+
+    def _effective_unsigned_wire_value(self, value, field, command_proto=None):
+        """Return the value RS04 decodes from the configured command bits."""
+        command_proto = self.command_proto if command_proto is None else command_proto
+        command_min = float(command_proto[f"{field}_min"])
+        command_max = float(command_proto[f"{field}_max"])
+        if bool(command_proto.get("use_float_to_uint", False)):
+            raw = float_to_uint(value, command_min, command_max, 16)
+        else:
+            raw = unsigned_to_uint(value, command_min, command_max)
+        return uint_to_float(
+            raw,
+            float(self.proto[f"{field}_min"]),
+            float(self.proto[f"{field}_max"]),
+            16,
+        )
+
+    def _effective_signed_wire_value(self, value, field, command_proto=None):
+        """Return a signed value after command encoding and official decoding."""
+        command_proto = self.command_proto if command_proto is None else command_proto
+        command_min = float(command_proto[f"{field}_min"])
+        command_max = float(command_proto[f"{field}_max"])
+        if bool(command_proto.get("use_float_to_uint", False)):
+            raw = float_to_uint(value, command_min, command_max, 16)
+        else:
+            raw = signed_offset_to_uint(value, command_min, command_max)
+        return uint_to_signed_offset(
+            raw,
+            float(self.proto[f"{field}_min"]),
+            float(self.proto[f"{field}_max"]),
+        )
+
+    def _joint_gains(self, phase, joint_name, group):
+        phase_cfg = self.gains[phase]
+        joint_cfg = phase_cfg.get("joints", {}).get(joint_name)
+        gain_cfg = phase_cfg[group] if joint_cfg is None else joint_cfg
+        return float(gain_cfg["kp"]), float(gain_cfg["kd"])
 
     def resolve_active_joints(self, active_joints):
         if not active_joints:
@@ -550,6 +605,11 @@ class MotorCommandLayer:
 
         if phase not in self.gains:
             raise ValueError(f"Unknown phase {phase}. Expected one of {list(self.gains.keys())}")
+        command_proto = self.command_proto_for_phase(phase)
+        command_encoding = self.phase_command_encoding.get(
+            phase,
+            self.command_encoding,
+        )
 
         phase_torque_limit = 0.0
         if phase == "startup":
@@ -568,14 +628,29 @@ class MotorCommandLayer:
             offset = float(self.joint_offsets[joint_name])
             direction = float(self.joint_directions[joint_name])
 
-            kp = float(self.gains[phase][group]["kp"])
-            kd = float(self.gains[phase][group]["kd"])
+            kp, kd = self._joint_gains(phase, joint_name, group)
+            kp_effective = self._effective_unsigned_wire_value(
+                kp,
+                "kp",
+                command_proto,
+            )
+            kd_effective = self._effective_unsigned_wire_value(
+                kd,
+                "kd",
+                command_proto,
+            )
             joint_v_des = (
                 float(self.feedforward["v_des"])
                 if joint_velocity_target is None
                 else float(joint_velocity_target[i])
             )
+            joint_v_des_requested = joint_v_des
             joint_tau_ff = float(self.feedforward["tau_ff"])
+            joint_tau_ff_effective = self._effective_signed_wire_value(
+                joint_tau_ff,
+                "tau",
+                command_proto,
+            )
             q_requested = float(q_target[i])
             q_des = self.apply_hard_joint_limit(joint_name, q_requested)
             feedback = feedback_by_joint.get(joint_name, {})
@@ -590,12 +665,15 @@ class MotorCommandLayer:
                 and feedback_joint_position is not None
                 and feedback_joint_velocity is not None
                 and np.all(np.isfinite([feedback_joint_position, feedback_joint_velocity]))
-                and kp > 0.0
+                and kp_effective > 0.0
             ):
                 q_feedback = float(feedback_joint_position)
                 qd_feedback = float(feedback_joint_velocity)
-                velocity_and_ff_torque = kd * (joint_v_des - qd_feedback) + joint_tau_ff
-                position_torque = kp * (q_des - q_feedback)
+                velocity_and_ff_torque = (
+                    kd_effective * (joint_v_des - qd_feedback)
+                    + joint_tau_ff_effective
+                )
+                position_torque = kp_effective * (q_des - q_feedback)
                 position_torque = float(np.clip(
                     position_torque,
                     -phase_torque_limit - velocity_and_ff_torque,
@@ -603,13 +681,37 @@ class MotorCommandLayer:
                 ))
                 q_des = self.apply_hard_joint_limit(
                     joint_name,
-                    q_feedback + position_torque / kp,
+                    q_feedback + position_torque / kp_effective,
                 )
                 tau_pd_est = (
-                    kp * (q_des - q_feedback)
+                    kp_effective * (q_des - q_feedback)
                     + velocity_and_ff_torque
                 )
+                if abs(tau_pd_est) > phase_torque_limit and kd_effective > 0.0:
+                    target_torque = float(np.clip(
+                        tau_pd_est,
+                        -phase_torque_limit,
+                        phase_torque_limit,
+                    ))
+                    joint_v_des = qd_feedback + (
+                        target_torque
+                        - kp_effective * (q_des - q_feedback)
+                        - joint_tau_ff_effective
+                    ) / kd_effective
+                    joint_v_des = float(np.clip(
+                        joint_v_des,
+                        float(self.proto["v_min"]),
+                        float(self.proto["v_max"]),
+                    ))
+                    tau_pd_est = (
+                        kp_effective * (q_des - q_feedback)
+                        + kd_effective * (joint_v_des - qd_feedback)
+                        + joint_tau_ff_effective
+                    )
                 torque_limited = abs(q_des - q_before_torque_limit) > 1e-7
+                torque_limited = torque_limited or (
+                    abs(joint_v_des - joint_v_des_requested) > 1e-7
+                )
 
             if (
                 tau_pd_est is None
@@ -620,9 +722,9 @@ class MotorCommandLayer:
                 q_feedback = float(feedback_joint_position)
                 qd_feedback = float(feedback_joint_velocity)
                 tau_pd_est = (
-                    kp * (q_des - q_feedback)
-                    + kd * (joint_v_des - qd_feedback)
-                    + joint_tau_ff
+                    kp_effective * (q_des - q_feedback)
+                    + kd_effective * (joint_v_des - qd_feedback)
+                    + joint_tau_ff_effective
                 )
 
             p_base = offset + direction * q_des
@@ -632,8 +734,8 @@ class MotorCommandLayer:
                 direction=direction,
                 feedback_position=feedback_position,
                 feedback_joint_position=feedback_joint_position,
-                p_min=self.command_proto["p_min"],
-                p_max=self.command_proto["p_max"],
+                p_min=command_proto["p_min"],
+                p_max=command_proto["p_max"],
             )
             motor_v_des = direction * joint_v_des
             motor_tau_ff = direction * joint_tau_ff
@@ -648,7 +750,7 @@ class MotorCommandLayer:
 
             can_id = mit_can_id(
                 motor_id,
-                self.command_proto,
+                command_proto,
                 tau_ff=motor_tau_ff,
             )
             data = pack_mit_command(
@@ -656,7 +758,7 @@ class MotorCommandLayer:
                 v_des=motor_v_des,
                 kp=kp,
                 kd=kd,
-                proto=self.command_proto,
+                proto=command_proto,
             )
 
             commands.append({
@@ -664,6 +766,7 @@ class MotorCommandLayer:
                 "motor_id": motor_id,
                 "bus_name": self.joint_can_bus.get(joint_name, "front"),
                 "phase": phase,
+                "command_encoding": command_encoding,
                 "q_des": q_des_sent,
                 "q_requested": q_requested,
                 "q_before_torque_limit": q_before_torque_limit,
@@ -675,10 +778,14 @@ class MotorCommandLayer:
                 "p_base": p_base,
                 "p_limit_adjustment": p_des - p_base,
                 "joint_v_des": joint_v_des,
+                "joint_v_des_requested": joint_v_des_requested,
                 "v_des": motor_v_des,
                 "kp": kp,
                 "kd": kd,
+                "kp_effective": kp_effective,
+                "kd_effective": kd_effective,
                 "joint_tau_ff": joint_tau_ff,
+                "joint_tau_ff_effective": joint_tau_ff_effective,
                 "tau_ff": motor_tau_ff,
                 "can_id": can_id,
                 "data": data,
@@ -920,6 +1027,14 @@ def print_mit_commands(commands, show_hex=False):
             f"kd={cmd['kd']: .2f} "
             f"tau={cmd['tau_ff']: .2f}"
         )
+        if (
+            abs(float(cmd.get("kp_effective", cmd["kp"])) - float(cmd["kp"])) > 1e-3
+            or abs(float(cmd.get("kd_effective", cmd["kd"])) - float(cmd["kd"])) > 1e-3
+        ):
+            line += (
+                f" wire_kp={float(cmd['kp_effective']):.2f}"
+                f" wire_kd={float(cmd['kd_effective']):.2f}"
+            )
         if abs(cmd["offset"]) > 1e-6:
             line += f" offset={cmd['offset']: .4f}"
         if abs(float(cmd.get("direction", 1.0)) - 1.0) > 1e-6:
