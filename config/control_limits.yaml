@@ -54,7 +54,7 @@ mit_parameters:
   # Limit estimated joint-space PD torque before MIT packet generation.
   # Sit/stand keeps its configured Kp/Kd near the target while large transient
   # position errors are constrained below the measured 6 Nm emergency limit.
-  startup_pd_torque_limit: 4.0
+  startup_pd_torque_limit: 3.0
   leveling_pd_torque_limit: 2.0
   p_min: -12.566370614359172
   p_max: 12.566370614359172

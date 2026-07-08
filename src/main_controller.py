@@ -1735,6 +1735,11 @@ def run_policy_loop(
             break
 
         mode_request = command_source.get_mode_request()
+        if mode_request == control_mode and mode_request in ("stand", "sit", "hold"):
+            # Ignore terminal auto-repeat and duplicate controller events. A
+            # repeated pose request must not recapture feedback and restart the
+            # trajectory, which causes a visible stop and torque ramp.
+            mode_request = None
         if mode_request is not None:
             if mode_request == "stand" and zero_frame == "crouch" and not zero_calibrated:
                 print("\n[ZERO CAL] first pose command is auto-zeroing current crouch/default pose.")
@@ -2202,7 +2207,17 @@ def run_policy_loop(
         ):
             q_feedback = getattr(estimator, "q_current", None)
             if q_feedback is not None:
-                sync_error = max_active_error(q_feedback, q_safe_target, active_indices)
+                # q_safe_target is the requested trajectory point. The MIT
+                # torque limiter may send a closer per-joint q_des, so compare
+                # feedback against what was actually sent to avoid a permanent
+                # false lag at the torque-limit boundary.
+                q_sync_target = np.asarray(q_safe_target, dtype=np.float32).copy()
+                for command_item in commands:
+                    joint_name = command_item.get("joint_name")
+                    index = motor_layer.policy_index_by_joint.get(joint_name)
+                    if index is not None and "q_des" in command_item:
+                        q_sync_target[index] = float(command_item["q_des"])
+                sync_error = max_active_error(q_feedback, q_sync_target, active_indices)
                 if sync_error > float(pose_sync_error_rad):
                     advance_target = False
                     if step % max(1, log_every) == 0:

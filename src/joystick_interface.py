@@ -334,6 +334,13 @@ class KeyboardCommandSource:
         for index, key in enumerate(self.key_queue):
             if key in mapping:
                 del self.key_queue[index]
+                # Terminal key repeat can enqueue dozens of identical pose
+                # events while a key is held briefly. Keep later, different
+                # commands, but collapse every duplicate of this key.
+                self.key_queue = deque(
+                    queued_key for queued_key in self.key_queue
+                    if queued_key != key
+                )
                 if mapping[key] in ("stand", "sit", "hold"):
                     self._clear_motion_command()
                 return mapping[key]
