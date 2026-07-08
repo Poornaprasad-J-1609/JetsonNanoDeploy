@@ -1578,6 +1578,9 @@ def run_policy_loop(
     previous_action = np.zeros(action_dim, dtype=np.float32)
     previous_sent_action = np.zeros(action_dim, dtype=np.float32)
     direct_leveling_correction = np.zeros(action_dim, dtype=np.float32)
+    direct_imu_stabilization_enabled = bool(
+        motion_assist_cfg.get("imu_posture", {}).get("enabled", False)
+    )
 
     control_mode = start_control_mode  # options: idle, hold, policy, stand, sit
     zero_frame = str(initial_zero_frame).lower()
@@ -2235,7 +2238,11 @@ def run_policy_loop(
                 )
                 q_policy_target = q_policy_target + imu_correction
                 imu_correction_abs_max = float(np.max(np.abs(imu_correction)))
-            elif not stand_policy_stabilization and walking_armed:
+            elif (
+                not stand_policy_stabilization
+                and direct_imu_stabilization_enabled
+                and walking_armed
+            ):
                 requested_leveling_correction = imu_posture_correction(
                     projected_gravity_b=projected_gravity_b,
                     policy_order=runner.policy_order,

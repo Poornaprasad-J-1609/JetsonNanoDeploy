@@ -116,17 +116,19 @@ gains:
       FR_calf_joint: {kp: 50.0, kd: 2.5}
 
   # Direct IMU body-leveling gains. Stand-up itself continues to use the
-  # startup gains above; these take over only after stand has settled.
+  # startup gains above; these take over only after stand has settled and
+  # direct IMU stabilization is explicitly enabled. Keep enough stiffness to
+  # support the robot instead of sagging under the leveling profile.
   leveling:
     hip:
-      kp: 18.0
-      kd: 0.6
+      kp: 40.0
+      kd: 2.0
     thigh:
-      kp: 18.0
-      kd: 0.6
+      kp: 50.0
+      kd: 2.5
     calf:
-      kp: 18.0
-      kd: 0.6
+      kp: 50.0
+      kd: 2.5
 
 feedforward:
   tau_ff: 0.0
