@@ -68,52 +68,52 @@ gains:
   # identified from the supplied simulation torque logs.
   startup:
     hip:
-      kp: 75
-      kd: 1.8
+      kp: 60
+      kd: 1.5
     thigh:
-      kp: 50.0
-      kd: 1.8
+      kp: 60.0
+      kd: 1.5
     calf:
-      kp: 75.0
-      kd: 1.8
+      kp: 60.0
+      kd: 1.5
 
   hold:
     hip:
-      kp: 75.0
-      kd: 1.8
+      kp: 60.0
+      kd: 1.5
     thigh:
-      kp: 50.0
-      kd: 1.8
+      kp: 60.0
+      kd: 1.5
     calf:
-      kp: 75.0
-      kd: 1.8
+      kp: 60.0
+      kd: 1.5
 
   policy:
     hip:
       # Conservative real-hardware gains for initial walking tests. These are
       # official motor-decoded units; the independent torque ceiling remains
       # responsible for limiting peak effort.
-      kp: 40.0
-      kd: 2.0
+      kp: 60.0
+      kd: 1.5
     thigh:
-      kp: 50.0
-      kd: 2.5
+      kp: 60.0
+      kd: 1.5
     calf:
-      kp: 50.0
-      kd: 2.5
+      kp: 60.0
+      kd: 1.5
     joints:
-      BL_hip_joint: {kp: 40.0, kd: 2.0}
-      BR_hip_joint: {kp: 40.0, kd: 2.0}
-      FL_hip_joint: {kp: 40.0, kd: 2.0}
-      FR_hip_joint: {kp: 40.0, kd: 2.0}
-      BL_thigh_joint: {kp: 50.0, kd: 2.5}
-      BR_thigh_joint: {kp: 50.0, kd: 2.5}
-      FL_thigh_joint: {kp: 50.0, kd: 2.5}
-      FR_thigh_joint: {kp: 50.0, kd: 2.5}
-      BL_calf_joint: {kp: 50.0, kd: 2.5}
-      BR_calf_joint: {kp: 50.0, kd: 2.5}
-      FL_calf_joint: {kp: 50.0, kd: 2.5}
-      FR_calf_joint: {kp: 50.0, kd: 2.5}
+      BL_hip_joint: {kp: 60.0, kd: 1.5}
+      BR_hip_joint: {kp: 60.0, kd: 1.5}
+      FL_hip_joint: {kp: 60.0, kd: 1.5}
+      FR_hip_joint: {kp: 60.0, kd: 1.5}
+      BL_thigh_joint: {kp: 60.0, kd: 1.5}
+      BR_thigh_joint: {kp: 60.0, kd: 1.5}
+      FL_thigh_joint: {kp: 60.0, kd: 1.5}
+      FR_thigh_joint: {kp: 60.0, kd: 1.5}
+      BL_calf_joint: {kp: 60.0, kd: 1.5}
+      BR_calf_joint: {kp: 60.0, kd: 1.5}
+      FL_calf_joint: {kp: 60.0, kd: 1.5}
+      FR_calf_joint: {kp: 60.0, kd: 1.5}
 
   # Direct IMU body-leveling gains. Stand-up itself continues to use the
   # startup gains above; these take over only after stand has settled and
@@ -121,14 +121,14 @@ gains:
   # support the robot instead of sagging under the leveling profile.
   leveling:
     hip:
-      kp: 40.0
-      kd: 2.0
+      kp: 60.0
+      kd: 1.5
     thigh:
-      kp: 50.0
-      kd: 2.5
+      kp: 60.0
+      kd: 1.5
     calf:
-      kp: 50.0
-      kd: 2.5
+      kp: 60.0
+      kd: 1.5
 
 feedforward:
   tau_ff: 0.0

@@ -472,7 +472,7 @@ first tests. For simulation-match policy input, see section 12.
   --speed-scale-initial 0.05 \
   --speed-scale-min 0.05 \
   --speed-scale-max 0.15 \
-  --keyboard-command-timeout 0.35 \
+  --keyboard-command-timeout 0.75 \
   --policy-command-gain 2.5 \
   --policy-command-vx-max 0.35 \
   --policy-command-vy-max 0.20 \
@@ -531,7 +531,7 @@ first tests. For simulation-match policy input, see section 12.
   --speed-scale-initial 0.05 \
   --speed-scale-min 0.05 \
   --speed-scale-max 0.15 \
-  --keyboard-command-timeout 0.35 \
+  --keyboard-command-timeout 0.75 \
   --policy-command-gain 2.5 \
   --policy-command-vx-max 0.35 \
   --policy-command-vy-max 0.20 \

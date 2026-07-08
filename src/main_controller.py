@@ -1582,6 +1582,7 @@ def run_policy_loop(
     policy_entry_elapsed_s = 0.0
     policy_entry_scale = 0.0
     previous_walk_requested = False
+    policy_has_started = False
     direct_imu_stabilization_enabled = bool(
         motion_assist_cfg.get("imu_posture", {}).get("enabled", False)
     )
@@ -2198,7 +2199,9 @@ def run_policy_loop(
 
         if walk_requested:
             has_motion_target = True
+            policy_has_started = True
 
+        walk_just_stopped = bool(previous_walk_requested and not walk_requested)
         if walk_requested:
             if not previous_walk_requested:
                 policy_entry_elapsed_s = 0.0
@@ -2213,6 +2216,13 @@ def run_policy_loop(
             policy_entry_elapsed_s = 0.0
             policy_entry_scale = 0.0
         previous_walk_requested = bool(walk_requested)
+
+        if walk_just_stopped and control_mode == "stand":
+            # A terminal movement key can briefly time out between key-repeat
+            # events. Restart the stand trajectory from the exact previously
+            # sent motor targets instead of snapping from a gait target to
+            # stand q=0 under the stronger startup impedance.
+            begin_pose_transition("stand", q_previous_target, step)
 
         if active_control_mode == "idle":
             q_safe_target = q_previous_target.copy()
@@ -2234,7 +2244,10 @@ def run_policy_loop(
 
         elif active_control_mode == "stand":
             q_policy_target = current_pose_transition_target("stand", step)
-            stand_command_phase = "startup"
+            # Initial crouch-to-stand lifting retains the proven startup
+            # impedance. Once gait has started, every return to stand uses the
+            # bounded policy impedance to avoid a gain-switch torque impulse.
+            stand_command_phase = "policy" if policy_has_started else "startup"
             learned_stand_stabilization_active = bool(
                 stand_policy_stabilization
                 and walking_armed
@@ -2616,7 +2629,14 @@ def run_policy_loop(
             if joint_debug:
                 print_joint_debug(commands, estimator)
 
-        estimator.dry_update_as_if_robot_followed(q_safe_target, dt)
+        q_sent_target = np.asarray(q_safe_target, dtype=np.float32).copy()
+        for command_item in commands:
+            joint_name = command_item.get("joint_name")
+            index = motor_layer.policy_index_by_joint.get(joint_name)
+            if index is not None and "q_des" in command_item:
+                q_sent_target[index] = float(command_item["q_des"])
+
+        estimator.dry_update_as_if_robot_followed(q_sent_target, dt)
 
         if active_control_mode == "policy":
             previous_action = raw_action.copy()
@@ -2638,9 +2658,10 @@ def run_policy_loop(
                 + float(dt) * float(target_advance_scale),
             )
 
-        # q_safe_target is the exact joint-space target used to build this
-        # cycle's MIT frames. It must be the sole next-cycle slew reference.
-        q_previous_target = np.asarray(q_safe_target, dtype=np.float32).copy()
+        # Use the post-limit q_des values packed into the MIT commands as the
+        # sole next-cycle reference. q_safe_target can differ when the policy
+        # PD torque limiter pulls a target closer to measured feedback.
+        q_previous_target = q_sent_target
 
         if telemetry is not None and step % 2 == 0:
             telemetry.send(
