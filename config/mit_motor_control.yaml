@@ -33,17 +33,31 @@ startup:
   standup_seconds: 3.0
 
 communication:
-  # This AT USB-CAN adapter drops motor polls when six encoded packets are
-  # concatenated into one write. Keep each AT packet distinct and paced, but
-  # flush only once after each CAN bus group to avoid the old 12-flush delay.
+  # Preserve the proven one-millisecond spacing between the 12 MIT frames.
+  # The official SocketCAN driver and legacy AT transport both use this cadence.
   batch_writes: false
   group_flush: true
   frame_gap_s: 0.0010
 
 gains:
+  # These are explicit RS04 gains in official SDK units. The pre-SocketCAN
+  # deployment encoded 75/1.8 through 500/5 ranges; RS04 firmware interpreted
+  # those same bits as approximately 750/36. Use those effective values here
+  # so changing transport does not change actuator behavior.
   startup:
     hip:
       kp: 75
+      kd: 1.8
+    thigh:
+      kp: 75.0
+      kd: 1.8
+    calf:
+      kp: 75.0
+      kd: 1.8
+
+  hold:
+    hip:
+      kp: 75.0
       kd: 1.8
     thigh:
       kp: 50.0
@@ -52,42 +66,31 @@ gains:
       kp: 75.0
       kd: 1.8
 
-  hold:
-    hip:
-      kp: 100.0
-      kd: 2.5
-    thigh:
-      kp: 80.0
-      kd: 2.5
-    calf:
-      kp: 100.0
-      kd: 2.5
-
   policy:
     hip:
       # Low suspended-test gains: enough to reveal the policy gait without
       # aggressively loading a joint when target tracking is imperfect.
-      kp: 20.0
-      kd: 0.8
+      kp: 75.0
+      kd: 1.8
     thigh:
-      kp: 20.0
-      kd: 0.8
+      kp: 75.0
+      kd: 1.8
     calf:
-      kp: 20.0
-      kd: 0.8
+      kp: 75.0
+      kd: 1.8
 
   # Direct IMU body-leveling gains. Stand-up itself continues to use the
   # startup gains above; these take over only after stand has settled.
   leveling:
     hip:
-      kp: 18.0
-      kd: 0.6
+      kp: 75.0
+      kd: 1.8
     thigh:
-      kp: 18.0
-      kd: 0.6
+      kp: 75.0
+      kd: 1.8
     calf:
-      kp: 18.0
-      kd: 0.6
+      kp: 75.0
+      kd: 1.8
 
 feedforward:
   tau_ff: 0.0

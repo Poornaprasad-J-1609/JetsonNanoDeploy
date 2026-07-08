@@ -41,7 +41,9 @@ policy_deployment:
   # Before packing a walking MIT command, constrain its estimated joint-space
   # PD torque around fresh encoder feedback. The independent measured-feedback
   # emergency stop remains at 6.0 in safety_limits.yaml.
-  estimated_pd_torque_limit: 4.0
+  # 40 Nm in official RS04 units reproduces the old limiter's normalized
+  # position-error allowance after the 10x Kp wire-scale correction.
+  estimated_pd_torque_limit: 40.0
 
 joint_position:
   enabled: true
@@ -51,21 +53,20 @@ joint_rate:
 
 mit_parameters:
   enabled: true
-  # Limit estimated joint-space PD torque before MIT packet generation.
-  # Sit/stand keeps its configured Kp/Kd near the target while large transient
-  # position errors are constrained below the measured 6 Nm emergency limit.
-  startup_pd_torque_limit: 3.0
-  hold_pd_torque_limit: 5.0
-  leveling_pd_torque_limit: 2.0
+  # Zero disables target rewriting for pose/hold and reproduces the original
+  # MIT behavior. Measured torque safety remains independently enforced.
+  startup_pd_torque_limit: 0.0
+  hold_pd_torque_limit: 0.0
+  leveling_pd_torque_limit: 20.0
   p_min: -12.566370614359172
   p_max: 12.566370614359172
   v_min: -15.0
   v_max: 15.0
   kp_min: 0.0
-  # These are deployment safety caps, intentionally below the RS04 wire range.
-  kp_max: 100.0
+  # Accommodate the pre-SocketCAN effective gains in official RS04 units.
+  kp_max: 800.0
   kd_min: 0.0
-  kd_max: 5.0
+  kd_max: 40.0
   tau_ff_min: -1.0
   tau_ff_max: 1.0
 

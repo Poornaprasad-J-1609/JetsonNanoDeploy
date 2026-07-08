@@ -194,7 +194,8 @@ class ATUsbCan:
 class SocketCan:
     """RobStride official SDK transport over a Linux SocketCAN channel."""
 
-    requires_frame_gap = False
+    # Preserve the stable pre-SocketCAN one-millisecond MIT frame cadence.
+    requires_frame_gap = True
 
     def __init__(
         self,
