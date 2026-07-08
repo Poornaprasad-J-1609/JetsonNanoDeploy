@@ -185,6 +185,16 @@ def smoothstep(alpha):
     return alpha * alpha * (3.0 - 2.0 * alpha)
 
 
+def synchronized_pose_trajectory(start, target, elapsed_s, duration_s):
+    """Interpolate every joint with one smooth phase so they finish together."""
+    start = np.asarray(start, dtype=np.float32)
+    target = np.asarray(target, dtype=np.float32)
+    duration_s = max(float(duration_s), 1.0e-6)
+    alpha = float(np.clip(float(elapsed_s) / duration_s, 0.0, 1.0))
+    blend = smoothstep(alpha)
+    return (start + blend * (target - start)).astype(np.float32), alpha
+
+
 def fake_start_pose_array(runner, name):
     if name == "stand":
         return runner.q_stand.copy()
@@ -1547,6 +1557,8 @@ def run_policy_loop(
     hold_command_repeats,
     crouch_calibration_value,
     stand_calibration_value,
+    pose_transition_speed_rad_s,
+    pose_transition_min_seconds,
     telemetry=None,
     csv_logger=None,
 ):
@@ -1579,6 +1591,69 @@ def run_policy_loop(
     stand_ready_settle_count = 0
     calibration_hold_until_step = -1
     active_indices = active_joint_indices(runner.policy_order, motor_layer.active_joints)
+    pose_transition_mode = None
+    pose_transition_start = np.asarray(q_previous_target, dtype=np.float32).copy()
+    pose_transition_target = pose_transition_start.copy()
+    pose_transition_start_step = 0
+    pose_transition_duration_s = float(pose_transition_min_seconds)
+
+    def final_pose_target(mode_name):
+        if mode_name == "stand":
+            return stand_pose_for_zero_frame(
+                runner,
+                zero_frame,
+                crouch_calibration_value,
+                stand_calibration_value,
+            )
+        if mode_name == "sit":
+            return sit_pose_for_zero_frame(
+                runner,
+                zero_frame,
+                crouch_calibration_value,
+                stand_calibration_value,
+            )
+        raise ValueError(f"No synchronized pose target for mode {mode_name}")
+
+    def begin_pose_transition(mode_name, start_q, current_step):
+        nonlocal pose_transition_mode
+        nonlocal pose_transition_start
+        nonlocal pose_transition_target
+        nonlocal pose_transition_start_step
+        nonlocal pose_transition_duration_s
+
+        target_q = np.asarray(final_pose_target(mode_name), dtype=np.float32)
+        start_q = np.asarray(start_q, dtype=np.float32).copy()
+        active_distance = max_active_error(start_q, target_q, active_indices)
+        # smoothstep's peak derivative is 1.5. Include it in the duration so
+        # no joint exceeds the configured physical pose speed.
+        speed = max(float(pose_transition_speed_rad_s), 1.0e-6)
+        duration = max(
+            float(pose_transition_min_seconds),
+            1.5 * float(active_distance) / speed,
+        )
+        pose_transition_mode = str(mode_name)
+        pose_transition_start = start_q
+        pose_transition_target = target_q
+        pose_transition_start_step = int(current_step)
+        pose_transition_duration_s = duration
+        print(
+            f"[POSE] synchronized {mode_name} transition: "
+            f"distance={active_distance:.3f} rad duration={duration:.2f}s "
+            f"speed_limit={speed:.3f} rad/s"
+        )
+
+    def current_pose_transition_target(mode_name, current_step):
+        nonlocal pose_transition_mode
+        if pose_transition_mode != mode_name:
+            begin_pose_transition(mode_name, q_previous_target, current_step)
+        elapsed_s = max(0, int(current_step) - pose_transition_start_step) * float(dt)
+        target_q, _ = synchronized_pose_trajectory(
+            pose_transition_start,
+            pose_transition_target,
+            elapsed_s,
+            pose_transition_duration_s,
+        )
+        return target_q
 
     print("\n" + "#" * 80)
     print("POLICY / POSE PHASE")
@@ -1626,6 +1701,8 @@ def run_policy_loop(
     print("walking_armed:", bool(walking_armed))
     print("hold_capture_seconds:", float(hold_capture_seconds))
     print("hold_command_repeats:", int(hold_command_repeats))
+    print("pose_transition_speed_rad_s:", float(pose_transition_speed_rad_s))
+    print("pose_transition_min_seconds:", float(pose_transition_min_seconds))
     print("crouch_calibration_value:", float(crouch_calibration_value))
     print("stand_calibration_value:", float(stand_calibration_value))
     if stand_zero_pending:
@@ -2045,6 +2122,10 @@ def run_policy_loop(
                     walking_armed = False
                     stand_ready_pending = False
                     stand_ready_settle_count = 0
+                if control_mode in ("stand", "sit"):
+                    begin_pose_transition(control_mode, q_current, step)
+                else:
+                    pose_transition_mode = None
                 print(f"\n[MODE CHANGE] control_mode -> {control_mode}")
 
         command = command_source.read()
@@ -2117,12 +2198,7 @@ def run_policy_loop(
             action = np.zeros(action_dim, dtype=np.float32)
 
         elif active_control_mode == "stand":
-            q_policy_target = stand_pose_for_zero_frame(
-                runner,
-                zero_frame,
-                crouch_calibration_value,
-                stand_calibration_value,
-            )
+            q_policy_target = current_pose_transition_target("stand", step)
             stand_command_phase = "startup"
             learned_stand_stabilization_active = bool(
                 stand_policy_stabilization
@@ -2184,12 +2260,7 @@ def run_policy_loop(
             )
 
         elif active_control_mode == "sit":
-            q_policy_target = sit_pose_for_zero_frame(
-                runner,
-                zero_frame,
-                crouch_calibration_value,
-                stand_calibration_value,
-            )
+            q_policy_target = current_pose_transition_target("sit", step)
             q_safe_target = shifted_safety_filter(
                 safety,
                 q_policy_target,
@@ -2752,6 +2823,18 @@ def main():
         help="during sit/stand, slow target progress when live feedback exceeds this max active-joint error; 0 disables",
     )
     parser.add_argument(
+        "--pose-transition-speed-rad-s",
+        type=float,
+        default=0.40,
+        help="peak synchronized sit/stand target speed in joint radians/second",
+    )
+    parser.add_argument(
+        "--pose-transition-min-seconds",
+        type=float,
+        default=1.5,
+        help="minimum duration for a synchronized sit/stand transition",
+    )
+    parser.add_argument(
         "--walk-command-threshold",
         type=float,
         default=0.02,
@@ -2909,7 +2992,7 @@ def main():
     parser.add_argument(
         "--auto-push-log",
         action=argparse.BooleanOptionalAction,
-        default=False,
+        default=True,
         help=(
             "after motors are stopped and the CSV is closed, commit and push "
             "only that run log"
@@ -2935,6 +3018,16 @@ def main():
         parser.error("--control-hz must be finite and >= 0")
     if 0.0 < args.control_hz < 10.0 or args.control_hz > 100.0:
         parser.error("--control-hz must be 0 or within 10..100 Hz")
+    if (
+        not np.isfinite(args.pose_transition_speed_rad_s)
+        or args.pose_transition_speed_rad_s <= 0.0
+    ):
+        parser.error("--pose-transition-speed-rad-s must be finite and > 0")
+    if (
+        not np.isfinite(args.pose_transition_min_seconds)
+        or args.pose_transition_min_seconds <= 0.0
+    ):
+        parser.error("--pose-transition-min-seconds must be finite and > 0")
     if args.auto_zero_on_startup or args.auto_stand_zero or args.auto_sit_zero:
         parser.error(
             "automatic software-zero transitions are disabled; set RobStride "
@@ -3127,6 +3220,10 @@ def main():
         )
         if csv_logger.enabled:
             print("\nCSV log:", csv_logger.path)
+            print(
+                "CSV automatic Git push:",
+                "enabled" if args.auto_push_log else "disabled",
+            )
             print(
                 "CSV policy I/O: input=obs_000..047, "
                 "raw_output=action_00..11, sent_output=sent_action_00..11, "
@@ -3363,6 +3460,8 @@ def main():
             hold_command_repeats=max(1, args.hold_command_repeats),
             crouch_calibration_value=float(args.crouch_calibration_value),
             stand_calibration_value=float(args.stand_calibration_value),
+            pose_transition_speed_rad_s=float(args.pose_transition_speed_rad_s),
+            pose_transition_min_seconds=float(args.pose_transition_min_seconds),
             telemetry=telemetry,
             csv_logger=csv_logger,
         )

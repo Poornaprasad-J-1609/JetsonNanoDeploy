@@ -72,11 +72,12 @@ position target), and q_00..11/qd_00..11 (joint-radian feedback). Command,
 IMU status, torque summaries, policy SHA256, and policy_joint_order are also
 saved. Use --log-every 1 when every 50 Hz control step must be recorded.
 
-Add --auto-push-log to a main_controller command to commit and push only that
-completed CSV after motor stop frames are sent and CAN is closed. The Jetson
-must have Git SSH authentication configured. The publisher refuses to push if
-the branch contains any unpushed non-log commit, so source changes cannot be
-uploaded accidentally.
+Each main_controller run automatically commits and pushes only its completed
+CSV after motor stop frames are sent and CAN is closed. Use
+--no-auto-push-log for an offline run. The Jetson must have Git SSH
+authentication configured. The publisher refuses to push if the branch
+contains any unpushed non-log commit, so source changes cannot be uploaded
+accidentally.
 
 The controller prints the selected policy SHA256 at startup. It refuses an
 unrecognized policy unless --allow-policy-hash-mismatch is passed explicitly
@@ -322,6 +323,8 @@ position, x = emergency stop. Startup is idle: no auto-zero and no auto-hold.
   --hold-capture-seconds 0.50 \
   --hold-command-repeats 1 \
   --pose-sync-error-rad 0.25 \
+  --pose-transition-speed-rad-s 0.40 \
+  --pose-transition-min-seconds 1.50 \
   --log-every 5 \
   --joint-debug \
   --auto-push-log \
