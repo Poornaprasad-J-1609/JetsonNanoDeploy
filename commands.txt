@@ -469,18 +469,18 @@ the stance legs to support the robot on the ground.
   --max-vx 1.80 \
   --max-vy 0.80 \
   --max-yaw 0.0 \
-  --speed-scale-initial 0.08 \
+  --speed-scale-initial 0.06 \
   --speed-scale-min 0.05 \
   --speed-scale-max 0.15 \
   --keyboard-command-timeout 0.75 \
   --policy-command-gain 2.5 \
-  --policy-command-vx-max 0.35 \
+  --policy-command-vx-max 0.25 \
   --policy-command-vy-max 0.20 \
   --policy-command-yaw-max 0.0 \
   --policy-action-clip 2.0 \
   --policy-action-smoothing 0.25 \
   --policy-entry-ramp-seconds 1.5 \
-  --policy-pd-torque-limit 35.0 \
+  --policy-pd-torque-limit 30.0 \
   --enable-retries 3 \
   --enable-retry-delay 0.05 \
   --feedback-timeout 0.05 \
@@ -529,18 +529,18 @@ the stance legs to support the robot on the ground.
   --max-vx 1.80 \
   --max-vy 0.80 \
   --max-yaw 0.0 \
-  --speed-scale-initial 0.08 \
+  --speed-scale-initial 0.06 \
   --speed-scale-min 0.05 \
   --speed-scale-max 0.15 \
   --keyboard-command-timeout 0.75 \
   --policy-command-gain 2.5 \
-  --policy-command-vx-max 0.35 \
+  --policy-command-vx-max 0.25 \
   --policy-command-vy-max 0.20 \
   --policy-command-yaw-max 0.0 \
   --policy-action-clip 2.0 \
   --policy-action-smoothing 0.25 \
   --policy-entry-ramp-seconds 1.5 \
-  --policy-pd-torque-limit 35.0 \
+  --policy-pd-torque-limit 30.0 \
   --enable-retries 3 \
   --enable-retry-delay 0.05 \
   --feedback-timeout 0.05 \

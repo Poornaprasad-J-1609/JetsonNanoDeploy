@@ -49,7 +49,7 @@ policy_deployment:
   # emergency stop remains in config/safety_limits.yaml.
   # Keep the command-side estimate below the measured 40 Nm emergency guard,
   # while leaving enough target amplitude for the gait to appear.
-  estimated_pd_torque_limit: 35.0
+  estimated_pd_torque_limit: 30.0
 
 joint_position:
   enabled: true
