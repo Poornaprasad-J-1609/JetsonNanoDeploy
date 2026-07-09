@@ -35,6 +35,6 @@ encoder:
 
   # Suspended/slow-walk guard for measured MIT torque feedback. RS04 wire
   # scaling reaches +/-120 Nm; retain a conservative deployment threshold.
-  max_abs_torque: 40.0
+  max_abs_torque: 60.0
 
   report_max_joints: 4
