@@ -481,6 +481,49 @@ def format_bus_counts(counts):
     )
 
 
+def max_can_tx_duration_s(buses):
+    """Return the slowest most-recent CAN command batch duration."""
+    if buses is None:
+        return None
+    if not isinstance(buses, dict):
+        value = getattr(buses, "last_sequence_duration_s", None)
+        return None if value is None else float(value)
+
+    durations = []
+    seen_bus_ids = set()
+    for bus in buses.values():
+        if id(bus) in seen_bus_ids:
+            continue
+        seen_bus_ids.add(id(bus))
+        value = getattr(bus, "last_sequence_duration_s", None)
+        if value is not None:
+            durations.append(float(value))
+    return max(durations) if durations else None
+
+
+def feedback_age_summary(estimator, active_joints):
+    """Return (fresh_count, max_age_s) for the active MIT feedback snapshot."""
+    feedback_by_joint = getattr(estimator, "last_feedback_by_joint", None)
+    if not isinstance(feedback_by_joint, dict):
+        return None, None
+
+    now = time.monotonic()
+    ages = []
+    fresh_count = 0
+    for joint_name in active_joints:
+        feedback = feedback_by_joint.get(joint_name)
+        if not isinstance(feedback, dict):
+            continue
+        timestamp = feedback.get("timestamp")
+        if timestamp is None:
+            continue
+        age = now - float(timestamp)
+        if np.isfinite(age):
+            ages.append(age)
+            fresh_count += 1
+    return fresh_count, (max(ages) if ages else None)
+
+
 def feedback_torque_stats(estimator):
     feedback_by_joint = getattr(estimator, "last_feedback_by_joint", {})
     if not feedback_by_joint:
@@ -518,6 +561,10 @@ def compact_telemetry_record(
     policy_order=None,
     policy_sha256=None,
     imu_correction_abs_max=0.0,
+    loop_dt_s=None,
+    can_tx_s=None,
+    feedback_age_max_s=None,
+    feedback_fresh_count=None,
 ):
     command = np.asarray(command, dtype=np.float32)
     policy_command = command if policy_command is None else np.asarray(policy_command, dtype=np.float32)
@@ -556,6 +603,13 @@ def compact_telemetry_record(
         "tau_cmd_max": tau_cmd_max,
         "cmds": int(len(commands)),
         "bus_counts": format_bus_counts(bus_counts),
+        "loop_dt_ms": None if loop_dt_s is None else 1000.0 * float(loop_dt_s),
+        "loop_hz": None if not loop_dt_s else 1.0 / float(loop_dt_s),
+        "can_tx_ms": None if can_tx_s is None else 1000.0 * float(can_tx_s),
+        "feedback_age_max_ms": (
+            None if feedback_age_max_s is None else 1000.0 * float(feedback_age_max_s)
+        ),
+        "feedback_fresh": "" if feedback_fresh_count is None else int(feedback_fresh_count),
         "tau_fb": None,
         "tau_fb_max": None,
         "fault_reason": "",
@@ -618,6 +672,15 @@ def compact_telemetry_line(record):
         f"cmds={int(record['cmds']):02d} "
         f"bus={record.get('bus_counts', 'none')}"
     )
+    if record.get("loop_hz") not in (None, ""):
+        line += f" hz={float(record['loop_hz']):.1f}"
+    if record.get("can_tx_ms") not in (None, ""):
+        line += f" tx={float(record['can_tx_ms']):.1f}ms"
+    if record.get("feedback_age_max_ms") not in (None, ""):
+        line += (
+            f" fb_age={float(record['feedback_age_max_ms']):.1f}ms"
+            f" fb={record.get('feedback_fresh', '')}"
+        )
     if (
         abs(float(record.get("policy_vx", record["vx"])) - float(record["vx"])) > 1e-5
         or abs(float(record.get("policy_vy", record["vy"])) - float(record["vy"])) > 1e-5
@@ -682,6 +745,11 @@ class CsvRunLogger:
         "tau_cmd_max",
         "cmds",
         "bus_counts",
+        "loop_dt_ms",
+        "loop_hz",
+        "can_tx_ms",
+        "feedback_age_max_ms",
+        "feedback_fresh",
         "tau_fb",
         "tau_fb_max",
         "fault_reason",
@@ -1738,8 +1806,15 @@ def run_policy_loop(
         print("policy_steps:", steps)
 
     step = 0
+    previous_cycle_start = None
     while steps is None or step < steps:
         cycle_start = time.monotonic()
+        loop_dt_s = (
+            None
+            if previous_cycle_start is None
+            else cycle_start - previous_cycle_start
+        )
+        previous_cycle_start = cycle_start
         observation_for_log = None
         raw_action = np.zeros(action_dim, dtype=np.float32)
         imu_correction_abs_max = 0.0
@@ -2390,12 +2465,17 @@ def run_policy_loop(
                 motor_layer.send_harmless_frames(buses, commands)
             elif mode == "mit-signal":
                 motor_layer.send_signal_commands(buses, commands)
+        can_tx_s = max_can_tx_duration_s(buses)
 
         active_feedback_timeout = min(
             float(feedback_timeout),
             max(0.002, 0.35 * float(dt)),
         )
         refresh_estimator_feedback(estimator, timeout=active_feedback_timeout)
+        feedback_fresh_count, feedback_age_max_s = feedback_age_summary(
+            estimator,
+            motor_layer.active_joints,
+        )
         require_command_feedback = bool(
             commands and encoder_feedback_required(mode, estimator)
         )
@@ -2618,6 +2698,10 @@ def run_policy_loop(
                 policy_order=runner.policy_order,
                 policy_sha256=runner.policy_sha256,
                 imu_correction_abs_max=imu_correction_abs_max,
+                loop_dt_s=loop_dt_s,
+                can_tx_s=can_tx_s,
+                feedback_age_max_s=feedback_age_max_s,
+                feedback_fresh_count=feedback_fresh_count,
             )
             print(compact_telemetry_line(telemetry_record))
             if csv_logger is not None:
