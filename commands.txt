@@ -324,7 +324,7 @@ position, x = emergency stop. Startup is idle: no auto-zero and no auto-hold.
   --feedback-timeout 0.05 \
   --hold-capture-seconds 0.50 \
   --hold-command-repeats 1 \
-  --pose-sync-error-rad 0.25 \
+  --pose-sync-error-rad 0 \
   --pose-transition-speed-rad-s 0.40 \
   --pose-transition-min-seconds 1.50 \
   --log-every 5 \
@@ -426,23 +426,23 @@ tilt/move the IMU gently and watch whether policy actions/leg targets respond.
   --feedback-timeout 0.08 \
   --hold-capture-seconds 0.50 \
   --hold-command-repeats 2 \
-  --pose-sync-error-rad 0.25 \
+  --pose-sync-error-rad 0 \
   --log-every 5 \
   --joint-debug \
   --gui
 
 
-10. Keyboard walk control with policy, real IMU, safe hanging preview
+10. Keyboard walk control with policy, real IMU, low-speed ground test
 ---------------------------------------------------------------------
 
-This sends real MIT commands. First full robot tests should be suspended/secured.
+This sends real MIT commands with the ground walking gain profile.
 After launch: press space to stand and wait for "Policy walking is armed", then
 hold W/S for straight forward/back, A/D for lateral, and W+A/W+D/S+A/S+D for
 diagonal xy movement. Press up/down arrows to change speed scale. Press c to
 return to the configured crouch pose, h to hold current position, or x to
 emergency-stop. No runtime software-zero is performed.
-These settings deliberately soften the policy command and action output for
-first tests. For simulation-match policy input, see section 12.
+These settings keep the command speed low while allowing enough impedance for
+the stance legs to support the robot on the ground.
 
 /usr/bin/python3 src/main_controller.py \
   --mode mit-signal \
@@ -469,7 +469,7 @@ first tests. For simulation-match policy input, see section 12.
   --max-vx 1.80 \
   --max-vy 0.80 \
   --max-yaw 0.0 \
-  --speed-scale-initial 0.05 \
+  --speed-scale-initial 0.08 \
   --speed-scale-min 0.05 \
   --speed-scale-max 0.15 \
   --keyboard-command-timeout 0.75 \
@@ -480,29 +480,30 @@ first tests. For simulation-match policy input, see section 12.
   --policy-action-clip 2.0 \
   --policy-action-smoothing 0.25 \
   --policy-entry-ramp-seconds 1.5 \
-  --policy-pd-torque-limit 25.0 \
+  --policy-pd-torque-limit 35.0 \
   --enable-retries 3 \
   --enable-retry-delay 0.05 \
   --feedback-timeout 0.05 \
   --hold-capture-seconds 0.50 \
   --hold-command-repeats 2 \
-  --pose-sync-error-rad 0.25 \
+  --pose-sync-error-rad 0 \
   --log-every 5 \
   --joint-debug \
   --gui
 
 
-11. Keyboard walk control with policy, fake IMU, safe hanging preview
+11. Keyboard walk control with policy, fake IMU, low-speed ground test
 ---------------------------------------------------------------------
 
-This sends real MIT commands but uses fake upright IMU values.
+This sends real MIT commands with the ground walking gain profile, but uses fake
+upright IMU values.
 After launch: press space to stand and wait for "Policy walking is armed", then
 hold W/S for straight forward/back, A/D for lateral, and W+A/W+D/S+A/S+D for
 diagonal xy movement. Press up/down arrows to change speed scale. Press c to
 return to the configured crouch pose, h to hold current position, or x to
 emergency-stop. No runtime software-zero is performed.
-These settings deliberately soften the policy command and action output for
-first tests. For simulation-match policy input, see section 12.
+These settings keep the command speed low while allowing enough impedance for
+the stance legs to support the robot on the ground.
 
 /usr/bin/python3 src/main_controller.py \
   --mode mit-signal \
@@ -528,7 +529,7 @@ first tests. For simulation-match policy input, see section 12.
   --max-vx 1.80 \
   --max-vy 0.80 \
   --max-yaw 0.0 \
-  --speed-scale-initial 0.05 \
+  --speed-scale-initial 0.08 \
   --speed-scale-min 0.05 \
   --speed-scale-max 0.15 \
   --keyboard-command-timeout 0.75 \
@@ -539,13 +540,13 @@ first tests. For simulation-match policy input, see section 12.
   --policy-action-clip 2.0 \
   --policy-action-smoothing 0.25 \
   --policy-entry-ramp-seconds 1.5 \
-  --policy-pd-torque-limit 25.0 \
+  --policy-pd-torque-limit 35.0 \
   --enable-retries 3 \
   --enable-retry-delay 0.05 \
   --feedback-timeout 0.05 \
   --hold-capture-seconds 0.50 \
   --hold-command-repeats 2 \
-  --pose-sync-error-rad 0.25 \
+  --pose-sync-error-rad 0 \
   --log-every 5 \
   --joint-debug \
   --gui

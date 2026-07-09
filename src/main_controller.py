@@ -2897,7 +2897,7 @@ def main():
     parser.add_argument(
         "--pose-sync-error-rad",
         type=float,
-        default=0.12,
+        default=0.0,
         help="during sit/stand, slow target progress when live feedback exceeds this max active-joint error; 0 disables",
     )
     parser.add_argument(

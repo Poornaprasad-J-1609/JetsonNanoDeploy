@@ -46,10 +46,10 @@ policy_deployment:
   policy_entry_ramp_seconds: 1.5
   # Before packing a walking MIT command, constrain its estimated joint-space
   # PD torque around fresh encoder feedback. The independent measured-feedback
-  # emergency stop remains at 6.0 in safety_limits.yaml.
-  # 40 Nm in official RS04 units reproduces the old limiter's normalized
-  # position-error allowance after the 10x Kp wire-scale correction.
-  estimated_pd_torque_limit: 25.0
+  # emergency stop remains in config/safety_limits.yaml.
+  # Keep the command-side estimate below the measured 40 Nm emergency guard,
+  # while leaving enough target amplitude for the gait to appear.
+  estimated_pd_torque_limit: 35.0
 
 joint_position:
   enabled: true

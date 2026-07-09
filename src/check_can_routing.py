@@ -458,12 +458,26 @@ def assert_command_wire_contract(layer):
             f"data={payload.hex()} id=0x{can_id:08X}"
         )
 
+    phase_summaries = []
     for phase in ("policy", "leveling"):
         phase_proto = layer.command_proto_for_phase(phase)
-        assert_rs04_wire_contract(phase_proto)
-        if layer.phase_command_encoding.get(phase) != "official":
-            raise AssertionError(f"{phase} must use official RS04 command encoding")
-    return "startup/hold legacy 9b03a77; policy/leveling official RS04"
+        phase_encoding = layer.phase_command_encoding.get(phase, layer.command_encoding)
+        if phase_encoding == "official":
+            assert_rs04_wire_contract(phase_proto)
+            phase_summaries.append(f"{phase}=official RS04")
+        elif phase_encoding == "legacy_9b03a77":
+            for key, value in expected.items():
+                if not np.isclose(float(phase_proto[key]), value, rtol=0.0, atol=1e-12):
+                    raise AssertionError(
+                        f"{phase} legacy range {key}={phase_proto[key]} differs "
+                        f"from commit 9b03a77 value {value}"
+                    )
+            if not bool(phase_proto.get("use_float_to_uint", False)):
+                raise AssertionError(f"{phase} legacy protocol must use float_to_uint")
+            phase_summaries.append(f"{phase}=legacy 9b03a77")
+        else:
+            raise AssertionError(f"{phase} has unknown command encoding {phase_encoding}")
+    return "startup/hold legacy 9b03a77; " + "; ".join(phase_summaries)
 
 
 def q_midpoint_from_limits(layer, policy_order):
