@@ -31,13 +31,18 @@ encoder:
 
   # Also stop if measured q is outside config/joint_limits.yaml by this margin.
   # This catches bad zero positions before they become violent motion commands.
-  # Calf policy targets are allowed only 0.25 rad beyond the simulated hard
-  # limit, so 0.30 rad permits normal tracking/overshoot but still stops before
-  # the motor runs far past the URDF-like calf stop.
+  # The margin permits normal tracking error/overshoot while still stopping
+  # before the motor runs far past the URDF-like software stop.
   joint_limit_margin_rad: 0.30
 
-  # Suspended/slow-walk guard for measured MIT torque feedback. RS04 wire
-  # scaling reaches +/-120 Nm; retain a conservative deployment threshold.
-  max_abs_torque: 60.0
+  # Ground-test guard for measured MIT torque feedback. A 47 kg robot can show
+  # 60-80 Nm support/load-transfer torque at a calf without that being a fault.
+  # Keep this below the RS04 wire range (+/-120 Nm) and use the CLI
+  # --policy-pd-torque-limit to limit commanded walking effort.
+  max_abs_torque: 95.0
+  # Require this many consecutive over-limit feedback samples before stopping.
+  # Set to 1 for immediate trips. 2 filters a single noisy feedback packet
+  # while still stopping a real overload on the next control cycle.
+  max_abs_torque_fault_samples: 2
 
   report_max_joints: 4

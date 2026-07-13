@@ -56,6 +56,8 @@ class SafetyMonitor:
         self.max_feedback_age_s = 0.25
         self.encoder_joint_limit_margin_rad = 0.75
         self.max_abs_feedback_torque = 6.0
+        self.max_abs_feedback_torque_fault_samples = 1
+        self._feedback_torque_fault_counts = {}
         self.encoder_report_max_joints = 4
         self.projected_gravity_gz_min = -0.75
         self.max_body_ang_vel_norm = 8.0
@@ -162,6 +164,9 @@ class SafetyMonitor:
         self.max_abs_feedback_torque = float(
             encoder.get("max_abs_torque", 6.0)
         )
+        self.max_abs_feedback_torque_fault_samples = int(
+            encoder.get("max_abs_torque_fault_samples", 1)
+        )
         self.encoder_report_max_joints = int(encoder.get("report_max_joints", 4))
 
         if not np.isfinite(self.projected_gravity_gz_min):
@@ -185,6 +190,8 @@ class SafetyMonitor:
             or self.max_abs_feedback_torque <= 0.0
         ):
             raise ValueError("encoder.max_abs_torque must be finite and > 0")
+        if self.max_abs_feedback_torque_fault_samples < 1:
+            raise ValueError("encoder.max_abs_torque_fault_samples must be >= 1")
         if self.encoder_report_max_joints < 1:
             raise ValueError("encoder.report_max_joints must be >= 1")
 
@@ -320,6 +327,7 @@ class SafetyMonitor:
             return True, f"MOTOR FEEDBACK FAULT: {shown}"
 
         excessive_torque = []
+        torque_fault_seen = set()
         if feedback_by_joint is not None:
             for name, _ in active_indices:
                 feedback = (feedback_by_joint or {}).get(name)
@@ -333,7 +341,16 @@ class SafetyMonitor:
                 if not np.isfinite(torque):
                     excessive_torque.append(f"{name}=non-finite")
                 elif abs(torque) > self.max_abs_feedback_torque:
-                    excessive_torque.append(f"{name}={torque:+.3f}")
+                    torque_fault_seen.add(name)
+                    count = self._feedback_torque_fault_counts.get(name, 0) + 1
+                    self._feedback_torque_fault_counts[name] = count
+                    if count >= self.max_abs_feedback_torque_fault_samples:
+                        excessive_torque.append(f"{name}={torque:+.3f}")
+                else:
+                    self._feedback_torque_fault_counts.pop(name, None)
+        for name in list(self._feedback_torque_fault_counts):
+            if name not in torque_fault_seen:
+                self._feedback_torque_fault_counts.pop(name, None)
         if excessive_torque:
             shown = ", ".join(excessive_torque[:self.encoder_report_max_joints])
             if len(excessive_torque) > self.encoder_report_max_joints:
