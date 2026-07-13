@@ -31,7 +31,10 @@ encoder:
 
   # Also stop if measured q is outside config/joint_limits.yaml by this margin.
   # This catches bad zero positions before they become violent motion commands.
-  joint_limit_margin_rad: 0.15
+  # Calf policy targets are allowed only 0.25 rad beyond the simulated hard
+  # limit, so 0.30 rad permits normal tracking/overshoot but still stops before
+  # the motor runs far past the URDF-like calf stop.
+  joint_limit_margin_rad: 0.30
 
   # Suspended/slow-walk guard for measured MIT torque feedback. RS04 wire
   # scaling reaches +/-120 Nm; retain a conservative deployment threshold.

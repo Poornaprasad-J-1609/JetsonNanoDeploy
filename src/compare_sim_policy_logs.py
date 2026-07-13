@@ -155,7 +155,11 @@ def main():
     with torch.no_grad():
         replay_actions = runner.policy(torch.from_numpy(observations)).cpu().numpy()
     replay_targets = runner.q_default[None, :] + runner.action_scale * replay_actions
-    final_targets = np.clip(replay_targets, safety.q_min[None, :], safety.q_max[None, :])
+    final_targets = np.clip(
+        replay_targets,
+        safety.policy_q_min[None, :],
+        safety.policy_q_max[None, :],
+    )
 
     sim_targets = np.full_like(replay_targets, np.nan)
     sim_positions = np.full_like(replay_targets, np.nan)
@@ -255,24 +259,25 @@ def main():
     shaped_logged_targets = (
         runner.q_default[None, :] + runner.action_scale * shaped_logged_actions
     )
-    shaped_hard_targets = np.clip(
+    shaped_policy_targets = np.clip(
         shaped_logged_targets,
-        safety.q_min[None, :],
-        safety.q_max[None, :],
+        safety.policy_q_min[None, :],
+        safety.policy_q_max[None, :],
     )
-    runtime_targets = np.zeros_like(shaped_hard_targets)
+    runtime_targets = np.zeros_like(shaped_policy_targets)
     previous_target = runner.q_default.copy()
     for index in range(len(rows)):
         runtime_targets[index] = safety.safety_filter(
             shaped_logged_targets[index],
             previous_target,
             apply_rate_limit=True,
+            use_policy_limits=True,
         )
         previous_target = runtime_targets[index]
 
     action_shaping_error = np.abs(shaped_logged_actions - sim_actions)
-    hard_limit_error = np.abs(shaped_hard_targets - shaped_logged_targets)
-    rate_limit_error = np.abs(runtime_targets - shaped_hard_targets)
+    hard_limit_error = np.abs(shaped_policy_targets - shaped_logged_targets)
+    rate_limit_error = np.abs(runtime_targets - shaped_policy_targets)
     total_runtime_target_error = np.abs(runtime_targets - sim_targets)
 
     motor_cfg = yaml.safe_load(
@@ -331,8 +336,8 @@ def main():
 
     sim_match_targets = np.clip(
         sim_targets,
-        safety.q_min[None, :],
-        safety.q_max[None, :],
+        safety.policy_q_min[None, :],
+        safety.policy_q_max[None, :],
     )
     sim_match_torque_estimate = np.full_like(sim_match_targets, np.nan)
     policy_torque_limit = float(motor_layer.policy_pd_torque_limit)
@@ -374,8 +379,8 @@ def main():
         limited_target = q_feedback + position_torque / effective_kp
         sim_match_targets[valid, joint_index] = np.clip(
             limited_target,
-            safety.q_min[joint_index],
-            safety.q_max[joint_index],
+            safety.policy_q_min[joint_index],
+            safety.policy_q_max[joint_index],
         )
         torque_estimate = (
             effective_kp * (
@@ -442,11 +447,11 @@ def main():
     print("  deployment vs sim q_target max error:", float(np.nanmax(target_error)))
     walking_rows = np.max(np.abs(commands), axis=1) > 0.02
     print(
-        "  final limited target vs sim during walking max error:",
+        "  policy-limited target vs sim during walking max error:",
         float(np.nanmax(final_target_error[walking_rows])),
     )
     print(
-        "  hard position clips (all rows / walking rows):",
+        "  policy target clips (all rows / walking rows):",
         int(np.count_nonzero(np.abs(final_targets - replay_targets) > 1e-7)),
         "/",
         int(np.count_nonzero(np.abs(final_targets[walking_rows] - replay_targets[walking_rows]) > 1e-7)),
@@ -471,7 +476,7 @@ def main():
         int(sim_actions.size),
     )
     print("  action shaping max/mean error:", float(np.max(action_shaping_error)), "/", float(np.mean(action_shaping_error)))
-    print("  hard-limit adjusted samples:", int(np.count_nonzero(hard_limit_error > 1e-7)))
+    print("  policy-limit adjusted samples:", int(np.count_nonzero(hard_limit_error > 1e-7)))
     print("  rate-limit adjusted samples:", int(np.count_nonzero(rate_limit_error > 1e-7)))
     print("  rate-limit max/mean target error:", float(np.max(rate_limit_error)), "/", float(np.mean(rate_limit_error)))
     print("  full runtime-vs-sim target max/mean error:", float(np.nanmax(total_runtime_target_error)), "/", float(np.nanmean(total_runtime_target_error)))
@@ -610,7 +615,7 @@ def main():
     else:
         print("SIMULATION POLICY REPLAY COMPARISON HAS MISMATCHES (allowed)")
     if np.any(np.abs(final_targets - replay_targets) > 1e-7):
-        print("NOTE: safety-limit clipping is reported above but is not a policy-contract failure.")
+        print("NOTE: policy/safety clipping is reported above but is not a policy-contract failure.")
     return 0
 
 

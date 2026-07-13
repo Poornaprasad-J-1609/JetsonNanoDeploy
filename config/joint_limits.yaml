@@ -13,8 +13,10 @@
 # PD target beyond these bounds, but the simulated articulation itself cannot
 # cross them; deployment must preserve that physical constraint.
 # Optional policy_min/policy_max expands only the commanded PD target window for
-# policy walking. Encoder safety still uses min/max below, so measured joints
-# outside the hard range plus safety_limits.yaml margin are still blocked.
+# policy walking. Keep this small for calves: the IsaacSim policy often requests
+# calf targets slightly beyond the URDF joint limit, but the simulated joint
+# itself stays at the limit. On real hardware there is no simulator stop, so
+# this overtravel must stay bounded and consistent with safety_limits.yaml.
 #
 # Walking target rate defaults:
 #   0.080 rad/step = 4.0 rad/s at 50 Hz.
@@ -24,20 +26,20 @@
 
 joint_limits:
   FL_hip_joint:
-    min: -1.5
-    max: 1.5
+    min: -0.5
+    max: 0.5
     dq_max_per_step: 0.080
   FR_hip_joint:
-    min: -1.5
-    max: 1.5
+    min: -0.5
+    max: 0.5
     dq_max_per_step: 0.080
   BL_hip_joint:
-    min: -1.5
-    max: 1.5
+    min: -0.5
+    max: 0.5
     dq_max_per_step: 0.080
   BR_hip_joint:
-    min: -1.5
-    max: 1.5
+    min: -0.5
+    max: 0.5
     dq_max_per_step: 0.080
 
   FL_thigh_joint:
@@ -59,25 +61,25 @@ joint_limits:
 
   FL_calf_joint:
     min: 0.0
-    max: 2.0
-    policy_min: -0.75
-    policy_max: 2.0
+    max: 1.50
+    policy_min: 0.0
+    policy_max: 1.50
     dq_max_per_step: 0.080
   FR_calf_joint:
-    min: -2.0
+    min: -1.50
     max: 0.0
-    policy_min: -2.0
-    policy_max: 0.75
+    policy_min: -1.50
+    policy_max: 0.0
     dq_max_per_step: 0.080
   BL_calf_joint:
     min: 0.0
-    max: 2.0
-    policy_min: -0.75
-    policy_max: 2.0
+    max: 1.50
+    policy_min: 0.0
+    policy_max: 1.50
     dq_max_per_step: 0.080
   BR_calf_joint:
-    min: -2.0
+    min: -1.50
     max: 0.0
-    policy_min: -2.0
-    policy_max: 0.75
+    policy_min: -1.50
+    policy_max: 0.0
     dq_max_per_step: 0.080
