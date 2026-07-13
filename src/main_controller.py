@@ -2629,7 +2629,7 @@ def run_policy_loop(
             max(0.002, 0.35 * float(dt)),
         )
         refresh_estimator_feedback(estimator, timeout=active_feedback_timeout)
-        post_send_fresh_feedback, _ = fresh_feedback_by_joint(
+        post_send_fresh_feedback, post_send_missing_feedback = fresh_feedback_by_joint(
             estimator,
             motor_layer.active_joints,
             live_feedback_max_age_s,
@@ -2639,8 +2639,26 @@ def run_policy_loop(
             motor_layer.active_joints,
             max_age_s=live_feedback_max_age_s,
         )
+        post_send_feedback_incomplete = bool(
+            commands
+            and encoder_feedback_required(mode, estimator)
+            and post_send_missing_feedback
+        )
+        if post_send_feedback_incomplete and step % max(1, log_every) == 0:
+            shown = ", ".join(post_send_missing_feedback[:4])
+            if len(post_send_missing_feedback) > 4:
+                shown += f", +{len(post_send_missing_feedback) - 4} more"
+            print(
+                "[FEEDBACK] post-send fresh feedback incomplete; keeping the "
+                f"controller alive so the next loop can refresh/freeze: {shown}"
+            )
         require_command_feedback = bool(
-            commands and encoder_feedback_required(mode, estimator)
+            commands
+            and encoder_feedback_required(mode, estimator)
+            and not post_send_feedback_incomplete
+        )
+        safety_feedback_by_joint = (
+            post_send_fresh_feedback if post_send_fresh_feedback else None
         )
         reason = encoder_safety_stop_reason(
             safety=safety,
@@ -2649,7 +2667,7 @@ def run_policy_loop(
             mode=mode,
             require_feedback=require_command_feedback,
             q_shift=q_coordinate_shift,
-            feedback_by_joint=post_send_fresh_feedback,
+            feedback_by_joint=safety_feedback_by_joint,
         )
         if reason is not None:
             print("\nEMERGENCY STOP:", reason)
