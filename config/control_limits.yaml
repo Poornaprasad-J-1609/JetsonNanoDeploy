@@ -19,11 +19,12 @@ velocity_command:
   yaw_max: 0.80
 
 joystick_speed_scale:
-  # Ground walking starts deliberately low. Use the keyboard up/down arrows to
-  # step up only after the gait looks stable and feedback age stays fresh.
-  initial: 0.04
+  # Ground walking needs enough commanded velocity for the trained trot phase to
+  # appear. Start below the 08becfc hanging-test profile, then use up/down arrows
+  # only after feedback age and trunk motion look stable.
+  initial: 0.06
   min: 0.03
-  max: 0.15
+  max: 0.20
   step: 0.01
 
 policy_deployment:
@@ -35,28 +36,28 @@ policy_deployment:
   # IsaacSim play script more directly.
   # Keep first ground walking tests slow enough to show gait without a large
   # stance-leg torque step when W/S is pressed.
-  command_vx_abs_max: 0.18
+  command_vx_abs_max: 0.20
   command_vy_abs_max: 0.14
   command_yaw_abs_max: 0.0
   # The 20260713 IsaacLab log has walking action p95 around 3-4. A 1.2 clip
   # erased the gait. For first real ground tests, keep enough action for trot
   # rhythm while trimming the largest target jumps.
-  action_clip_abs: 1.5
-  action_smoothing: 0.60
+  action_clip_abs: 2.2
+  action_smoothing: 0.35
   # Hardware-side action slew guard. At 50 Hz and action_scale=0.25,
-  # 0.12 action units is about 0.03 rad target change per control cycle.
+  # 0.22 action units is about 0.055 rad target change per control cycle.
   # The raw policy action is still logged and fed back to obs[36:48] unchanged.
-  action_delta_limit_abs: 0.12
+  action_delta_limit_abs: 0.22
   # Blend from the settled stand pose into the first walking targets. This
   # prevents an immediate full-amplitude actor target when a movement key is
   # pressed while the robot is carrying its weight.
-  policy_entry_ramp_seconds: 4.0
+  policy_entry_ramp_seconds: 2.5
   # Before packing a walking MIT command, constrain its estimated joint-space
   # PD torque around fresh encoder feedback. The independent measured-feedback
   # emergency stop remains in config/safety_limits.yaml.
   # Keep the command-side estimate below the measured 60 Nm emergency guard,
   # while leaving enough target amplitude for stance legs to support gait.
-  estimated_pd_torque_limit: 24.0
+  estimated_pd_torque_limit: 30.0
 
 joint_position:
   enabled: true

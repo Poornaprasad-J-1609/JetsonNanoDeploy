@@ -441,10 +441,11 @@ hold W/S for straight forward/back, A/D for lateral, and W+A/W+D/S+A/S+D for
 diagonal xy movement. Press up/down arrows to change speed scale. Press c to
 return to the configured crouch pose, h to hold current position, or x to
 emergency-stop. No runtime software-zero is performed.
-These settings are the gentle first ground-walk profile. They intentionally
-lock out lateral/yaw input so W can only send +vx to the policy. If the gait is
-too weak, raise only --policy-pd-torque-limit in small steps before increasing
-stiffness.
+These settings are the gait-recovery ground profile. They intentionally lock out
+lateral/yaw input so W can only send +vx to the policy, but they use more
+command speed and less action damping than the first gentle profile. This is
+closer to the 08becfc hanging-test behavior while still keeping deployment-side
+action slew limiting active.
 
 /usr/bin/python3 src/main_controller.py \
   --mode mit-signal \
@@ -471,21 +472,21 @@ stiffness.
   --max-vx 1.20 \
   --max-vy 0.0 \
   --max-yaw 0.0 \
-  --speed-scale-initial 0.03 \
+  --speed-scale-initial 0.06 \
   --speed-scale-min 0.03 \
-  --speed-scale-max 0.08 \
+  --speed-scale-max 0.12 \
   --speed-scale-step 0.01 \
-  --keyboard-command-timeout 1.00 \
-  --walk-command-grace-seconds 1.00 \
-  --policy-command-gain 1.2 \
-  --policy-command-vx-max 0.12 \
+  --keyboard-command-timeout 1.50 \
+  --walk-command-grace-seconds 3.00 \
+  --policy-command-gain 1.5 \
+  --policy-command-vx-max 0.20 \
   --policy-command-vy-max 0.0 \
   --policy-command-yaw-max 0.0 \
-  --policy-action-clip 1.5 \
-  --policy-action-smoothing 0.60 \
-  --policy-action-delta-limit 0.12 \
-  --policy-entry-ramp-seconds 4.0 \
-  --policy-pd-torque-limit 24.0 \
+  --policy-action-clip 2.2 \
+  --policy-action-smoothing 0.35 \
+  --policy-action-delta-limit 0.22 \
+  --policy-entry-ramp-seconds 2.5 \
+  --policy-pd-torque-limit 30.0 \
   --enable-retries 3 \
   --enable-retry-delay 0.05 \
   --feedback-timeout 0.05 \
@@ -507,10 +508,8 @@ hold W/S for straight forward/back, A/D for lateral, and W+A/W+D/S+A/S+D for
 diagonal xy movement. Press up/down arrows to change speed scale. Press c to
 return to the configured crouch pose, h to hold current position, or x to
 emergency-stop. No runtime software-zero is performed.
-These settings are the gentle first ground-walk profile. They intentionally
-lock out lateral/yaw input so W can only send +vx to the policy. If the gait is
-too weak, raise only --policy-pd-torque-limit in small steps before increasing
-stiffness.
+These settings are the same gait-recovery profile as the real-IMU command, but
+with fake upright IMU values.
 
 /usr/bin/python3 src/main_controller.py \
   --mode mit-signal \
@@ -536,21 +535,21 @@ stiffness.
   --max-vx 1.20 \
   --max-vy 0.0 \
   --max-yaw 0.0 \
-  --speed-scale-initial 0.03 \
+  --speed-scale-initial 0.06 \
   --speed-scale-min 0.03 \
-  --speed-scale-max 0.08 \
+  --speed-scale-max 0.12 \
   --speed-scale-step 0.01 \
-  --keyboard-command-timeout 1.00 \
-  --walk-command-grace-seconds 1.00 \
-  --policy-command-gain 1.2 \
-  --policy-command-vx-max 0.12 \
+  --keyboard-command-timeout 1.50 \
+  --walk-command-grace-seconds 3.00 \
+  --policy-command-gain 1.5 \
+  --policy-command-vx-max 0.20 \
   --policy-command-vy-max 0.0 \
   --policy-command-yaw-max 0.0 \
-  --policy-action-clip 1.5 \
-  --policy-action-smoothing 0.60 \
-  --policy-action-delta-limit 0.12 \
-  --policy-entry-ramp-seconds 4.0 \
-  --policy-pd-torque-limit 24.0 \
+  --policy-action-clip 2.2 \
+  --policy-action-smoothing 0.35 \
+  --policy-action-delta-limit 0.22 \
+  --policy-entry-ramp-seconds 2.5 \
+  --policy-pd-torque-limit 30.0 \
   --enable-retries 3 \
   --enable-retry-delay 0.05 \
   --feedback-timeout 0.05 \
