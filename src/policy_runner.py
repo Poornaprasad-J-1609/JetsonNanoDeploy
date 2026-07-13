@@ -11,7 +11,7 @@ except ImportError as exc:
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_POLICY_SHA256 = "330e02f2406e129bb6ed6ec4a6c6bcd5f80d7e7799a2ab087e81eda65d2fae69"
+EXPECTED_POLICY_SHA256 = "965e94c4cebfc45b9ef609d4a677a5ee35961a895700aad478603f43844b3779"
 EXPECTED_OBSERVATION_DIM = 48
 EXPECTED_ACTION_DIM = 12
 EXPECTED_POLICY_JOINT_ORDER = [
@@ -169,6 +169,24 @@ class PolicyRunner:
                 "policy_to_real_order does not match the verified IsaacLab log order. "
                 f"Required {EXPECTED_POLICY_JOINT_ORDER}, got {list(self.policy_order)}"
             )
+        configured_policy_signs = self.joint_cfg.get("policy_joint_signs", {}) or {}
+        self.policy_joint_signs = np.asarray(
+            [
+                float(configured_policy_signs.get(joint_name, 1.0))
+                for joint_name in self.policy_order
+            ],
+            dtype=np.float32,
+        )
+        invalid_signs = [
+            joint_name
+            for joint_name, sign in zip(self.policy_order, self.policy_joint_signs)
+            if sign not in (-1.0, 1.0)
+        ]
+        if invalid_signs:
+            raise ValueError(
+                "policy_joint_signs must contain only +1 or -1 for: "
+                + ", ".join(invalid_signs)
+            )
         self.action_scale = float(self.joint_cfg["policy_action_scale"])
         self.control_dt = float(self.joint_cfg["control_dt"])
         if not np.isfinite(self.action_scale) or self.action_scale <= 0.0:
@@ -294,8 +312,11 @@ class PolicyRunner:
             "base_ang_vel": np.asarray(base_ang_vel_b, dtype=np.float32),
             "projected_gravity": np.asarray(projected_gravity_b, dtype=np.float32),
             "command": np.asarray(command, dtype=np.float32),
-            "joint_pos_relative": np.asarray(q_current, dtype=np.float32) - self.q_default,
-            "joint_vel": np.asarray(qd_current, dtype=np.float32),
+            "joint_pos_relative": (
+                self.policy_joint_signs
+                * (np.asarray(q_current, dtype=np.float32) - self.q_default)
+            ),
+            "joint_vel": self.policy_joint_signs * np.asarray(qd_current, dtype=np.float32),
             "previous_action": np.asarray(previous_action, dtype=np.float32),
         }
 
@@ -355,7 +376,7 @@ class PolicyRunner:
             )
         if not np.all(np.isfinite(action)):
             raise ValueError("Policy action contains NaN or Inf")
-        return self.q_default + self.action_scale * action
+        return self.q_default + self.policy_joint_signs * self.action_scale * action
 
     def array_to_joint_dict(self, q):
         q = np.asarray(q, dtype=np.float32)

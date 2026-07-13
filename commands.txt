@@ -398,7 +398,7 @@ tilt/move the IMU gently and watch whether policy actions/leg targets respond.
   --command-source keyboard \
   --imu-source xsens \
   --imu-port "$IMU_PORT" \
-  --stand-policy-stabilization \
+  --no-stand-policy-stabilization \
   --no-imu-stabilization \
   --no-gait-assist \
   --base-lin-vel-source zero \
@@ -452,7 +452,7 @@ the stance legs to support the robot on the ground.
   --command-source keyboard \
   --imu-source xsens \
   --imu-port "$IMU_PORT" \
-  --stand-policy-stabilization \
+  --no-stand-policy-stabilization \
   --no-imu-stabilization \
   --no-gait-assist \
   --base-lin-vel-source zero \
@@ -469,27 +469,28 @@ the stance legs to support the robot on the ground.
   --max-vx 1.80 \
   --max-vy 0.80 \
   --max-yaw 0.0 \
-  --speed-scale-initial 0.06 \
-  --speed-scale-min 0.05 \
+  --speed-scale-initial 0.04 \
+  --speed-scale-min 0.03 \
   --speed-scale-max 0.15 \
+  --speed-scale-step 0.01 \
   --keyboard-command-timeout 0.75 \
-  --policy-command-gain 2.5 \
-  --policy-command-vx-max 0.25 \
-  --policy-command-vy-max 0.20 \
+  --policy-command-gain 1.5 \
+  --policy-command-vx-max 0.18 \
+  --policy-command-vy-max 0.14 \
   --policy-command-yaw-max 0.0 \
-  --policy-action-clip 2.0 \
-  --policy-action-smoothing 0.25 \
-  --policy-entry-ramp-seconds 1.5 \
-  --policy-pd-torque-limit 30.0 \
+  --policy-action-clip 3.0 \
+  --policy-action-smoothing 0.20 \
+  --policy-entry-ramp-seconds 3.0 \
+  --policy-pd-torque-limit 35.0 \
   --enable-retries 3 \
   --enable-retry-delay 0.05 \
   --feedback-timeout 0.05 \
+  --fresh-feedback-max-age 0 \
   --hold-capture-seconds 0.50 \
   --hold-command-repeats 2 \
   --pose-sync-error-rad 0 \
-  --log-every 5 \
-  --joint-debug \
-  --gui
+  --log-every 20 \
+  --no-auto-push-log
 
 
 11. Keyboard walk control with policy, fake IMU, low-speed ground test
@@ -529,27 +530,28 @@ the stance legs to support the robot on the ground.
   --max-vx 1.80 \
   --max-vy 0.80 \
   --max-yaw 0.0 \
-  --speed-scale-initial 0.06 \
-  --speed-scale-min 0.05 \
+  --speed-scale-initial 0.04 \
+  --speed-scale-min 0.03 \
   --speed-scale-max 0.15 \
+  --speed-scale-step 0.01 \
   --keyboard-command-timeout 0.75 \
-  --policy-command-gain 2.5 \
-  --policy-command-vx-max 0.25 \
-  --policy-command-vy-max 0.20 \
+  --policy-command-gain 1.5 \
+  --policy-command-vx-max 0.18 \
+  --policy-command-vy-max 0.14 \
   --policy-command-yaw-max 0.0 \
-  --policy-action-clip 2.0 \
-  --policy-action-smoothing 0.25 \
-  --policy-entry-ramp-seconds 1.5 \
-  --policy-pd-torque-limit 30.0 \
+  --policy-action-clip 3.0 \
+  --policy-action-smoothing 0.20 \
+  --policy-entry-ramp-seconds 3.0 \
+  --policy-pd-torque-limit 35.0 \
   --enable-retries 3 \
   --enable-retry-delay 0.05 \
   --feedback-timeout 0.05 \
+  --fresh-feedback-max-age 0 \
   --hold-capture-seconds 0.50 \
   --hold-command-repeats 2 \
   --pose-sync-error-rad 0 \
-  --log-every 5 \
-  --joint-debug \
-  --gui
+  --log-every 20 \
+  --no-auto-push-log
 
 
 12. Simulation-match policy input switches

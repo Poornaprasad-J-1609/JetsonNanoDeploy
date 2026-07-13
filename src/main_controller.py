@@ -501,7 +501,7 @@ def max_can_tx_duration_s(buses):
     return max(durations) if durations else None
 
 
-def feedback_age_summary(estimator, active_joints):
+def feedback_age_summary(estimator, active_joints, max_age_s=None):
     """Return (fresh_count, max_age_s) for the active MIT feedback snapshot."""
     feedback_by_joint = getattr(estimator, "last_feedback_by_joint", None)
     if not isinstance(feedback_by_joint, dict):
@@ -520,7 +520,8 @@ def feedback_age_summary(estimator, active_joints):
         age = now - float(timestamp)
         if np.isfinite(age):
             ages.append(age)
-            fresh_count += 1
+            if max_age_s is None or age <= float(max_age_s):
+                fresh_count += 1
     return fresh_count, (max(ages) if ages else None)
 
 
@@ -765,10 +766,23 @@ class CsvRunLogger:
     FIELDNAMES += [f"q_target_{index:02d}" for index in range(12)]
     FIELDNAMES += [f"qd_target_{index:02d}" for index in range(12)]
 
+    @staticmethod
+    def _unique_log_path(directory, stem):
+        candidate = directory / f"{stem}.csv"
+        if not candidate.exists():
+            return candidate
+
+        repeat = 2
+        while True:
+            candidate = directory / f"{stem}_repeat{repeat:02d}.csv"
+            if not candidate.exists():
+                return candidate
+            repeat += 1
+
     def __init__(self, enabled=True, log_dir=None, log_file=None):
         self.enabled = bool(enabled)
         self.path = None
-        self.run_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        self.run_id = datetime.now().astimezone().strftime("%Y-%m-%d_%H-%M-%S")
         self.start_time = time.monotonic()
         self._file = None
         self._writer = None
@@ -778,9 +792,11 @@ class CsvRunLogger:
 
         if log_file:
             self.path = Path(log_file).expanduser()
+            self.run_id = self.path.stem
         else:
             directory = Path(log_dir).expanduser() if log_dir else ROOT / "logs"
-            self.path = directory / f"grallator_run_{self.run_id}_{os.getpid()}.csv"
+            self.path = self._unique_log_path(directory, f"grallator_run_{self.run_id}")
+            self.run_id = self.path.stem.removeprefix("grallator_run_")
 
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._file = open(self.path, "w", newline="")
@@ -1021,6 +1037,29 @@ def count_fresh_active_feedback(estimator, active_joints, max_age_s):
     return count
 
 
+def fresh_feedback_by_joint(estimator, active_joints, max_age_s):
+    feedback = getattr(estimator, "last_feedback_by_joint", {}) or {}
+    now = time.monotonic()
+    fresh = {}
+    missing = []
+    for joint_name in active_joints:
+        item = feedback.get(joint_name)
+        if not isinstance(item, dict):
+            missing.append(joint_name)
+            continue
+        timestamp = item.get("timestamp")
+        try:
+            age = now - float(timestamp)
+        except (TypeError, ValueError):
+            missing.append(joint_name)
+            continue
+        if np.isfinite(age) and age <= float(max_age_s):
+            fresh[joint_name] = item
+        else:
+            missing.append(joint_name)
+    return fresh, missing
+
+
 def fresh_active_feedback_names(estimator, active_joints, max_age_s):
     feedback = getattr(estimator, "last_feedback_by_joint", {}) or {}
     now = time.monotonic()
@@ -1055,6 +1094,7 @@ def refresh_active_feedback_before_fault(
     phase="startup",
     allow_poll_snapshot=False,
     max_wait_s=0.12,
+    max_age_s=None,
 ):
     """Try to refresh active motor feedback before declaring a stale fault.
 
@@ -1070,7 +1110,11 @@ def refresh_active_feedback_before_fault(
 
     active_joints = list(motor_layer.active_joints)
     n_active = len(active_joints)
-    max_age_s = getattr(safety, "max_feedback_age_s", 0.25)
+    max_age_s = (
+        getattr(safety, "max_feedback_age_s", 0.25)
+        if max_age_s is None
+        else float(max_age_s)
+    )
     deadline = time.monotonic() + max(float(max_wait_s), float(feedback_timeout), 0.02)
 
     refresh_estimator_feedback(estimator, timeout=0.0)
@@ -1078,10 +1122,15 @@ def refresh_active_feedback_before_fault(
     while fresh < n_active and time.monotonic() < deadline:
         if mode == "mit-signal" and buses is not None:
             if q_keepalive is not None:
+                feedback_for_keepalive, _ = fresh_feedback_by_joint(
+                    estimator,
+                    active_joints,
+                    max_age_s,
+                )
                 keepalive_commands = motor_layer.build_mit_commands(
                     q_keepalive,
                     phase=phase,
-                    feedback_by_joint=getattr(estimator, "last_feedback_by_joint", None),
+                    feedback_by_joint=feedback_for_keepalive,
                 )
                 motor_layer.send_signal_commands(buses, keepalive_commands)
             elif allow_poll_snapshot:
@@ -1128,10 +1177,15 @@ def acquire_hold_target_from_feedback(
     stale_or_missing = list(active_joints)
     while time.monotonic() < deadline:
         if mode == "mit-signal" and buses is not None:
+            feedback_for_keepalive, _ = fresh_feedback_by_joint(
+                estimator,
+                active_joints,
+                max_age_s,
+            )
             keepalive_commands = motor_layer.build_mit_commands(
                 q_previous_target,
                 phase="startup",
-                feedback_by_joint=getattr(estimator, "last_feedback_by_joint", None),
+                feedback_by_joint=feedback_for_keepalive,
             )
             motor_layer.send_signal_commands(buses, keepalive_commands)
 
@@ -1185,6 +1239,7 @@ def encoder_safety_stop_reason(
     mode,
     require_feedback=None,
     q_shift=None,
+    feedback_by_joint=None,
 ):
     q_current = getattr(estimator, "q_current", None)
     if q_current is None:
@@ -1199,7 +1254,11 @@ def encoder_safety_stop_reason(
     stop, reason = safety.encoder_sanity_check(
         q_current=q_for_safety,
         active_joints=active_joints,
-        feedback_by_joint=getattr(estimator, "last_feedback_by_joint", None),
+        feedback_by_joint=(
+            getattr(estimator, "last_feedback_by_joint", None)
+            if feedback_by_joint is None
+            else feedback_by_joint
+        ),
         require_feedback=require_feedback,
     )
     return reason if stop else None
@@ -1636,10 +1695,19 @@ def run_policy_loop(
     stand_calibration_value,
     pose_transition_speed_rad_s,
     pose_transition_min_seconds,
+    fresh_feedback_max_age_s,
     telemetry=None,
     csv_logger=None,
 ):
     dt = runner.control_dt
+    live_feedback_max_age_s = (
+        float(fresh_feedback_max_age_s)
+        if float(fresh_feedback_max_age_s) > 0.0
+        else min(
+            float(getattr(safety, "max_feedback_age_s", 0.25)),
+            max(0.02, 2.0 * float(dt)),
+        )
+    )
     action_dim = len(runner.policy_order)
     # Preserve the trained observation contract: slots 36:48 contain the
     # previous raw actor output. Hardware clipping, smoothing, and target slew
@@ -1790,6 +1858,7 @@ def run_policy_loop(
     print("walking_armed:", bool(walking_armed))
     print("hold_capture_seconds:", float(hold_capture_seconds))
     print("hold_command_repeats:", int(hold_command_repeats))
+    print("fresh_feedback_max_age_s:", float(live_feedback_max_age_s))
     print("pose_transition_speed_rad_s:", float(pose_transition_speed_rad_s))
     print("pose_transition_min_seconds:", float(pose_transition_min_seconds))
     print("crouch_calibration_value:", float(crouch_calibration_value))
@@ -2246,7 +2315,7 @@ def run_policy_loop(
             and count_fresh_active_feedback(
                 estimator,
                 motor_layer.active_joints,
-                getattr(safety, "max_feedback_age_s", 0.25),
+                live_feedback_max_age_s,
             ) < len(motor_layer.active_joints)
         ):
             request_feedback_snapshot(motor_layer, buses, mode)
@@ -2254,7 +2323,7 @@ def run_policy_loop(
             fresh = count_fresh_active_feedback(
                 estimator,
                 motor_layer.active_joints,
-                getattr(safety, "max_feedback_age_s", 0.25),
+                live_feedback_max_age_s,
             )
             if fresh < len(motor_layer.active_joints):
                 if step % max(1, log_every) == 0:
@@ -2271,6 +2340,69 @@ def run_policy_loop(
             active_control_mode = "hold"
         else:
             active_control_mode = control_mode
+
+        fresh_feedback_for_commands = {}
+        live_feedback_missing = []
+        live_feedback_required = bool(
+            active_control_mode in ("hold", "stand", "sit", "policy")
+            and encoder_feedback_required(mode, estimator)
+            and (has_motion_target or active_control_mode != "hold")
+        )
+        if live_feedback_required:
+            fresh_feedback_for_commands, live_feedback_missing = fresh_feedback_by_joint(
+                estimator,
+                motor_layer.active_joints,
+                live_feedback_max_age_s,
+            )
+            if live_feedback_missing:
+                keepalive_phase = (
+                    "policy"
+                    if active_control_mode == "policy" or policy_has_started
+                    else "startup"
+                )
+                refresh_active_feedback_before_fault(
+                    estimator=estimator,
+                    motor_layer=motor_layer,
+                    safety=safety,
+                    buses=buses,
+                    mode=mode,
+                    feedback_timeout=feedback_timeout,
+                    q_keepalive=q_previous_target,
+                    phase=keepalive_phase,
+                    max_wait_s=live_feedback_max_age_s,
+                    max_age_s=live_feedback_max_age_s,
+                )
+                (
+                    q_current,
+                    qd_current,
+                    base_lin_vel_b,
+                    base_ang_vel_b,
+                    projected_gravity_b,
+                ) = estimator.read()
+                fresh_feedback_for_commands, live_feedback_missing = fresh_feedback_by_joint(
+                    estimator,
+                    motor_layer.active_joints,
+                    live_feedback_max_age_s,
+                )
+
+            if live_feedback_missing:
+                if step % max(1, log_every) == 0:
+                    shown = ", ".join(live_feedback_missing[:4])
+                    if len(live_feedback_missing) > 4:
+                        shown += f", +{len(live_feedback_missing) - 4} more"
+                    print(
+                        "[FEEDBACK] live feedback incomplete; freezing target "
+                        f"instead of using stale q/qd: {shown}"
+                    )
+                if active_control_mode == "policy":
+                    walk_requested = False
+                active_control_mode = "hold" if has_motion_target else "idle"
+                previous_sent_action = np.zeros(action_dim, dtype=np.float32)
+                fresh_feedback_for_commands, _ = fresh_feedback_by_joint(
+                    estimator,
+                    motor_layer.active_joints,
+                    live_feedback_max_age_s,
+                )
 
         if walk_requested:
             has_motion_target = True
@@ -2310,7 +2442,7 @@ def run_policy_loop(
                 motor_layer.build_mit_commands(
                     q_safe_target,
                     phase="hold",
-                    feedback_by_joint=getattr(estimator, "last_feedback_by_joint", None),
+                    feedback_by_joint=fresh_feedback_for_commands,
                 )
                 if has_motion_target
                 else []
@@ -2383,7 +2515,7 @@ def run_policy_loop(
             commands = motor_layer.build_mit_commands(
                 q_safe_target,
                 phase=stand_command_phase,
-                feedback_by_joint=getattr(estimator, "last_feedback_by_joint", None),
+                feedback_by_joint=fresh_feedback_for_commands,
             )
 
         elif active_control_mode == "sit":
@@ -2397,7 +2529,7 @@ def run_policy_loop(
             commands = motor_layer.build_mit_commands(
                 q_safe_target,
                 phase="startup",
-                feedback_by_joint=getattr(estimator, "last_feedback_by_joint", None),
+                feedback_by_joint=fresh_feedback_for_commands,
             )
             action = np.zeros(action_dim, dtype=np.float32)
 
@@ -2449,7 +2581,7 @@ def run_policy_loop(
             commands = motor_layer.build_mit_commands(
                 q_safe_target,
                 phase="policy",
-                feedback_by_joint=getattr(estimator, "last_feedback_by_joint", None),
+                feedback_by_joint=fresh_feedback_for_commands,
             )
 
         else:
@@ -2472,9 +2604,15 @@ def run_policy_loop(
             max(0.002, 0.35 * float(dt)),
         )
         refresh_estimator_feedback(estimator, timeout=active_feedback_timeout)
+        post_send_fresh_feedback, _ = fresh_feedback_by_joint(
+            estimator,
+            motor_layer.active_joints,
+            live_feedback_max_age_s,
+        )
         feedback_fresh_count, feedback_age_max_s = feedback_age_summary(
             estimator,
             motor_layer.active_joints,
+            max_age_s=live_feedback_max_age_s,
         )
         require_command_feedback = bool(
             commands and encoder_feedback_required(mode, estimator)
@@ -2486,6 +2624,7 @@ def run_policy_loop(
             mode=mode,
             require_feedback=require_command_feedback,
             q_shift=q_coordinate_shift,
+            feedback_by_joint=post_send_fresh_feedback,
         )
         if reason is not None:
             print("\nEMERGENCY STOP:", reason)
@@ -2583,7 +2722,7 @@ def run_policy_loop(
                     commands = motor_layer.build_mit_commands(
                         q_safe_target,
                         phase="startup",
-                        feedback_by_joint=getattr(estimator, "last_feedback_by_joint", None),
+                        feedback_by_joint=fresh_feedback_for_commands,
                     )
                     if mode == "signal":
                         motor_layer.send_harmless_frames(buses, commands)
@@ -2661,7 +2800,7 @@ def run_policy_loop(
                     commands = motor_layer.build_mit_commands(
                         q_safe_target,
                         phase="startup",
-                        feedback_by_joint=getattr(estimator, "last_feedback_by_joint", None),
+                        feedback_by_joint=fresh_feedback_for_commands,
                     )
                     if mode == "signal":
                         motor_layer.send_harmless_frames(buses, commands)
@@ -3025,6 +3164,15 @@ def main():
         help="seconds to wait for MIT feedback after sending commands",
     )
     parser.add_argument(
+        "--fresh-feedback-max-age",
+        type=float,
+        default=0.0,
+        help=(
+            "maximum age in seconds for feedback used by policy/pose command "
+            "generation; 0 uses min(safety encoder age, 2 control cycles)"
+        ),
+    )
+    parser.add_argument(
         "--hold-capture-seconds",
         type=float,
         default=0.35,
@@ -3201,6 +3349,8 @@ def main():
         parser.error("--policy-entry-ramp-seconds must be finite and >= 0")
     if not np.isfinite(args.policy_pd_torque_limit) or args.policy_pd_torque_limit <= 0.0:
         parser.error("--policy-pd-torque-limit must be finite and > 0")
+    if not np.isfinite(args.fresh_feedback_max_age) or args.fresh_feedback_max_age < 0.0:
+        parser.error("--fresh-feedback-max-age must be finite and >= 0")
     if not np.isfinite(args.control_hz) or args.control_hz < 0.0:
         parser.error("--control-hz must be finite and >= 0")
     if 0.0 < args.control_hz < 10.0 or args.control_hz > 100.0:
@@ -3655,6 +3805,7 @@ def main():
             stand_calibration_value=float(args.stand_calibration_value),
             pose_transition_speed_rad_s=float(args.pose_transition_speed_rad_s),
             pose_transition_min_seconds=float(args.pose_transition_min_seconds),
+            fresh_feedback_max_age_s=float(args.fresh_feedback_max_age),
             telemetry=telemetry,
             csv_logger=csv_logger,
         )

@@ -27,6 +27,15 @@ def vector(row, prefix, count, digits):
     )
 
 
+def vector_from_candidates(row, candidates, count):
+    for prefix, digits in candidates:
+        keys = [f"{prefix}{index:0{digits}d}" for index in range(count)]
+        if all(key in row and row[key] != "" for key in keys):
+            return np.array([float(row[key]) for key in keys], dtype=np.float32)
+    names = ", ".join(prefix for prefix, _ in candidates)
+    raise KeyError(f"CSV row has none of the expected vector prefixes: {names}")
+
+
 def command_vector(row):
     return np.array(
         [float(row["command_vx"]), float(row["command_vy"]), float(row["command_yaw"])],
@@ -158,7 +167,11 @@ def main():
         step = int(policy_row["step"])
         command = command_vector(policy_row)
         logged_obs = vector(policy_row, "obs_", 48, 3)
-        logged_action = vector(policy_row, "action_", 12, 2)
+        logged_action = vector_from_candidates(
+            policy_row,
+            (("action_", 2), ("policy_action_", 2)),
+            12,
+        )
 
         replay_action = runner.infer_action(logged_obs)
         exact_action_error = np.abs(replay_action - logged_action)
@@ -190,14 +203,14 @@ def main():
         else:
             incomplete_motor_steps.append((step, len(joint_rows)))
 
-        sim_q_target = runner.action_to_q_target(logged_action)
-        hard_target = np.clip(sim_q_target, safety.q_min, safety.q_max)
-        safe_sim_target = safety.safety_filter(sim_q_target, sim_target_previous)
-        position_clip_count = int(np.count_nonzero(np.abs(hard_target - sim_q_target) > 1e-7))
+        deploy_q_target = runner.action_to_q_target(logged_action)
+        hard_target = np.clip(deploy_q_target, safety.q_min, safety.q_max)
+        safe_sim_target = safety.safety_filter(deploy_q_target, sim_target_previous)
+        position_clip_count = int(np.count_nonzero(np.abs(hard_target - deploy_q_target) > 1e-7))
         rate_clip_count = int(np.count_nonzero(np.abs(safe_sim_target - hard_target) > 1e-7))
         position_clip_total += position_clip_count
         rate_clip_total += rate_clip_count
-        safety_error = np.abs(safe_sim_target - sim_q_target)
+        safety_error = np.abs(safe_sim_target - deploy_q_target)
         sim_target_safety_errors.extend(safety_error.tolist())
         sim_target_previous = safe_sim_target
 

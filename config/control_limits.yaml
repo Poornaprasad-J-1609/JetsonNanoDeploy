@@ -19,37 +19,40 @@ velocity_command:
   yaw_max: 0.80
 
 joystick_speed_scale:
-  initial: 0.10
-  min: 0.05
-  max: 0.40
-  step: 0.05
+  # Ground walking starts deliberately low. Use the keyboard up/down arrows to
+  # step up only after the gait looks stable and feedback age stays fresh.
+  initial: 0.04
+  min: 0.03
+  max: 0.15
+  step: 0.01
 
 policy_deployment:
   # These affect only the policy inference path. The joystick speed_scale still
   # limits the real commanded velocity, and config/joint_limits.yaml is still
   # the final hard wall before MIT packets are sent.
-  command_gain: 1.0
+  command_gain: 1.5
   # Absolute caps after command_gain. Use 0.0 to disable a cap and match the
   # IsaacSim play script more directly.
-  command_vx_abs_max: 0.0
-  command_vy_abs_max: 0.0
+  # Keep first ground walking tests slow enough to show gait without a large
+  # stance-leg torque step when W/S is pressed.
+  command_vx_abs_max: 0.18
+  command_vy_abs_max: 0.14
   command_yaw_abs_max: 0.0
-  # The supplied IsaacLab logs use raw actions up to about 8.6, with roughly
-  # 45% above 0.8. A 0.8 clip suppresses the learned gait. This middle profile
-  # preserves over 96% of logged samples while the independent hard joint and
-  # 40 Nm estimated-PD limits remain active.
+  # The 20260713 IsaacLab log has walking action p95 around 3-4. A 1.2 clip
+  # erased the gait. Keep most nominal walking action while smoothing only the
+  # sharpest target changes during first ground tests.
   action_clip_abs: 3.0
-  action_smoothing: 0.10
+  action_smoothing: 0.20
   # Blend from the settled stand pose into the first walking targets. This
   # prevents an immediate full-amplitude actor target when a movement key is
   # pressed while the robot is carrying its weight.
-  policy_entry_ramp_seconds: 1.5
+  policy_entry_ramp_seconds: 3.0
   # Before packing a walking MIT command, constrain its estimated joint-space
   # PD torque around fresh encoder feedback. The independent measured-feedback
   # emergency stop remains in config/safety_limits.yaml.
-  # Keep the command-side estimate below the measured 40 Nm emergency guard,
-  # while leaving enough target amplitude for the gait to appear.
-  estimated_pd_torque_limit: 30.0
+  # Keep the command-side estimate below the measured 60 Nm emergency guard,
+  # while leaving enough target amplitude for stance legs to support gait.
+  estimated_pd_torque_limit: 35.0
 
 joint_position:
   enabled: true

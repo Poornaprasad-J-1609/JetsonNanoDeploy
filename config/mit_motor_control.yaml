@@ -1,16 +1,14 @@
 motor:
   model: rs-04
   use_official_mit_ranges: true
-  # Reproduce the operation-control bytes used by commit 9b03a77 while still
-  # decoding feedback with the official RS04 ranges below. This preserves the
-  # proven motor-side impedance across the serial-AT -> SocketCAN migration.
+  # Startup/hold still reproduce the operation-control bytes used by commit
+  # 9b03a77 because that sit/stand behavior is proven. Policy walking and
+  # leveling use official RS04 encoding so configured gains mean the same thing
+  # as RobStride's official SocketCAN/MIT tables.
   command_encoding: legacy_9b03a77
-  # Keep every phase on the proven pre-SocketCAN MIT byte encoding. SocketCAN
-  # is only the transport; the motor command math must stay identical to the
-  # known-good MIT path.
   phase_command_encoding:
-    policy: legacy_9b03a77
-    leveling: legacy_9b03a77
+    policy: official
+    leveling: official
 
 legacy_command_protocol:
   use_float_to_uint: true
@@ -64,8 +62,8 @@ communication:
 
 gains:
   # These are the same config-side MIT gains used by the known-good pre-
-  # SocketCAN path at commit 9b03a77. Do not convert them to official-unit
-  # values here; the legacy encoder below intentionally reproduces those bytes.
+  # SocketCAN path at commit 9b03a77 for startup/hold. Policy and leveling
+  # phases below are official-unit gains.
   startup:
     hip:
       kp: 75
@@ -90,44 +88,44 @@ gains:
 
   policy:
     hip:
-      # Ground walking profile. This is stronger than the suspended preview
-      # profile but still below startup/hold stiffness; the independent
-      # command-side and measured torque guards remain active.
-      kp: 30.0
-      kd: 1.0
+      # Fitted from IsaacLab sim log 20260713_064320. These official-unit
+      # policy gains are close to the simulated actuator stiffness/damping,
+      # while the command-side torque limiter still bounds first ground tests.
+      kp: 75.0
+      kd: 2.0
     thigh:
-      kp: 40.0
-      kd: 1.2
+      kp: 75.0
+      kd: 2.0
     calf:
-      kp: 40.0
-      kd: 1.2
+      kp: 75.0
+      kd: 2.0
     joints:
-      BL_hip_joint: {kp: 30.0, kd: 1.0}
-      BR_hip_joint: {kp: 30.0, kd: 1.0}
-      FL_hip_joint: {kp: 30.0, kd: 1.0}
-      FR_hip_joint: {kp: 30.0, kd: 1.0}
-      BL_thigh_joint: {kp: 40.0, kd: 1.2}
-      BR_thigh_joint: {kp: 40.0, kd: 1.2}
-      FL_thigh_joint: {kp: 40.0, kd: 1.2}
-      FR_thigh_joint: {kp: 40.0, kd: 1.2}
-      BL_calf_joint: {kp: 40.0, kd: 1.2}
-      BR_calf_joint: {kp: 40.0, kd: 1.2}
-      FL_calf_joint: {kp: 40.0, kd: 1.2}
-      FR_calf_joint: {kp: 40.0, kd: 1.2}
+      BL_hip_joint: {kp: 75.0, kd: 2.0}
+      BR_hip_joint: {kp: 75.0, kd: 2.0}
+      FL_hip_joint: {kp: 75.0, kd: 2.0}
+      FR_hip_joint: {kp: 75.0, kd: 2.0}
+      BL_thigh_joint: {kp: 75.0, kd: 2.0}
+      BR_thigh_joint: {kp: 75.0, kd: 2.0}
+      FL_thigh_joint: {kp: 75.0, kd: 2.0}
+      FR_thigh_joint: {kp: 75.0, kd: 2.0}
+      BL_calf_joint: {kp: 75.0, kd: 2.0}
+      BR_calf_joint: {kp: 75.0, kd: 2.0}
+      FL_calf_joint: {kp: 75.0, kd: 2.0}
+      FR_calf_joint: {kp: 75.0, kd: 2.0}
 
   # Direct IMU body-leveling gains from the known-good MIT path. Stand-up
   # itself continues to use the startup gains above; these take over only after
   # stand has settled and direct IMU stabilization is explicitly enabled.
   leveling:
     hip:
-      kp: 25.0
-      kd: 1.0
+      kp: 75.0
+      kd: 1.8
     thigh:
-      kp: 30.0
-      kd: 1.0
+      kp: 75.0
+      kd: 1.8
     calf:
-      kp: 30.0
-      kd: 1.0
+      kp: 75.0
+      kd: 1.8
 
 feedforward:
   tau_ff: 0.0
