@@ -234,6 +234,7 @@ def main():
         deployment_cfg = yaml.safe_load(config_file)["policy_deployment"]
     action_clip = float(deployment_cfg.get("action_clip_abs", 0.0))
     action_smoothing = float(deployment_cfg.get("action_smoothing", 0.0))
+    action_delta_limit = float(deployment_cfg.get("action_delta_limit_abs", 0.0))
 
     shaped_actions = np.zeros_like(replay_actions)
     shaped_logged_actions = np.zeros_like(sim_actions)
@@ -245,12 +246,14 @@ def main():
             previous_shaped,
             clip_abs=action_clip,
             smoothing=action_smoothing,
+            delta_limit_abs=action_delta_limit,
         )
         shaped_logged_actions[index] = filtered_policy_action(
             sim_actions[index],
             previous_logged_shaped,
             clip_abs=action_clip,
             smoothing=action_smoothing,
+            delta_limit_abs=action_delta_limit,
         )
         previous_shaped = shaped_actions[index]
         previous_logged_shaped = shaped_logged_actions[index]
@@ -469,6 +472,7 @@ def main():
     print("Deployment shaping (always-policy dry replay):")
     print("  configured action clip:", action_clip)
     print("  configured action smoothing:", action_smoothing)
+    print("  configured action delta limit:", action_delta_limit)
     print(
         "  logged action samples beyond clip:",
         int(np.count_nonzero(np.abs(sim_actions) > action_clip)) if action_clip > 0.0 else 0,

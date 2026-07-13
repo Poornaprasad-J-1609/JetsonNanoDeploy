@@ -483,6 +483,7 @@ stiffness.
   --policy-command-yaw-max 0.0 \
   --policy-action-clip 1.5 \
   --policy-action-smoothing 0.60 \
+  --policy-action-delta-limit 0.12 \
   --policy-entry-ramp-seconds 4.0 \
   --policy-pd-torque-limit 24.0 \
   --enable-retries 3 \
@@ -547,6 +548,7 @@ stiffness.
   --policy-command-yaw-max 0.0 \
   --policy-action-clip 1.5 \
   --policy-action-smoothing 0.60 \
+  --policy-action-delta-limit 0.12 \
   --policy-entry-ramp-seconds 4.0 \
   --policy-pd-torque-limit 24.0 \
   --enable-retries 3 \
@@ -565,7 +567,9 @@ stiffness.
 
 Use these only after the safe preview is behaving correctly. They make policy
 inference closer to play_grallator_keyboard.py by removing deploy-only command
-caps, action clipping, and action smoothing. Keep the robot suspended/secured.
+caps, action clipping, action slew limiting, and action smoothing. Keep the
+robot suspended/secured. Do not use --policy-sim-match for first ground walking:
+the raw actor can jump to 3-4+ action units and excite trunk shake.
 
 Replace these switches in section 10 or 11:
 
@@ -581,6 +585,7 @@ Replace these switches in section 10 or 11:
   --policy-command-yaw-max 0.0 \
   --policy-action-clip 0.0 \
   --policy-action-smoothing 0.0 \
+  --policy-action-delta-limit 0.0 \
   --log-every 1 \
 
 With the switches above, keyboard W/S sends exactly +/-0.8 vx to the policy.

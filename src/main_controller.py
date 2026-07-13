@@ -229,16 +229,32 @@ def scaled_policy_command(command, gain=1.0, vx_abs_max=0.0, vy_abs_max=0.0, yaw
     return cmd.astype(np.float32)
 
 
-def filtered_policy_action(raw_action, previous_action, clip_abs=0.0, smoothing=0.0):
+def filtered_policy_action(
+    raw_action,
+    previous_action,
+    clip_abs=0.0,
+    smoothing=0.0,
+    delta_limit_abs=0.0,
+):
     action = np.asarray(raw_action, dtype=np.float32).copy()
+    previous_action = np.asarray(previous_action, dtype=np.float32)
+
     clip_abs = float(clip_abs)
     if clip_abs > 0.0:
         action = np.clip(action, -clip_abs, clip_abs)
 
     smoothing = float(np.clip(smoothing, 0.0, 0.98))
     if smoothing > 0.0:
-        previous_action = np.asarray(previous_action, dtype=np.float32)
         action = (1.0 - smoothing) * action + smoothing * previous_action
+
+    delta_limit_abs = float(delta_limit_abs)
+    if delta_limit_abs > 0.0:
+        delta = np.clip(
+            action - previous_action,
+            -delta_limit_abs,
+            delta_limit_abs,
+        )
+        action = previous_action + delta
     return action.astype(np.float32)
 
 
@@ -1690,6 +1706,7 @@ def run_policy_loop(
     policy_command_yaw_max,
     policy_action_clip,
     policy_action_smoothing,
+    policy_action_delta_limit,
     policy_entry_ramp_seconds,
     policy_sim_match,
     stand_policy_stabilization,
@@ -1855,12 +1872,19 @@ def run_policy_loop(
     )
     print("policy_action_clip:", float(policy_action_clip), "(0 disables)")
     print("policy_action_smoothing:", float(policy_action_smoothing), "(0 disables)")
+    print("policy_action_delta_limit:", float(policy_action_delta_limit), "(0 disables)")
     print("policy_entry_ramp_seconds:", float(policy_entry_ramp_seconds))
     print(
         "policy_sim_match:",
         bool(policy_sim_match),
         "(hard joint, encoder, tilt, and torque safety remain active)",
     )
+    if policy_sim_match:
+        print(
+            "WARNING: policy_sim_match bypasses deployment action clipping, "
+            "action slew limiting, smoothing, and policy target rate limiting. "
+            "Use it only for suspended/dry sim comparison, not first ground walking."
+        )
     print("stand_policy_stabilization:", bool(stand_policy_stabilization))
     print("walking_armed:", bool(walking_armed))
     print("hold_capture_seconds:", float(hold_capture_seconds))
@@ -2577,6 +2601,7 @@ def run_policy_loop(
                     previous_action=previous_sent_action,
                     clip_abs=policy_action_clip,
                     smoothing=policy_action_smoothing,
+                    delta_limit_abs=policy_action_delta_limit,
                 )
             action = np.asarray(action, dtype=np.float32) * float(policy_entry_scale)
             q_policy_target = runner.action_to_q_target(action)
@@ -3325,6 +3350,15 @@ def main():
         help="blend current policy action with previous sent action; 0 disables, larger is smoother/slower",
     )
     parser.add_argument(
+        "--policy-action-delta-limit",
+        type=float,
+        default=float(policy_deploy_defaults.get("action_delta_limit_abs", 0.0)),
+        help=(
+            "maximum per-cycle change of the sent policy action; 0 disables. "
+            "This does not change the raw policy output stored in previous_action obs slots"
+        ),
+    )
+    parser.add_argument(
         "--policy-entry-ramp-seconds",
         type=float,
         default=float(policy_deploy_defaults.get("policy_entry_ramp_seconds", 1.5)),
@@ -3403,6 +3437,7 @@ def main():
     args.policy_command_yaw_max = max(0.0, float(args.policy_command_yaw_max))
     args.policy_action_clip = max(0.0, float(args.policy_action_clip))
     args.policy_action_smoothing = float(np.clip(args.policy_action_smoothing, 0.0, 0.98))
+    args.policy_action_delta_limit = max(0.0, float(args.policy_action_delta_limit))
     if not np.isfinite(args.policy_entry_ramp_seconds) or args.policy_entry_ramp_seconds < 0.0:
         parser.error("--policy-entry-ramp-seconds must be finite and >= 0")
     if not np.isfinite(args.policy_pd_torque_limit) or args.policy_pd_torque_limit <= 0.0:
@@ -3560,6 +3595,7 @@ def main():
     )
     print("Policy action clip:", f"{args.policy_action_clip:.3f}")
     print("Policy action smoothing:", f"{args.policy_action_smoothing:.2f}")
+    print("Policy action delta limit:", f"{args.policy_action_delta_limit:.3f}")
     print("Policy entry ramp:", f"{args.policy_entry_ramp_seconds:.2f} s")
     print("Policy PD torque limit:", f"{args.policy_pd_torque_limit:.2f} Nm")
     print("Walk command grace:", f"{args.walk_command_grace_seconds:.2f} s")
@@ -3856,6 +3892,7 @@ def main():
             policy_command_yaw_max=args.policy_command_yaw_max,
             policy_action_clip=args.policy_action_clip,
             policy_action_smoothing=args.policy_action_smoothing,
+            policy_action_delta_limit=args.policy_action_delta_limit,
             policy_entry_ramp_seconds=args.policy_entry_ramp_seconds,
             policy_sim_match=bool(args.policy_sim_match),
             stand_policy_stabilization=bool(args.stand_policy_stabilization),
