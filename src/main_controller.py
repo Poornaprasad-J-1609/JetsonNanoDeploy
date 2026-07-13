@@ -1669,6 +1669,7 @@ def run_policy_loop(
     start_control_mode,
     feedback_timeout,
     walk_command_threshold,
+    walk_command_grace_seconds,
     joystick_debug,
     joint_debug,
     base_lin_vel_source,
@@ -1718,6 +1719,8 @@ def run_policy_loop(
     policy_entry_elapsed_s = 0.0
     policy_entry_scale = 0.0
     previous_walk_requested = False
+    last_walk_command = np.zeros(3, dtype=np.float32)
+    last_walk_command_step = -10**9
     policy_has_started = False
     direct_imu_stabilization_enabled = bool(
         motion_assist_cfg.get("imu_posture", {}).get("enabled", False)
@@ -1827,6 +1830,7 @@ def run_policy_loop(
     print("  h -> HOLD current position, x -> EMERGENCY STOP")
     print("start_control_mode:", control_mode)
     print("walk_command_threshold:", walk_command_threshold)
+    print("walk_command_grace_seconds:", float(walk_command_grace_seconds))
     print("base_lin_vel_source:", base_lin_vel_source)
     print("zero_frame:", zero_frame)
     print("zero_calibrated:", bool(zero_calibrated))
@@ -2287,6 +2291,9 @@ def run_policy_loop(
                     walking_armed = False
                     stand_ready_pending = False
                     stand_ready_settle_count = 0
+                if control_mode in ("stand", "sit", "hold"):
+                    last_walk_command.fill(0.0)
+                    last_walk_command_step = -10**9
                 if control_mode in ("stand", "sit"):
                     begin_pose_transition(control_mode, q_current, step)
                 else:
@@ -2296,6 +2303,21 @@ def run_policy_loop(
         command = command_source.read()
         if step < calibration_hold_until_step:
             command = np.zeros(3, dtype=np.float32)
+        raw_walk_requested = joystick_walk_requested(command, walk_command_threshold)
+        walk_requested = raw_walk_requested
+        if raw_walk_requested:
+            last_walk_command = np.asarray(command, dtype=np.float32).copy()
+            last_walk_command_step = int(step)
+        elif (
+            walking_armed
+            and control_mode == "stand"
+            and float(walk_command_grace_seconds) > 0.0
+            and joystick_walk_requested(last_walk_command, walk_command_threshold)
+        ):
+            elapsed_since_walk_s = (int(step) - int(last_walk_command_step)) * float(dt)
+            if elapsed_since_walk_s <= float(walk_command_grace_seconds):
+                command = last_walk_command.copy()
+                walk_requested = True
         policy_command = scaled_policy_command(
             command=command,
             gain=policy_command_gain,
@@ -2303,7 +2325,6 @@ def run_policy_loop(
             vy_abs_max=policy_command_vy_max,
             yaw_abs_max=policy_command_yaw_max,
         )
-        walk_requested = joystick_walk_requested(command, walk_command_threshold)
         if not walking_armed and walk_requested:
             walk_requested = False
             if step % max(1, log_every) == 0:
@@ -2758,10 +2779,15 @@ def run_policy_loop(
                         "[POSE] stand settled. Differential RL IMU stabilization "
                         "is active; policy walking is armed."
                     )
-                else:
+                elif direct_imu_stabilization_enabled:
                     print(
                         "[POSE] stand settled. Direct IMU body leveling is "
                         "active; policy walking is armed."
+                    )
+                else:
+                    print(
+                        "[POSE] stand settled. Policy walking is armed; "
+                        "stand target remains fixed until a movement command."
                     )
 
         if active_control_mode == "sit" and sit_zero_pending:
@@ -3142,6 +3168,15 @@ def main():
         help="minimum absolute vx/vy/yaw command needed to run walking policy",
     )
     parser.add_argument(
+        "--walk-command-grace-seconds",
+        type=float,
+        default=0.0,
+        help=(
+            "seconds to keep the last nonzero walking command alive after a "
+            "terminal key-repeat gap; 0 disables the grace window"
+        ),
+    )
+    parser.add_argument(
         "--joystick-debug",
         action="store_true",
         help="print raw joystick axes/buttons/hats at each telemetry line",
@@ -3219,7 +3254,7 @@ def main():
     parser.add_argument(
         "--stand-policy-stabilization",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
         help=(
             "after stand settles, apply only the difference between live-IMU "
             "and upright-IMU RL actions; cancels nominal policy motion"
@@ -3339,6 +3374,7 @@ def main():
     args.log_every = max(1, args.log_every)
     args.policy_steps = None if args.policy_steps <= 0 else args.policy_steps
     args.walk_command_threshold = max(0.0, args.walk_command_threshold)
+    args.walk_command_grace_seconds = max(0.0, float(args.walk_command_grace_seconds))
     args.policy_command_gain = max(0.0, float(args.policy_command_gain))
     args.policy_command_vx_max = max(0.0, float(args.policy_command_vx_max))
     args.policy_command_vy_max = max(0.0, float(args.policy_command_vy_max))
@@ -3504,6 +3540,7 @@ def main():
     print("Policy action smoothing:", f"{args.policy_action_smoothing:.2f}")
     print("Policy entry ramp:", f"{args.policy_entry_ramp_seconds:.2f} s")
     print("Policy PD torque limit:", f"{args.policy_pd_torque_limit:.2f} Nm")
+    print("Walk command grace:", f"{args.walk_command_grace_seconds:.2f} s")
     print("Start control mode:", args.start_control_mode)
     print("Startup action:", args.startup_action)
     print("Policy:", runner.policy_path)
@@ -3779,6 +3816,7 @@ def main():
             start_control_mode=args.start_control_mode,
             feedback_timeout=args.feedback_timeout,
             walk_command_threshold=args.walk_command_threshold,
+            walk_command_grace_seconds=args.walk_command_grace_seconds,
             joystick_debug=args.joystick_debug,
             joint_debug=args.joint_debug,
             base_lin_vel_source=args.base_lin_vel_source,

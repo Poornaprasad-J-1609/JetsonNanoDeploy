@@ -39,20 +39,20 @@ policy_deployment:
   command_vy_abs_max: 0.14
   command_yaw_abs_max: 0.0
   # The 20260713 IsaacLab log has walking action p95 around 3-4. A 1.2 clip
-  # erased the gait. Keep most nominal walking action while smoothing only the
-  # sharpest target changes during first ground tests.
-  action_clip_abs: 3.0
-  action_smoothing: 0.20
+  # erased the gait. For first real ground tests, keep enough action for trot
+  # rhythm while trimming the largest target jumps.
+  action_clip_abs: 2.5
+  action_smoothing: 0.35
   # Blend from the settled stand pose into the first walking targets. This
   # prevents an immediate full-amplitude actor target when a movement key is
   # pressed while the robot is carrying its weight.
-  policy_entry_ramp_seconds: 3.0
+  policy_entry_ramp_seconds: 2.0
   # Before packing a walking MIT command, constrain its estimated joint-space
   # PD torque around fresh encoder feedback. The independent measured-feedback
   # emergency stop remains in config/safety_limits.yaml.
   # Keep the command-side estimate below the measured 60 Nm emergency guard,
   # while leaving enough target amplitude for stance legs to support gait.
-  estimated_pd_torque_limit: 35.0
+  estimated_pd_torque_limit: 30.0
 
 joint_position:
   enabled: true

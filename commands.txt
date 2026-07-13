@@ -473,15 +473,16 @@ the stance legs to support the robot on the ground.
   --speed-scale-min 0.03 \
   --speed-scale-max 0.15 \
   --speed-scale-step 0.01 \
-  --keyboard-command-timeout 0.75 \
+  --keyboard-command-timeout 1.00 \
+  --walk-command-grace-seconds 1.00 \
   --policy-command-gain 1.5 \
   --policy-command-vx-max 0.18 \
   --policy-command-vy-max 0.14 \
   --policy-command-yaw-max 0.0 \
-  --policy-action-clip 3.0 \
-  --policy-action-smoothing 0.20 \
-  --policy-entry-ramp-seconds 3.0 \
-  --policy-pd-torque-limit 35.0 \
+  --policy-action-clip 2.5 \
+  --policy-action-smoothing 0.35 \
+  --policy-entry-ramp-seconds 2.0 \
+  --policy-pd-torque-limit 30.0 \
   --enable-retries 3 \
   --enable-retry-delay 0.05 \
   --feedback-timeout 0.05 \
@@ -513,7 +514,7 @@ the stance legs to support the robot on the ground.
   --feedback-source mit \
   --command-source keyboard \
   --imu-source fake \
-  --stand-policy-stabilization \
+  --no-stand-policy-stabilization \
   --no-imu-stabilization \
   --no-gait-assist \
   --base-lin-vel-source zero \
@@ -534,15 +535,16 @@ the stance legs to support the robot on the ground.
   --speed-scale-min 0.03 \
   --speed-scale-max 0.15 \
   --speed-scale-step 0.01 \
-  --keyboard-command-timeout 0.75 \
+  --keyboard-command-timeout 1.00 \
+  --walk-command-grace-seconds 1.00 \
   --policy-command-gain 1.5 \
   --policy-command-vx-max 0.18 \
   --policy-command-vy-max 0.14 \
   --policy-command-yaw-max 0.0 \
-  --policy-action-clip 3.0 \
-  --policy-action-smoothing 0.20 \
-  --policy-entry-ramp-seconds 3.0 \
-  --policy-pd-torque-limit 35.0 \
+  --policy-action-clip 2.5 \
+  --policy-action-smoothing 0.35 \
+  --policy-entry-ramp-seconds 2.0 \
+  --policy-pd-torque-limit 30.0 \
   --enable-retries 3 \
   --enable-retry-delay 0.05 \
   --feedback-timeout 0.05 \
