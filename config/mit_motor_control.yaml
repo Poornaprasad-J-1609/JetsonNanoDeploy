@@ -91,27 +91,27 @@ gains:
       # Fitted from IsaacLab sim log 20260713_064320. These official-unit
       # policy gains are close to the simulated actuator stiffness/damping,
       # while the command-side torque limiter still bounds first ground tests.
-      kp: 75.0
-      kd: 2.0
+      kp: 80.0
+      kd: 2.2
     thigh:
-      kp: 75.0
-      kd: 2.0
+      kp: 80.0
+      kd: 2.2
     calf:
-      kp: 75.0
-      kd: 2.0
+      kp: 80.0
+      kd: 2.2
     joints:
-      BL_hip_joint: {kp: 75.0, kd: 2.0}
-      BR_hip_joint: {kp: 75.0, kd: 2.0}
-      FL_hip_joint: {kp: 75.0, kd: 2.0}
-      FR_hip_joint: {kp: 75.0, kd: 2.0}
-      BL_thigh_joint: {kp: 75.0, kd: 2.0}
-      BR_thigh_joint: {kp: 75.0, kd: 2.0}
-      FL_thigh_joint: {kp: 75.0, kd: 2.0}
-      FR_thigh_joint: {kp: 75.0, kd: 2.0}
-      BL_calf_joint: {kp: 75.0, kd: 2.0}
-      BR_calf_joint: {kp: 75.0, kd: 2.0}
-      FL_calf_joint: {kp: 75.0, kd: 2.0}
-      FR_calf_joint: {kp: 75.0, kd: 2.0}
+      BL_hip_joint: {kp: 80.0, kd: 2.2}
+      BR_hip_joint: {kp: 80.0, kd: 2.2}
+      FL_hip_joint: {kp: 80.0, kd: 2.2}
+      FR_hip_joint: {kp: 80.0, kd: 2.2}
+      BL_thigh_joint: {kp: 80.0, kd: 2.2}
+      BR_thigh_joint: {kp: 80.0, kd: 2.2}
+      FL_thigh_joint: {kp: 80.0, kd: 2.2}
+      FR_thigh_joint: {kp: 80.0, kd: 2.2}
+      BL_calf_joint: {kp: 80.0, kd: 2.2}
+      BR_calf_joint: {kp: 80.0, kd: 2.2}
+      FL_calf_joint: {kp: 80.0, kd: 2.2}
+      FR_calf_joint: {kp: 80.0, kd: 2.2}
 
   # Direct IMU body-leveling gains from the known-good MIT path. Stand-up
   # itself continues to use the startup gains above; these take over only after
@@ -119,13 +119,13 @@ gains:
   leveling:
     hip:
       kp: 75.0
-      kd: 1.8
+      kd: 2.2
     thigh:
       kp: 75.0
-      kd: 1.8
+      kd: 2.2
     calf:
       kp: 75.0
-      kd: 1.8
+      kd: 2.2
 
 feedforward:
   tau_ff: 0.0
