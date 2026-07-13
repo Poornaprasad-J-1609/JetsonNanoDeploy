@@ -561,6 +561,78 @@ with fake upright IMU values.
   --no-auto-push-log
 
 
+11A. Fake-IMU forward/back gait comparison against logs_sim
+-----------------------------------------------------------
+
+Use this after section 11 is electrically stable. It still uses fake upright
+IMU and keeps vy/yaw at zero, but raises W/S enough for the trot rhythm to
+appear. The policy-observed forward command is capped at 0.20 m/s:
+
+  policy_vx = clip(max_vx * speed_scale * policy_command_gain, +/-0.20)
+            = clip(1.20 * 0.12 * 1.5, +/-0.20)
+            = 0.20
+
+This is still below the IsaacSim log command of +/-0.60, but is much closer
+than the previous 0.108 command and is safer for first fake-IMU ground checks.
+
+/usr/bin/python3 src/main_controller.py \
+  --mode mit-signal \
+  --can-count 2 \
+  --can-ports "$FRONT_CAN" "$BACK_CAN" \
+  --feedback-source mit \
+  --command-source keyboard \
+  --imu-source fake \
+  --no-stand-policy-stabilization \
+  --no-imu-stabilization \
+  --no-gait-assist \
+  --base-lin-vel-source zero \
+  --start-control-mode idle \
+  --startup-action hold \
+  --initial-zero-frame stand \
+  --no-auto-zero-on-startup \
+  --no-auto-stand-zero \
+  --no-auto-sit-zero \
+  --crouch-calibration-value 0.0 \
+  --stand-calibration-value 0.0 \
+  --policy-steps 0 \
+  --walk-command-threshold 0.02 \
+  --max-vx 1.20 \
+  --max-vy 0.0 \
+  --max-yaw 0.0 \
+  --speed-scale-initial 0.12 \
+  --speed-scale-min 0.06 \
+  --speed-scale-max 0.14 \
+  --speed-scale-step 0.01 \
+  --keyboard-command-timeout 1.50 \
+  --walk-command-grace-seconds 3.00 \
+  --policy-command-gain 1.5 \
+  --policy-command-vx-max 0.20 \
+  --policy-command-vy-max 0.0 \
+  --policy-command-yaw-max 0.0 \
+  --policy-action-clip 2.2 \
+  --policy-action-smoothing 0.35 \
+  --policy-action-delta-limit 0.22 \
+  --policy-entry-ramp-seconds 2.5 \
+  --policy-pd-torque-limit 30.0 \
+  --enable-retries 3 \
+  --enable-retry-delay 0.05 \
+  --feedback-timeout 0.05 \
+  --fresh-feedback-max-age 0 \
+  --hold-capture-seconds 0.50 \
+  --hold-command-repeats 2 \
+  --pose-sync-error-rad 0 \
+  --log-every 20 \
+  --no-auto-push-log
+
+
+After a real run, compare it to the current forward/back simulation log:
+
+PYTHONPATH=src /usr/bin/python3 src/compare_real_sim_logs.py \
+  logs_sim/grallator_sim_policy_input_log_20260713_110634.csv \
+  logs_sim/grallator_sim_motor_log_20260713_110634.csv \
+  logs/YOUR_REAL_RUN.csv
+
+
 12. Simulation-match policy input switches
 ------------------------------------------
 
