@@ -41,7 +41,7 @@ policy_deployment:
   # The 20260713 IsaacLab log has walking action p95 around 3-4. A 1.2 clip
   # erased the gait. For first real ground tests, keep enough action for trot
   # rhythm while trimming the largest target jumps.
-  action_clip_abs: 2.5
+  action_clip_abs: 2.2
   action_smoothing: 0.35
   # Blend from the settled stand pose into the first walking targets. This
   # prevents an immediate full-amplitude actor target when a movement key is
@@ -52,7 +52,7 @@ policy_deployment:
   # emergency stop remains in config/safety_limits.yaml.
   # Keep the command-side estimate below the measured 60 Nm emergency guard,
   # while leaving enough target amplitude for stance legs to support gait.
-  estimated_pd_torque_limit: 30.0
+  estimated_pd_torque_limit: 24.0
 
 joint_position:
   enabled: true

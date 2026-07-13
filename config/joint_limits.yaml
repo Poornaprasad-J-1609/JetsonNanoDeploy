@@ -12,6 +12,9 @@
 # Position bounds mirror the IsaacSim training URDF. The policy may request a
 # PD target beyond these bounds, but the simulated articulation itself cannot
 # cross them; deployment must preserve that physical constraint.
+# Optional policy_min/policy_max expands only the commanded PD target window for
+# policy walking. Encoder safety still uses min/max below, so measured joints
+# outside the hard range plus safety_limits.yaml margin are still blocked.
 #
 # Walking target rate defaults:
 #   0.080 rad/step = 4.0 rad/s at 50 Hz.
@@ -57,16 +60,24 @@ joint_limits:
   FL_calf_joint:
     min: 0.0
     max: 2.0
+    policy_min: -0.75
+    policy_max: 2.0
     dq_max_per_step: 0.080
   FR_calf_joint:
     min: -2.0
     max: 0.0
+    policy_min: -2.0
+    policy_max: 0.75
     dq_max_per_step: 0.080
   BL_calf_joint:
     min: 0.0
     max: 2.0
+    policy_min: -0.75
+    policy_max: 2.0
     dq_max_per_step: 0.080
   BR_calf_joint:
     min: -2.0
     max: 0.0
+    policy_min: -2.0
+    policy_max: 0.75
     dq_max_per_step: 0.080

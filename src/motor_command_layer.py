@@ -459,6 +459,7 @@ class MotorCommandLayer:
         cfg = load_yaml(self.joint_limit_path)
         limits = cfg["joint_limits"]
         hard_limits = {}
+        policy_target_limits = {}
 
         for joint_name in self.policy_order:
             if joint_name not in limits:
@@ -467,14 +468,21 @@ class MotorCommandLayer:
             joint_limit = limits[joint_name]
             q_min = float(joint_limit["min"])
             q_max = float(joint_limit["max"])
-            if not np.all(np.isfinite([q_min, q_max])):
+            policy_q_min = float(joint_limit.get("policy_min", q_min))
+            policy_q_max = float(joint_limit.get("policy_max", q_max))
+            if not np.all(np.isfinite([q_min, q_max, policy_q_min, policy_q_max])):
                 raise ValueError(f"{joint_name}: joint limits must be finite")
             if q_min > q_max:
                 raise ValueError(f"{joint_name}: min {q_min} is greater than max {q_max}")
+            if policy_q_min > policy_q_max:
+                raise ValueError(
+                    f"{joint_name}: policy_min {policy_q_min} is greater than "
+                    f"policy_max {policy_q_max}"
+                )
             offset = float(self.joint_offsets[joint_name])
             direction = float(self.joint_directions[joint_name])
-            p_a = offset + direction * q_min
-            p_b = offset + direction * q_max
+            p_a = offset + direction * min(q_min, policy_q_min)
+            p_b = offset + direction * max(q_max, policy_q_max)
             p_min = min(p_a, p_b)
             p_max = max(p_a, p_b)
             if p_min < float(self.proto["p_min"]) or p_max > float(self.proto["p_max"]):
@@ -483,16 +491,24 @@ class MotorCommandLayer:
                     f"MIT position range [{self.proto['p_min']}, {self.proto['p_max']}]"
                 )
             hard_limits[joint_name] = (q_min, q_max)
+            policy_target_limits[joint_name] = (policy_q_min, policy_q_max)
 
         self.hard_joint_limits = hard_limits
+        self.policy_target_limits = policy_target_limits
         self.joint_limit_mtime_ns = mtime_ns
         return True
 
-    def apply_hard_joint_limit(self, joint_name, q_des):
+    def apply_hard_joint_limit(self, joint_name, q_des, phase=None):
         self.reload_joint_limits()
         if not np.isfinite(q_des):
             raise ValueError(f"{joint_name}: requested joint target is NaN or Inf")
-        q_min, q_max = self.hard_joint_limits[joint_name]
+        if phase == "policy":
+            q_min, q_max = self.policy_target_limits.get(
+                joint_name,
+                self.hard_joint_limits[joint_name],
+            )
+        else:
+            q_min, q_max = self.hard_joint_limits[joint_name]
         shift = float(self.joint_coordinate_shifts.get(joint_name, 0.0))
         q_min += shift
         q_max += shift
@@ -665,7 +681,7 @@ class MotorCommandLayer:
                 command_proto,
             )
             q_requested = float(q_target[i])
-            q_des = self.apply_hard_joint_limit(joint_name, q_requested)
+            q_des = self.apply_hard_joint_limit(joint_name, q_requested, phase=phase)
             feedback = feedback_by_joint.get(joint_name, {})
             feedback_position = feedback.get("position_raw") if isinstance(feedback, dict) else None
             feedback_joint_position = feedback.get("joint_position") if isinstance(feedback, dict) else None
@@ -695,6 +711,7 @@ class MotorCommandLayer:
                 q_des = self.apply_hard_joint_limit(
                     joint_name,
                     q_feedback + position_torque / kp_effective,
+                    phase=phase,
                 )
                 tau_pd_est = (
                     kp_effective * (q_des - q_feedback)

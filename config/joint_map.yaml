@@ -24,9 +24,9 @@ policy_to_real_order:
   - FR_calf_joint
 
 # Optional sign transform between the policy coordinate convention and the
-# deployment/sit-stand joint coordinate convention. The new policy artifact
-# emits calf actions in the opposite sign from the real stand-zero crouch pose,
-# so calves are inverted here instead of changing sit/stand YAML values.
+# deployment/sit-stand joint coordinate convention. Keep these signs in the
+# Isaac/URDF policy coordinate frame. Real encoder/motor clockwise-vs-
+# anticlockwise polarity is handled separately in config/motor_directions.yaml.
 policy_joint_signs:
   BL_hip_joint: 1
   BR_hip_joint: 1
@@ -36,10 +36,10 @@ policy_joint_signs:
   BR_thigh_joint: 1
   FL_thigh_joint: 1
   FR_thigh_joint: 1
-  BL_calf_joint: -1
-  BR_calf_joint: -1
-  FL_calf_joint: -1
-  FR_calf_joint: -1
+  BL_calf_joint: 1
+  BR_calf_joint: 1
+  FL_calf_joint: 1
+  FR_calf_joint: 1
 
 observation_layout:
   base_lin_vel: [0, 1, 2]

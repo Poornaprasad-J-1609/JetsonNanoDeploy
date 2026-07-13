@@ -160,18 +160,33 @@ def sample_policy(command, runner, safety):
     action = runner.infer_action(obs)
     q_raw = runner.action_to_q_target(action)
     q_hard = np.clip(q_raw, safety.q_min, safety.q_max)
+    q_policy = np.clip(q_raw, safety.policy_q_min, safety.policy_q_max)
     # Main deployment preserves the trained policy target cadence. Pose modes
     # retain dq_max_per_step, while policy mode skips only that deploy-only slew.
     q_safe = safety.safety_filter(
         q_raw,
         runner.q_default,
         apply_rate_limit=False,
+        use_policy_limits=True,
     )
-    return command_clipped, action, q_raw, q_hard, q_safe
+    return command_clipped, action, q_raw, q_hard, q_policy, q_safe
 
 
-def check_motor_commands(label, q_target, runner, motor_layer, limits, phase="policy", verbose=False):
-    q_min, q_max, _ = array_limits_by_joint(runner, limits)
+def check_motor_commands(
+    label,
+    q_target,
+    runner,
+    safety,
+    motor_layer,
+    limits,
+    phase="policy",
+    verbose=False,
+):
+    if phase == "policy":
+        q_min = safety.policy_q_min
+        q_max = safety.policy_q_max
+    else:
+        q_min, q_max, _ = array_limits_by_joint(runner, limits)
     limit_by_joint = {
         name: (float(q_min[i]), float(q_max[i]))
         for i, name in enumerate(runner.policy_order)
@@ -252,6 +267,7 @@ def check_extreme_target_enforcement(runner, safety, motor_layer, limits):
             label="direct extreme target into MotorCommandLayer",
             q_target=q_extreme,
             runner=runner,
+            safety=safety,
             motor_layer=motor_layer,
             limits=limits,
             phase="policy",
@@ -262,6 +278,7 @@ def check_extreme_target_enforcement(runner, safety, motor_layer, limits):
             label="safety-filtered extreme target into MotorCommandLayer",
             q_target=q_safe,
             runner=runner,
+            safety=safety,
             motor_layer=motor_layer,
             limits=limits,
             phase="policy",
@@ -337,13 +354,13 @@ def main():
     runtime_violations = []
     for label, command in sample_commands:
         command = np.asarray(command, dtype=np.float32)
-        command_clipped, action, q_raw, q_hard, q_safe = sample_policy(
+        command_clipped, action, q_raw, q_hard, q_policy, q_safe = sample_policy(
             command,
             runner,
             safety,
         )
-        pos_clipped = np.abs(q_hard - q_raw) > 1e-6
-        rate_clipped = np.abs(q_safe - q_hard) > 1e-6
+        pos_clipped = np.abs(q_policy - q_raw) > 1e-6
+        rate_clipped = np.abs(q_safe - q_policy) > 1e-6
         command_was_clipped = np.any(np.abs(command_clipped - command) > 1e-6)
         position_clip_count += int(pos_clipped.sum())
         runtime_violations.extend(
@@ -351,6 +368,7 @@ def main():
                 label=label,
                 q_target=q_safe,
                 runner=runner,
+                safety=safety,
                 motor_layer=motor_layer,
                 limits=limits,
                 phase="policy",
@@ -368,7 +386,7 @@ def main():
             if pos_clipped[i]:
                 print(
                     f"    POSITION CLIP {joint_name:16s} "
-                    f"policy_raw={q_raw[i]:+.3f} hard_clip={q_hard[i]:+.3f}"
+                    f"policy_raw={q_raw[i]:+.3f} policy_clip={q_policy[i]:+.3f}"
                 )
 
     runtime_violations.extend(check_extreme_target_enforcement(runner, safety, motor_layer, limits))
@@ -387,7 +405,7 @@ def main():
     print("OK: raw policy targets are inspected with position limits retained.")
     print("OK: main_controller applies configured action filtering and joint slew limits on hardware.")
     print("OK: sit/stand paths retain configured dq_max_per_step rate limits.")
-    print("OK: MotorCommandLayer hard-clips every final MIT q_des to joint_limits.yaml.")
+    print("OK: MotorCommandLayer clips pose targets to hard limits and policy targets to policy_min/policy_max.")
     print("OK: MIT kp/kd/v/tau parameters obey control_limits.yaml when mit_parameters.enabled is true.")
     if position_clip_count > 0:
         print("Note: policy_raw position clips were observed, but final motor commands stayed inside limits.")

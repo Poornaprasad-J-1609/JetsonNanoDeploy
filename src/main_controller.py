@@ -1358,6 +1358,7 @@ def shifted_safety_filter(
     q_previous,
     q_shift,
     apply_rate_limit=True,
+    use_policy_limits=False,
 ):
     q_shift = np.asarray(q_shift, dtype=np.float32)
     if not np.any(np.abs(q_shift) > 1e-8):
@@ -1365,11 +1366,13 @@ def shifted_safety_filter(
             q_target,
             q_previous,
             apply_rate_limit=apply_rate_limit,
+            use_policy_limits=use_policy_limits,
         )
     filtered = safety.safety_filter(
         np.asarray(q_target, dtype=np.float32) - q_shift,
         np.asarray(q_previous, dtype=np.float32) - q_shift,
         apply_rate_limit=apply_rate_limit,
+        use_policy_limits=use_policy_limits,
     )
     return (filtered + q_shift).astype(np.float32)
 
@@ -2598,6 +2601,7 @@ def run_policy_loop(
                 q_previous_target,
                 q_coordinate_shift,
                 apply_rate_limit=not policy_sim_match,
+                use_policy_limits=True,
             )
             commands = motor_layer.build_mit_commands(
                 q_safe_target,
