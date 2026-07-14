@@ -74,24 +74,27 @@ joint_limits:
   FL_calf_joint:
     min: 0.0
     max: 1.70
-    policy_min: -1.30
+    # Allow only a small policy over-target past the hard stop side. The sim
+    # actuator can ask beyond the stop while the simulated joint remains
+    # clamped; the real motor has to be bounded before safety trips.
+    policy_min: -0.12
     policy_max: 1.70
     dq_max_per_step: 0.080
   FR_calf_joint:
     min: -1.70
     max: 0.0
     policy_min: -1.70
-    policy_max: 1.40
+    policy_max: 0.12
     dq_max_per_step: 0.080
   BL_calf_joint:
     min: 0.0
     max: 1.70
-    policy_min: -0.65
+    policy_min: -0.12
     policy_max: 1.70
     dq_max_per_step: 0.080
   BR_calf_joint:
     min: -1.70
     max: 0.0
     policy_min: -1.70
-    policy_max: 0.65
+    policy_max: 0.12
     dq_max_per_step: 0.080
