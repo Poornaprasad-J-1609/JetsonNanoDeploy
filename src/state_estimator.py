@@ -21,7 +21,7 @@ class FakeStateEstimator:
       - base_lin_vel_b fixed to [0, 0, 0] for the 48-slot policy contract
     """
 
-    def __init__(self, q_initial, imu_sensor=None):
+    def __init__(self, q_initial, imu_sensor=None, imu_filter_cfg=None):
         self.q_current = np.asarray(q_initial, dtype=np.float32).copy()
         self.qd_current = np.zeros_like(self.q_current, dtype=np.float32)
 
@@ -29,9 +29,46 @@ class FakeStateEstimator:
         self.base_ang_vel_b = np.zeros(3, dtype=np.float32)
         self.projected_gravity_b = np.array([0.0, 0.0, -1.0], dtype=np.float32)
         self.imu_sensor = imu_sensor
+        self.imu_filter_cfg = dict(imu_filter_cfg or {})
+        self._filtered_base_ang_vel_b = None
         self.last_imu_timestamp = None
         self.last_imu_update_time = None
         self.last_imu_reading = None
+
+    def _as_vector3(self, value, default):
+        arr = np.asarray(value if value is not None else default, dtype=np.float32)
+        if arr.shape == ():
+            arr = np.repeat(arr, 3).astype(np.float32)
+        arr = arr.reshape(-1)
+        if arr.shape != (3,):
+            raise ValueError(f"IMU policy filter value must have 3 entries, got {arr.shape}")
+        return arr
+
+    def _filter_policy_gyro(self, gyro):
+        gyro = np.asarray(gyro, dtype=np.float32).reshape(3)
+        cfg = self.imu_filter_cfg
+        if not bool(cfg.get("enabled", False)):
+            self._filtered_base_ang_vel_b = gyro.copy()
+            return gyro
+
+        clip_abs = self._as_vector3(cfg.get("gyro_clip_abs", 0.0), [0.0, 0.0, 0.0])
+        if np.any(clip_abs > 0.0):
+            lower = np.where(clip_abs > 0.0, -clip_abs, -np.inf)
+            upper = np.where(clip_abs > 0.0, clip_abs, np.inf)
+            gyro = np.clip(gyro, lower, upper)
+
+        alpha = float(np.clip(cfg.get("gyro_lowpass_alpha", 1.0), 0.0, 1.0))
+        if self._filtered_base_ang_vel_b is None or alpha >= 1.0:
+            filtered = gyro.copy()
+        elif alpha <= 0.0:
+            filtered = self._filtered_base_ang_vel_b.copy()
+        else:
+            filtered = (
+                alpha * gyro
+                + (1.0 - alpha) * self._filtered_base_ang_vel_b
+            ).astype(np.float32)
+        self._filtered_base_ang_vel_b = filtered.copy()
+        return filtered
 
     def refresh_imu(self):
         if self.imu_sensor is None:
@@ -44,7 +81,7 @@ class FakeStateEstimator:
         # The deployed policy is run with base linear velocity fixed at zero.
         # Keep this observation term identical for every IMU source.
         self.base_lin_vel_b = np.zeros(3, dtype=np.float32)
-        self.base_ang_vel_b = np.asarray(reading.base_ang_vel_b, dtype=np.float32).copy()
+        self.base_ang_vel_b = self._filter_policy_gyro(reading.base_ang_vel_b)
         self.projected_gravity_b = np.asarray(reading.projected_gravity_b, dtype=np.float32).copy()
         self.last_imu_timestamp = float(reading.timestamp)
         self.last_imu_update_time = time.monotonic()
@@ -110,10 +147,15 @@ class MitFeedbackStateEstimator(FakeStateEstimator):
         motor_layer,
         bus,
         imu_sensor=None,
+        imu_filter_cfg=None,
         pose_references=None,
         pose_snap_tolerance=0.0,
     ):
-        super().__init__(q_initial=q_initial, imu_sensor=imu_sensor)
+        super().__init__(
+            q_initial=q_initial,
+            imu_sensor=imu_sensor,
+            imu_filter_cfg=imu_filter_cfg,
+        )
 
         self.policy_order = list(policy_order)
         self.motor_layer = motor_layer

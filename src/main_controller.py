@@ -3627,6 +3627,13 @@ def main():
         print("Serial adapter baud:", args.baud)
     print("Feedback source:", feedback_source)
     print("IMU source:", active_imu_source)
+    imu_policy_filter_cfg = imu_defaults.get("policy_filter", {})
+    print(
+        "IMU policy filter:",
+        "enabled" if bool(imu_policy_filter_cfg.get("enabled", False)) else "disabled",
+        f"gyro_alpha={float(imu_policy_filter_cfg.get('gyro_lowpass_alpha', 1.0)):.2f}",
+        f"gyro_clip={imu_policy_filter_cfg.get('gyro_clip_abs', 0.0)}",
+    )
     print(
         "Active joints:",
         ", ".join(motor_layer.active_joints)
@@ -3723,6 +3730,7 @@ def main():
                 motor_layer=motor_layer,
                 bus=buses,
                 imu_sensor=imu_sensor,
+                imu_filter_cfg=imu_policy_filter_cfg,
                 pose_references={
                     "default": runner.q_default,
                     "stand": runner.q_stand,
@@ -3739,7 +3747,11 @@ def main():
                     "The estimator will update from motor replies after MIT commands."
                 )
         else:
-            estimator = FakeStateEstimator(q_initial=q_fake_start, imu_sensor=imu_sensor)
+            estimator = FakeStateEstimator(
+                q_initial=q_fake_start,
+                imu_sensor=imu_sensor,
+                imu_filter_cfg=imu_policy_filter_cfg,
+            )
 
         if args.auto_zero_on_startup and str(args.initial_zero_frame).lower() == "crouch":
             print("\n[ZERO CAL] startup auto-zero enabled for current crouch/default pose.")

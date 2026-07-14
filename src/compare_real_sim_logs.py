@@ -84,8 +84,11 @@ def print_policy_summary(title, commands, gyro, gravity, action, q, qd, extra=No
                 print(f"  {name:<18}", stats(series[mask]))
 
 
-def summarize_sim_policy(rows):
+def summarize_sim_policy(rows, force_zero_base_lin_vel=False):
     obs = np.stack([vector(row, "obs", 48, 3) for row in rows])
+    original_base_lin_vel_abs_max = float(np.max(np.abs(obs[:, 0:3])))
+    if force_zero_base_lin_vel:
+        obs[:, 0:3] = 0.0
     actions = np.stack([
         vector(row, "policy_action", 12, 2)
         if "policy_action_00" in row
@@ -99,6 +102,8 @@ def summarize_sim_policy(rows):
         "actions": actions,
         "q": obs[:, 12:24],
         "qd": obs[:, 24:36],
+        "original_base_lin_vel_abs_max": original_base_lin_vel_abs_max,
+        "base_lin_vel_forced_zero": bool(force_zero_base_lin_vel),
     }
 
 
@@ -170,11 +175,25 @@ def main():
     parser.add_argument("sim_policy_log")
     parser.add_argument("sim_motor_log")
     parser.add_argument("real_log")
+    parser.add_argument(
+        "--force-zero-sim-base-lin-vel",
+        action="store_true",
+        help="force sim obs[0:3] to zero before summarizing policy inputs",
+    )
     args = parser.parse_args()
 
-    sim_policy = summarize_sim_policy(read_rows(args.sim_policy_log))
+    sim_policy = summarize_sim_policy(
+        read_rows(args.sim_policy_log),
+        force_zero_base_lin_vel=args.force_zero_sim_base_lin_vel,
+    )
     real_policy = summarize_real_policy(read_rows(args.real_log))
 
+    print(
+        "SIM obs[0:3] original abs max:",
+        f"{sim_policy['original_base_lin_vel_abs_max']:.6f}",
+        "forced_zero=",
+        sim_policy["base_lin_vel_forced_zero"],
+    )
     print_policy_summary(
         "SIM policy observation/action",
         sim_policy["commands"],

@@ -114,6 +114,15 @@ def main():
         action="store_true",
         help="write comparison output and return success even when logged and deployed actors differ",
     )
+    parser.add_argument(
+        "--force-zero-base-lin-vel",
+        action="store_true",
+        help=(
+            "set obs[0:3] to zero before replay. Use this only to analyze "
+            "simulation logs that were accidentally recorded with nonzero "
+            "base linear velocity for the 48-slot zero-base policy contract"
+        ),
+    )
     args = parser.parse_args()
 
     runner = PolicyRunner(policy_path=args.policy_path)
@@ -132,6 +141,9 @@ def main():
         )
 
     observations = np.stack([floats(row, "obs", 48, 3) for row in rows])
+    original_base_lin_vel_abs_max = float(np.max(np.abs(observations[:, 0:3])))
+    if args.force_zero_base_lin_vel:
+        observations[:, 0:3] = 0.0
     sim_actions = np.stack([
         floats_from_candidates(
             row,
@@ -431,7 +443,8 @@ def main():
         )
 
     print("Comparison:")
-    print("  obs[0:3] absolute max:", float(np.max(np.abs(observations[:, 0:3]))))
+    print("  original obs[0:3] absolute max:", original_base_lin_vel_abs_max)
+    print("  replay obs[0:3] absolute max:", float(np.max(np.abs(observations[:, 0:3]))))
     print("  actor command source: obs[9:12]")
     print("  logged command metadata max error:", float(np.max(command_metadata_error)))
     print(

@@ -482,11 +482,11 @@ action slew limiting active.
   --policy-command-vx-max 0.20 \
   --policy-command-vy-max 0.0 \
   --policy-command-yaw-max 0.0 \
-  --policy-action-clip 2.2 \
-  --policy-action-smoothing 0.35 \
-  --policy-action-delta-limit 0.22 \
+  --policy-action-clip 3.2 \
+  --policy-action-smoothing 0.25 \
+  --policy-action-delta-limit 0.32 \
   --policy-entry-ramp-seconds 2.5 \
-  --policy-pd-torque-limit 30.0 \
+  --policy-pd-torque-limit 40.0 \
   --enable-retries 3 \
   --enable-retry-delay 0.05 \
   --feedback-timeout 0.05 \
@@ -545,11 +545,11 @@ with fake upright IMU values.
   --policy-command-vx-max 0.20 \
   --policy-command-vy-max 0.0 \
   --policy-command-yaw-max 0.0 \
-  --policy-action-clip 2.2 \
-  --policy-action-smoothing 0.35 \
-  --policy-action-delta-limit 0.22 \
+  --policy-action-clip 3.2 \
+  --policy-action-smoothing 0.25 \
+  --policy-action-delta-limit 0.32 \
   --policy-entry-ramp-seconds 2.5 \
-  --policy-pd-torque-limit 30.0 \
+  --policy-pd-torque-limit 40.0 \
   --enable-retries 3 \
   --enable-retry-delay 0.05 \
   --feedback-timeout 0.05 \
@@ -609,11 +609,11 @@ than the previous 0.108 command and is safer for first fake-IMU ground checks.
   --policy-command-vx-max 0.20 \
   --policy-command-vy-max 0.0 \
   --policy-command-yaw-max 0.0 \
-  --policy-action-clip 2.2 \
-  --policy-action-smoothing 0.35 \
-  --policy-action-delta-limit 0.22 \
+  --policy-action-clip 3.2 \
+  --policy-action-smoothing 0.25 \
+  --policy-action-delta-limit 0.32 \
   --policy-entry-ramp-seconds 2.5 \
-  --policy-pd-torque-limit 30.0 \
+  --policy-pd-torque-limit 40.0 \
   --enable-retries 3 \
   --enable-retry-delay 0.05 \
   --feedback-timeout 0.05 \
