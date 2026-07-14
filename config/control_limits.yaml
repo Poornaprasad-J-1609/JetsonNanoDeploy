@@ -48,16 +48,18 @@ policy_deployment:
   # 0.22 action units is about 0.055 rad target change per control cycle.
   # The raw policy action is still logged and fed back to obs[36:48] unchanged.
   action_delta_limit_abs: 0.32
-  # Blend from the settled stand pose into the first walking targets. This
-  # prevents an immediate full-amplitude actor target when a movement key is
-  # pressed while the robot is carrying its weight.
-  policy_entry_ramp_seconds: 2.5
+  # Blend from the settled stand pose into the first walking targets. Keep this
+  # under one second for terminal-keyboard tests; a long ramp makes W feel
+  # delayed and the gait only becomes visible after the key is released.
+  policy_entry_ramp_seconds: 0.9
   # Before packing a walking MIT command, constrain its estimated joint-space
   # PD torque around fresh encoder feedback. The independent measured-feedback
   # emergency stop remains in config/safety_limits.yaml.
-  # Keep the command-side estimate below the measured 60 Nm emergency guard,
-  # while leaving enough target amplitude for stance legs to support gait.
-  estimated_pd_torque_limit: 40.0
+  # The 2026-07-14 ground log showed thigh lag near 0.5 rad while policy
+  # commands were pinned at 40 Nm. A 47 kg robot needs more stance/support
+  # authority; measured torque emergency remains separately guarded by
+  # config/safety_limits.yaml.
+  estimated_pd_torque_limit: 60.0
 
 joint_position:
   enabled: true

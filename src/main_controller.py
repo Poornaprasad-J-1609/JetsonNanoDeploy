@@ -667,7 +667,196 @@ def compact_telemetry_record(
             continue
         for index, value in enumerate(values):
             record[f"{prefix}_{index:0{width}d}"] = float(value)
+
+    if policy_order is not None:
+        command_by_joint = {
+            command_item.get("joint_name"): command_item
+            for command_item in (commands or [])
+            if command_item.get("joint_name") is not None
+        }
+        feedback_by_joint = getattr(estimator, "last_feedback_by_joint", {}) or {}
+        now = time.monotonic()
+
+        q_values = None if q_current is None else np.asarray(q_current, dtype=np.float32).reshape(-1)
+        qd_values = None if qd_current is None else np.asarray(qd_current, dtype=np.float32).reshape(-1)
+        q_target_values = (
+            None
+            if q_target_sent is None
+            else np.asarray(q_target_sent, dtype=np.float32).reshape(-1)
+        )
+        qd_target_values = (
+            None
+            if qd_target_sent is None
+            else np.asarray(qd_target_sent, dtype=np.float32).reshape(-1)
+        )
+        raw_action_values = (
+            None if raw_action is None else np.asarray(raw_action, dtype=np.float32).reshape(-1)
+        )
+        sent_action_values = (
+            None if sent_action is None else np.asarray(sent_action, dtype=np.float32).reshape(-1)
+        )
+        obs_values = (
+            None if observation is None else np.asarray(observation, dtype=np.float32).reshape(-1)
+        )
+
+        for index, joint_name in enumerate(policy_order):
+            prefix = str(joint_name)
+            command_item = command_by_joint.get(joint_name, {})
+            feedback = feedback_by_joint.get(joint_name, {})
+
+            record[f"{prefix}_index"] = int(index)
+            if q_values is not None and q_values.shape[0] > index:
+                record[f"{prefix}_q_fb"] = float(q_values[index])
+            if qd_values is not None and qd_values.shape[0] > index:
+                record[f"{prefix}_qd_fb"] = float(qd_values[index])
+            if q_target_values is not None and q_target_values.shape[0] > index:
+                record[f"{prefix}_q_target"] = float(q_target_values[index])
+                if q_values is not None and q_values.shape[0] > index:
+                    record[f"{prefix}_q_error"] = float(q_target_values[index] - q_values[index])
+            if qd_target_values is not None and qd_target_values.shape[0] > index:
+                record[f"{prefix}_qd_target"] = float(qd_target_values[index])
+            if raw_action_values is not None and raw_action_values.shape[0] > index:
+                record[f"{prefix}_action_raw"] = float(raw_action_values[index])
+            if sent_action_values is not None and sent_action_values.shape[0] > index:
+                record[f"{prefix}_action_sent"] = float(sent_action_values[index])
+            if obs_values is not None and obs_values.shape[0] >= 48:
+                record[f"{prefix}_obs_joint_pos"] = float(obs_values[12 + index])
+                record[f"{prefix}_obs_joint_vel"] = float(obs_values[24 + index])
+                record[f"{prefix}_obs_prev_action"] = float(obs_values[36 + index])
+
+            if command_item:
+                for key in (
+                    "motor_id",
+                    "bus_name",
+                    "phase",
+                    "command_encoding",
+                    "q_requested",
+                    "q_des",
+                    "q_before_torque_limit",
+                    "torque_limited",
+                    "tau_pd_est",
+                    "offset",
+                    "direction",
+                    "p_des",
+                    "p_base",
+                    "p_limit_adjustment",
+                    "joint_v_des",
+                    "joint_v_des_requested",
+                    "v_des",
+                    "kp",
+                    "kd",
+                    "kp_effective",
+                    "kd_effective",
+                    "joint_tau_ff",
+                    "joint_tau_ff_effective",
+                    "tau_ff",
+                    "can_id",
+                ):
+                    value = command_item.get(key)
+                    if value is None:
+                        continue
+                    record[f"{prefix}_cmd_{key}"] = value
+
+            if isinstance(feedback, dict) and feedback:
+                timestamp = feedback.get("timestamp")
+                try:
+                    age_ms = 1000.0 * (now - float(timestamp))
+                except (TypeError, ValueError):
+                    age_ms = None
+                if age_ms is not None and np.isfinite(age_ms):
+                    record[f"{prefix}_fb_age_ms"] = float(age_ms)
+                for key in (
+                    "comm_type",
+                    "motor_id",
+                    "bus_name",
+                    "fault_bits",
+                    "mode_status",
+                    "position_raw",
+                    "velocity_raw",
+                    "torque_raw",
+                    "joint_position",
+                    "joint_velocity",
+                    "joint_torque",
+                    "position",
+                    "velocity",
+                    "torque",
+                    "temperature_c",
+                    "joint_direction",
+                ):
+                    value = feedback.get(key)
+                    if value is None:
+                        continue
+                    record[f"{prefix}_fb_{key}"] = value
     return record
+
+
+def joint_telemetry_fieldnames(policy_order):
+    fields = []
+    scalar_fields = [
+        "index",
+        "q_fb",
+        "qd_fb",
+        "q_target",
+        "qd_target",
+        "q_error",
+        "action_raw",
+        "action_sent",
+        "obs_joint_pos",
+        "obs_joint_vel",
+        "obs_prev_action",
+    ]
+    command_fields = [
+        "motor_id",
+        "bus_name",
+        "phase",
+        "command_encoding",
+        "q_requested",
+        "q_des",
+        "q_before_torque_limit",
+        "torque_limited",
+        "tau_pd_est",
+        "offset",
+        "direction",
+        "p_des",
+        "p_base",
+        "p_limit_adjustment",
+        "joint_v_des",
+        "joint_v_des_requested",
+        "v_des",
+        "kp",
+        "kd",
+        "kp_effective",
+        "kd_effective",
+        "joint_tau_ff",
+        "joint_tau_ff_effective",
+        "tau_ff",
+        "can_id",
+    ]
+    feedback_fields = [
+        "age_ms",
+        "comm_type",
+        "motor_id",
+        "bus_name",
+        "fault_bits",
+        "mode_status",
+        "position_raw",
+        "velocity_raw",
+        "torque_raw",
+        "joint_position",
+        "joint_velocity",
+        "joint_torque",
+        "position",
+        "velocity",
+        "torque",
+        "temperature_c",
+        "joint_direction",
+    ]
+    for joint_name in policy_order or []:
+        prefix = str(joint_name)
+        fields.extend(f"{prefix}_{name}" for name in scalar_fields)
+        fields.extend(f"{prefix}_cmd_{name}" for name in command_fields)
+        fields.extend(f"{prefix}_fb_{name}" for name in feedback_fields)
+    return fields
 
 
 def compact_telemetry_line(record):
@@ -734,7 +923,7 @@ def print_compact_telemetry(step, mode, command, command_source, commands, estim
 
 
 class CsvRunLogger:
-    FIELDNAMES = [
+    BASE_FIELDNAMES = [
         "run_id",
         "wall_time",
         "elapsed_s",
@@ -774,13 +963,13 @@ class CsvRunLogger:
         "policy_sha256",
         "compact_line",
     ]
-    FIELDNAMES += [f"obs_{index:03d}" for index in range(48)]
-    FIELDNAMES += [f"action_{index:02d}" for index in range(12)]
-    FIELDNAMES += [f"sent_action_{index:02d}" for index in range(12)]
-    FIELDNAMES += [f"q_{index:02d}" for index in range(12)]
-    FIELDNAMES += [f"qd_{index:02d}" for index in range(12)]
-    FIELDNAMES += [f"q_target_{index:02d}" for index in range(12)]
-    FIELDNAMES += [f"qd_target_{index:02d}" for index in range(12)]
+    BASE_FIELDNAMES += [f"obs_{index:03d}" for index in range(48)]
+    BASE_FIELDNAMES += [f"action_{index:02d}" for index in range(12)]
+    BASE_FIELDNAMES += [f"sent_action_{index:02d}" for index in range(12)]
+    BASE_FIELDNAMES += [f"q_{index:02d}" for index in range(12)]
+    BASE_FIELDNAMES += [f"qd_{index:02d}" for index in range(12)]
+    BASE_FIELDNAMES += [f"q_target_{index:02d}" for index in range(12)]
+    BASE_FIELDNAMES += [f"qd_target_{index:02d}" for index in range(12)]
 
     @staticmethod
     def _unique_log_path(directory, stem):
@@ -795,13 +984,15 @@ class CsvRunLogger:
                 return candidate
             repeat += 1
 
-    def __init__(self, enabled=True, log_dir=None, log_file=None):
+    def __init__(self, enabled=True, log_dir=None, log_file=None, policy_order=None):
         self.enabled = bool(enabled)
         self.path = None
         self.run_id = datetime.now().astimezone().strftime("%Y-%m-%d_%H-%M-%S")
         self.start_time = time.monotonic()
         self._file = None
         self._writer = None
+        self.fieldnames = list(self.BASE_FIELDNAMES)
+        self.fieldnames.extend(joint_telemetry_fieldnames(policy_order or []))
 
         if not self.enabled:
             return
@@ -816,7 +1007,11 @@ class CsvRunLogger:
 
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._file = open(self.path, "w", newline="")
-        self._writer = csv.DictWriter(self._file, fieldnames=self.FIELDNAMES)
+        self._writer = csv.DictWriter(
+            self._file,
+            fieldnames=self.fieldnames,
+            extrasaction="ignore",
+        )
         self._writer.writeheader()
         self._file.flush()
 
@@ -824,7 +1019,7 @@ class CsvRunLogger:
         if not self.enabled or self._writer is None:
             return
 
-        row = {field: "" for field in self.FIELDNAMES}
+        row = {field: "" for field in self.fieldnames}
         row.update(record)
         row["run_id"] = self.run_id
         row["wall_time"] = datetime.now().isoformat(timespec="milliseconds")
@@ -3659,6 +3854,7 @@ def main():
             enabled=args.log_csv,
             log_dir=args.log_dir,
             log_file=args.log_file,
+            policy_order=runner.policy_order,
         )
         if csv_logger.enabled:
             print("\nCSV log:", csv_logger.path)
@@ -3670,7 +3866,9 @@ def main():
                 "CSV policy I/O: input=obs_000..047, "
                 "raw_output=action_00..11, sent_output=sent_action_00..11, "
                 "motor_target=q_target_00..11/qd_target_00..11, "
-                "feedback=q_00..11/qd_00..11"
+                "feedback=q_00..11/qd_00..11, "
+                "named_joint_columns=<joint>_q_fb/<joint>_q_target/"
+                "<joint>_fb_position_raw/<joint>_fb_torque"
             )
 
         imu_sensor = create_imu_sensor(

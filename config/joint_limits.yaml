@@ -28,26 +28,30 @@ joint_limits:
   FL_hip_joint:
     min: -0.5
     max: 0.5
-    policy_min: -0.90
-    policy_max: 0.90
+    # Forward/back sim logs show actual hip motion stays near +/-0.1 rad even
+    # when the policy target estimate is larger. Keep sit/stand hard limits
+    # unchanged, but bound walking hip targets so straight W does not over-swing
+    # the ab/adduction joints on real hardware.
+    policy_min: -0.30
+    policy_max: 0.30
     dq_max_per_step: 0.080
   FR_hip_joint:
     min: -0.5
     max: 0.5
-    policy_min: -0.90
-    policy_max: 0.90
+    policy_min: -0.30
+    policy_max: 0.30
     dq_max_per_step: 0.080
   BL_hip_joint:
     min: -0.5
     max: 0.5
-    policy_min: -0.90
-    policy_max: 0.90
+    policy_min: -0.30
+    policy_max: 0.30
     dq_max_per_step: 0.080
   BR_hip_joint:
     min: -0.5
     max: 0.5
-    policy_min: -0.90
-    policy_max: 0.90
+    policy_min: -0.30
+    policy_max: 0.30
     dq_max_per_step: 0.080
 
   FL_thigh_joint:

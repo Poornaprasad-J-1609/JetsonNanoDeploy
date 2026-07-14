@@ -229,6 +229,12 @@ class KeyboardCommandSource:
         print("  h -> hold current position")
         print("  x -> emergency stop")
         print(f"  speed scale: {self.speed_scale:.2f}")
+        print(f"  movement key timeout: {self.command_timeout_s:.2f}s")
+        if self.command_timeout_s > 0.75:
+            print(
+                "  WARNING: terminal keyboard has no key-release event; "
+                "movement will remain active for this timeout after releasing W/A/S/D."
+            )
         if not self.active:
             print("  WARNING: stdin is not an interactive terminal; keyboard input is inactive.")
 
