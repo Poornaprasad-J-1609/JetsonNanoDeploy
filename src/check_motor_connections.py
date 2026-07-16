@@ -17,8 +17,12 @@ try:
 except ImportError as exc:
     raise ImportError("Install PyYAML first: pip3 install pyyaml") from exc
 
-from four_bar_motor_command_layer import FourBarMotorCommandLayer as MotorCommandLayer
-from motor_command_layer import decode_mit_feedback_frame, motor_position_to_joint_angle
+from four_bar_motor_command_layer import FourBarMotorCommandLayer
+from motor_command_layer import (
+    MotorCommandLayer as DirectMotorCommandLayer,
+    decode_mit_feedback_frame,
+    motor_position_to_joint_angle,
+)
 from can_topology import (
     add_can_topology_args,
     close_can_buses,
@@ -767,6 +771,8 @@ def main():
                         help="UDP port used by the GUI")
     parser.add_argument("--no-clear", action="store_true",
                         help="do not clear/redraw the terminal table")
+    parser.add_argument("--disable-four-bar-transmission", action="store_true",
+                        help="force direct motor-angle decoding even if config/four_bar_transmission.yaml is enabled")
     args = parser.parse_args()
     if not math.isclose(float(args.set_zero_value_rad), 0.0, abs_tol=1e-12):
         parser.error("--set-zero-value-rad must be 0.0 for persistent motor hardware zero")
@@ -787,12 +793,27 @@ def main():
     motor_ids = motor_cfg["motor_ids"]
     display_joints = connection_display_order(joints, motor_ids)
     joint_can_bus = resolve_joint_can_bus(policy_order, args.can_count)
-    layer = MotorCommandLayer(
-        policy_order=policy_order,
-        motor_ids=motor_ids,
-        active_joints=joints,
-        joint_can_bus=joint_can_bus,
-    )
+    layer_cls = DirectMotorCommandLayer if args.disable_four_bar_transmission else FourBarMotorCommandLayer
+    try:
+        layer = layer_cls(
+            policy_order=policy_order,
+            motor_ids=motor_ids,
+            active_joints=joints,
+            joint_can_bus=joint_can_bus,
+        )
+    except Exception as exc:
+        if args.disable_four_bar_transmission:
+            raise
+        print("ERROR: four-bar transmission configuration is not usable:", exc)
+        print(
+            "For calibration-data collection, rerun this checker with "
+            "--disable-four-bar-transmission so it prints raw encoder/Motor th values."
+        )
+        print(
+            "For four-bar validation, fill at least 3 strictly monotonic "
+            "motor_angle_rad and knee_angle_rad samples in config/four_bar_transmission.yaml."
+        )
+        return 2
     active_port_by_bus = ports_for_active_joints(
         port_by_bus,
         joint_can_bus,
@@ -926,7 +947,7 @@ def main():
 
                 layer.send_raw_commands(buses, poll_commands)
 
-                frames = MotorCommandLayer.read_all_frames(buses, timeout=min(0.05, dt))
+                frames = layer_cls.read_all_frames(buses, timeout=min(0.05, dt))
                 now = time.monotonic()
                 update_feedback_from_frames(
                     frames=frames,
