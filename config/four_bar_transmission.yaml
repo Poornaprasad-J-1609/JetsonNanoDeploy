@@ -1,0 +1,66 @@
+# Nonlinear four-bar transmission for the four physical calf motors.
+#
+# SAFE DEFAULT: disabled. Do not enable until the measured arrays are filled.
+#
+# motor_angle_rad coordinate:
+#   theta_m = motor_direction * (raw_encoder_position - joint_offset)
+#
+# knee_angle_rad coordinate for calf_common:
+#   positive flexion magnitude. virtual_sign maps it to the signed Isaac/URDF
+#   calf coordinate used by the trained policy.
+#
+# IMPORTANT: The current walk-branch-jun18 joint limits reach +/-1.70 rad.
+# A table ending at 1.56 rad is not sufficient unless those limits and every
+# stand/crouch pose are reduced first.
+
+four_bar_transmission:
+  enabled: false
+
+  # Refuse to form a nonlinear command without fresh encoder feedback.
+  require_feedback_for_commands: true
+
+  # The repository currently permits small policy-only calf overtravel beyond
+  # the mechanical hard limit. Keep this true on real linkage hardware.
+  clamp_policy_to_hard_limits: true
+
+  profiles:
+    calf_common:
+      # Replace the empty arrays with measured, strictly monotonic samples.
+      # Example shape only; never enter guessed/fabricated motor angles.
+      # motor_angle_rad: [theta_at_q0, theta_at_q02, ..., theta_at_q170]
+      # knee_angle_rad:  [0.00, 0.20, ..., 1.70]
+      motor_angle_rad: []
+      knee_angle_rad: []
+
+      efficiency: 1.0
+      motor_torque_limit_nm: 120.0
+
+      # Fail near a toggle where |dq_k / dtheta_m| approaches zero.
+      min_abs_jacobian: 0.05
+
+      # Extrapolation is unsafe on hardware.
+      clamp_outside_calibration: false
+
+      # tau_m = J*tau_k/eta and K_motor = J^2*K_virtual/eta.
+      compensate_efficiency_in_commands: true
+
+  joints:
+    BL_calf_joint:
+      enabled: true
+      profile: calf_common
+      virtual_sign: 1
+
+    FL_calf_joint:
+      enabled: true
+      profile: calf_common
+      virtual_sign: 1
+
+    BR_calf_joint:
+      enabled: true
+      profile: calf_common
+      virtual_sign: -1
+
+    FR_calf_joint:
+      enabled: true
+      profile: calf_common
+      virtual_sign: -1

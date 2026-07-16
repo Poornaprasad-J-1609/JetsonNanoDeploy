@@ -248,67 +248,31 @@ class MitFeedbackStateEstimator(FakeStateEstimator):
             offset = float(self.motor_layer.joint_offsets[joint_name])
             direction = float(self.motor_layer.joint_directions[joint_name])
             position_raw = float(feedback["position"])
-            velocity_raw = float(feedback["velocity"])
-            torque_raw = float(feedback["torque"])
-
-            if hasattr(self.motor_layer, "decode_joint_feedback"):
-                mapped = self.motor_layer.decode_joint_feedback(
-                    joint_name=joint_name,
-                    position_raw=position_raw,
-                    velocity_raw=velocity_raw,
-                    torque_raw=torque_raw,
-                )
-                q_joint = float(mapped["joint_position"])
-                qd_joint = float(mapped["joint_velocity"])
-                tau_joint = float(mapped["joint_torque"])
-                motor_position = float(mapped["motor_position"])
-                motor_velocity = float(mapped["motor_velocity"])
-                motor_torque = float(mapped["motor_torque"])
-                transmission_jacobian = float(
-                    mapped["transmission_jacobian"]
-                )
-                transmission_efficiency = float(
-                    mapped["transmission_efficiency"]
-                )
-                transmission_enabled = bool(
-                    mapped["transmission_enabled"]
-                )
-            else:
-                q_joint = motor_position_to_joint_angle(
-                    position_raw,
-                    offset=offset,
-                    direction=direction,
-                )
-                qd_joint = direction * velocity_raw
-                tau_joint = direction * torque_raw
-                motor_position = q_joint
-                motor_velocity = qd_joint
-                motor_torque = tau_joint
-                transmission_jacobian = 1.0
-                transmission_efficiency = 1.0
-                transmission_enabled = False
+            q_joint = motor_position_to_joint_angle(
+                position_raw,
+                offset=offset,
+                direction=direction,
+            )
 
             self.q_current[index] = q_joint
-            self.qd_current[index] = qd_joint
+            velocity_raw = float(feedback["velocity"])
+            torque_raw = float(feedback["torque"])
+            self.qd_current[index] = direction * velocity_raw
             feedback = dict(feedback)
             feedback["timestamp"] = timestamp
             feedback["bus_name"] = bus_name
             feedback["position_raw"] = position_raw
             feedback["velocity_raw"] = velocity_raw
             feedback["torque_raw"] = torque_raw
-            feedback["motor_position"] = motor_position
-            feedback["motor_velocity"] = motor_velocity
-            feedback["motor_torque"] = motor_torque
             feedback["joint_position"] = q_joint
-            feedback["joint_velocity"] = qd_joint
-            feedback["joint_torque"] = tau_joint
+            feedback["joint_velocity"] = direction * velocity_raw
+            feedback["joint_torque"] = direction * torque_raw
+            # All unsuffixed feedback values exposed beyond the CAN decoder are
+            # joint-space values. Motor-space diagnostics remain under *_raw.
             feedback["position"] = q_joint
-            feedback["velocity"] = qd_joint
-            feedback["torque"] = tau_joint
+            feedback["velocity"] = direction * velocity_raw
+            feedback["torque"] = direction * torque_raw
             feedback["joint_direction"] = direction
-            feedback["transmission_jacobian"] = transmission_jacobian
-            feedback["transmission_efficiency"] = transmission_efficiency
-            feedback["transmission_enabled"] = transmission_enabled
             self.last_feedback_by_joint[joint_name] = feedback
             count += 1
 

@@ -21,8 +21,7 @@ from safety_monitor import SafetyMonitor
 from state_estimator import FakeStateEstimator, MitFeedbackStateEstimator
 from joystick_interface import CommandSource, load_joystick_defaults, load_speed_scale_defaults
 from imu_interface import create_imu_sensor, load_imu_config
-from four_bar_motor_command_layer import FourBarMotorCommandLayer as MotorCommandLayer
-from motor_command_layer import print_mit_commands
+from motor_command_layer import MotorCommandLayer, print_mit_commands
 from can_topology import (
     add_can_topology_args,
     close_can_buses,

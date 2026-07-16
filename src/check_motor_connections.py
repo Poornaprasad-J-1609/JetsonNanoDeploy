@@ -17,11 +17,8 @@ try:
 except ImportError as exc:
     raise ImportError("Install PyYAML first: pip3 install pyyaml") from exc
 
-from motor_command_layer import (
-    MotorCommandLayer,
-    decode_mit_feedback_frame,
-    motor_position_to_joint_angle,
-)
+from four_bar_motor_command_layer import FourBarMotorCommandLayer as MotorCommandLayer
+from motor_command_layer import decode_mit_feedback_frame, motor_position_to_joint_angle
 from can_topology import (
     add_can_topology_args,
     close_can_buses,
@@ -186,26 +183,59 @@ def resolve_feedback_joint_positions(
         if int(feedback.get("fault_bits", 0)) != 0:
             continue
 
+        velocity_raw = float(feedback["velocity"])
+        torque_raw = float(feedback["torque"])
         raw_position = float(feedback["position"])
         offset = float(layer.joint_offsets.get(joint_name, 0.0))
         direction = float(layer.joint_directions.get(joint_name, 1.0))
-        q_joint = motor_position_to_joint_angle(
-            raw_position,
-            offset=offset,
-            direction=direction,
-        )
+
+        if hasattr(layer, "decode_joint_feedback"):
+            mapped = layer.decode_joint_feedback(
+                joint_name=joint_name,
+                position_raw=raw_position,
+                velocity_raw=velocity_raw,
+                torque_raw=torque_raw,
+            )
+            q_joint = float(mapped["joint_position"])
+            qd_joint = float(mapped["joint_velocity"])
+            tau_joint = float(mapped["joint_torque"])
+            motor_position = float(mapped["motor_position"])
+            motor_velocity = float(mapped["motor_velocity"])
+            motor_torque = float(mapped["motor_torque"])
+            transmission_jacobian = float(mapped["transmission_jacobian"])
+            transmission_efficiency = float(mapped["transmission_efficiency"])
+            transmission_enabled = bool(mapped["transmission_enabled"])
+        else:
+            q_joint = motor_position_to_joint_angle(
+                raw_position,
+                offset=offset,
+                direction=direction,
+            )
+            qd_joint = direction * velocity_raw
+            tau_joint = direction * torque_raw
+            motor_position = q_joint
+            motor_velocity = qd_joint
+            motor_torque = tau_joint
+            transmission_jacobian = 1.0
+            transmission_efficiency = 1.0
+            transmission_enabled = False
+
         joint_positions[joint_name] = q_joint
-        velocity_raw = float(feedback["velocity"])
-        torque_raw = float(feedback["torque"])
         feedback["position_raw"] = raw_position
         feedback["velocity_raw"] = velocity_raw
         feedback["torque_raw"] = torque_raw
+        feedback["motor_position"] = motor_position
+        feedback["motor_velocity"] = motor_velocity
+        feedback["motor_torque"] = motor_torque
         feedback["joint_position"] = q_joint
-        feedback["joint_velocity"] = direction * velocity_raw
-        feedback["joint_torque"] = direction * torque_raw
-        feedback["velocity"] = direction * velocity_raw
-        feedback["torque"] = direction * torque_raw
+        feedback["joint_velocity"] = qd_joint
+        feedback["joint_torque"] = tau_joint
+        feedback["velocity"] = qd_joint
+        feedback["torque"] = tau_joint
         feedback["joint_direction"] = direction
+        feedback["transmission_jacobian"] = transmission_jacobian
+        feedback["transmission_efficiency"] = transmission_efficiency
+        feedback["transmission_enabled"] = transmission_enabled
 
 
 def estimate_pose_from_angles(joints, angles, poses):
@@ -289,10 +319,14 @@ def print_table(
     now = time.monotonic()
     if clear_screen:
         print("\033[2J\033[H", end="")
-    print("=" * 158)
+    print("=" * 190)
     print("GRALLATOR ROBSTRIDE MOTOR CONNECTION CHECK")
-    print("=" * 158)
+    print("=" * 190)
     print("Poll loop sends RobStride comm-type 4 stop/poll frames. It does not enable MIT torque control.")
+    if getattr(getattr(layer, "transmissions", None), "enabled", False):
+        print("Four-bar transmission: ENABLED for encoder decoding; Joint rad is virtual Isaac/URDF knee angle.")
+    else:
+        print("Four-bar transmission: disabled; Joint rad is direct sign/offset-corrected motor angle.")
     if keyboard_enabled:
         actions = []
         if set_zero_enabled:
@@ -309,13 +343,13 @@ def print_table(
         print("Keyboard input is disabled because stdin is not an interactive terminal.")
     if status_message:
         print(status_message)
-    print("-" * 158)
+    print("-" * 190)
     print(
         f"{'Joint':20s} | {'Bus':>5s} | {'Motor':>7s} | {'State':>13s} | {'Age ms':>8s} | "
-        f"{'Joint rad':>10s} | {'Raw rad':>10s} | {'Vel rad/s':>10s} | "
-        f"{'Torque':>9s} | {'Temp C':>7s} | Fault"
+        f"{'Joint rad':>10s} | {'Raw rad':>10s} | {'Motor th':>10s} | {'J=dq/dth':>9s} | "
+        f"{'Vel rad/s':>10s} | {'Torque':>9s} | {'Temp C':>7s} | {'4bar':>5s} | Fault"
     )
-    print("-" * 158)
+    print("-" * 190)
 
     connected = 0
     angles = {}
@@ -336,7 +370,8 @@ def print_table(
         if feedback is None:
             print(
                 f"{joint_name:20s} | {bus_name:>5s} | 0x{motor_id:02X}    | {state:>13s} | "
-                f"{'-':>8s} | {'-':>10s} | {'-':>10s} | {'-':>10s} | {'-':>9s} | {'-':>7s} | -"
+                f"{'-':>8s} | {'-':>10s} | {'-':>10s} | {'-':>10s} | {'-':>9s} | "
+                f"{'-':>10s} | {'-':>9s} | {'-':>7s} | {'-':>5s} | -"
             )
             continue
 
@@ -347,19 +382,25 @@ def print_table(
             feedback,
             pose_references=pose_references,
         )
+        motor_position = float(feedback.get("motor_position", q_joint))
+        transmission_jacobian = float(feedback.get("transmission_jacobian", 1.0))
+        transmission_enabled = bool(feedback.get("transmission_enabled", False))
         angles[joint_name] = q_joint
         print(
             f"{joint_name:20s} | {bus_name:>5s} | 0x{motor_id:02X}    | {state:>13s} | "
             f"{age_ms:8.1f} | "
             f"{q_joint:+10.4f} | "
             f"{feedback['position']:+10.4f} | "
+            f"{motor_position:+10.4f} | "
+            f"{transmission_jacobian:+9.4f} | "
             f"{feedback['velocity']:+10.4f} | "
             f"{feedback['torque']:+9.4f} | "
             f"{feedback['temperature_c']:7.1f} | "
+            f"{'yes' if transmission_enabled else 'no':>5s} | "
             f"0x{int(feedback['fault_bits']):02X}"
         )
 
-    print("-" * 158)
+    print("-" * 190)
     print(f"Connected: {connected}/{len(joints)}")
     pose_name, pose_rms, pose_max = estimate_pose_from_angles(joints, angles, poses)
     if pose_rms is None:
@@ -369,7 +410,7 @@ def print_table(
             f"Pose estimate: {pose_name} "
             f"(rms_error={pose_rms:.4f} rad, max_error={pose_max:.4f} rad)"
         )
-    print("=" * 158)
+    print("=" * 190)
 
 
 def feedback_for_joint(
