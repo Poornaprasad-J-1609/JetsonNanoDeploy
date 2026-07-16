@@ -5,7 +5,7 @@
 # motor_angle_rad coordinate:
 #   theta_m = motor_direction * (raw_encoder_position - joint_offset)
 #
-# knee_angle_rad coordinate for calf_common:
+# knee_angle_rad coordinate for each calf profile:
 #   positive flexion magnitude. virtual_sign maps it to the signed Isaac/URDF
 #   calf coordinate used by the trained policy.
 #
@@ -14,7 +14,7 @@
 # stand/crouch pose are reduced first.
 
 four_bar_transmission:
-  enabled: true
+  enabled: false
 
   # Refuse to form a nonlinear command without fresh encoder feedback.
   require_feedback_for_commands: true
@@ -24,7 +24,7 @@ four_bar_transmission:
   clamp_policy_to_hard_limits: true
 
   profiles:
-    calf_common:
+    FR_calf:
       # Replace the empty arrays with measured, strictly monotonic samples.
       # Example shape only; never enter guessed/fabricated motor angles.
       # motor_angle_rad: [theta_at_q0, theta_at_q02, ..., theta_at_q170]
@@ -43,24 +43,48 @@ four_bar_transmission:
 
       # tau_m = J*tau_k/eta and K_motor = J^2*K_virtual/eta.
       compensate_efficiency_in_commands: true
+    FL_calf:
+      motor_angle_rad: []
+      knee_angle_rad: []
+      efficiency: 1.0
+      motor_torque_limit_nm: 120.0
+      min_abs_jacobian: 0.05
+      clamp_outside_calibration: false
+      compensate_efficiency_in_commands: true
+    BR_calf:
+      motor_angle_rad: []
+      knee_angle_rad: []
+      efficiency: 1.0
+      motor_torque_limit_nm: 120.0
+      min_abs_jacobian: 0.05
+      clamp_outside_calibration: false
+      compensate_efficiency_in_commands: true
+    BL_calf:
+      motor_angle_rad: []
+      knee_angle_rad: []
+      efficiency: 1.0
+      motor_torque_limit_nm: 120.0
+      min_abs_jacobian: 0.05
+      clamp_outside_calibration: false
+      compensate_efficiency_in_commands: true
 
   joints:
     BL_calf_joint:
       enabled: true
-      profile: calf_common
+      profile: BL_calf
       virtual_sign: 1
 
     FL_calf_joint:
       enabled: true
-      profile: calf_common
+      profile: FL_calf
       virtual_sign: 1
 
     BR_calf_joint:
       enabled: true
-      profile: calf_common
+      profile: BR_calf
       virtual_sign: -1
 
     FR_calf_joint:
       enabled: true
-      profile: calf_common
+      profile: FR_calf
       virtual_sign: -1
