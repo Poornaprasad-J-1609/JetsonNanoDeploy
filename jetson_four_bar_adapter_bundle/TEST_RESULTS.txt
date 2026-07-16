@@ -1,0 +1,22 @@
+Four-bar adapter validation
+Date: 2026-07-16
+
+$ PYTHONPATH=payload/src python3 -m unittest -v payload/tests/test_four_bar_transmission.py
+test_command_is_rewritten_in_motor_space (mnt.data.jetson_four_bar_adapter_bundle.payload.tests.test_four_bar_transmission.FourBarCommandAdapterTests.test_command_is_rewritten_in_motor_space) ... ok
+test_disabled_configuration_is_identity (mnt.data.jetson_four_bar_adapter_bundle.payload.tests.test_four_bar_transmission.FourBarTransmissionTests.test_disabled_configuration_is_identity) ... ok
+test_feedback_decode_returns_virtual_joint_state (mnt.data.jetson_four_bar_adapter_bundle.payload.tests.test_four_bar_transmission.FourBarTransmissionTests.test_feedback_decode_returns_virtual_joint_state) ... ok
+test_forward_inverse_and_jacobian (mnt.data.jetson_four_bar_adapter_bundle.payload.tests.test_four_bar_transmission.FourBarTransmissionTests.test_forward_inverse_and_jacobian) ... ok
+test_nonmonotonic_table_is_rejected (mnt.data.jetson_four_bar_adapter_bundle.payload.tests.test_four_bar_transmission.FourBarTransmissionTests.test_nonmonotonic_table_is_rejected) ... ok
+test_out_of_range_refuses_extrapolation (mnt.data.jetson_four_bar_adapter_bundle.payload.tests.test_four_bar_transmission.FourBarTransmissionTests.test_out_of_range_refuses_extrapolation) ... ok
+test_right_side_virtual_sign (mnt.data.jetson_four_bar_adapter_bundle.payload.tests.test_four_bar_transmission.FourBarTransmissionTests.test_right_side_virtual_sign) ... ok
+test_velocity_torque_and_gain_mapping (mnt.data.jetson_four_bar_adapter_bundle.payload.tests.test_four_bar_transmission.FourBarTransmissionTests.test_velocity_torque_and_gain_mapping) ... ok
+
+----------------------------------------------------------------------
+Ran 8 tests in 0.032s
+
+OK
+
+$ python3 -m py_compile adapter files
+py_compile: OK
+
+Installer fixture: two consecutive installs and patched-file syntax check: OK

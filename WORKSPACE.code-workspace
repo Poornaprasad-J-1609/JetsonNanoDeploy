@@ -1,0 +1,13 @@
+{
+	"folders": [
+		{
+			"path": "../../.."
+		},
+		{
+			"path": "../../../../sensor/IMU"
+		}
+	],
+	"settings": {
+		"ROS2.distro": "humble"
+	}
+}

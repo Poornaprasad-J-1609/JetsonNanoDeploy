@@ -89,7 +89,7 @@ joint_limits:
   BL_calf_joint:
     min: 0.0
     max: 1.70
-    policy_min: -0.12
+    policy_mi n: -0.12
     policy_max: 1.70
     dq_max_per_step: 0.080
   BR_calf_joint:

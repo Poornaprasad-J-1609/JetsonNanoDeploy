@@ -1,0 +1,12 @@
+joint_name,motor_angle_rad,knee_angle_rad
+BL_calf_joint,,0.00
+BL_calf_joint,,0.20
+BL_calf_joint,,0.40
+BL_calf_joint,,0.60
+BL_calf_joint,,0.80
+BL_calf_joint,,1.00
+BL_calf_joint,,1.20
+BL_calf_joint,,1.40
+BL_calf_joint,,1.56
+BL_calf_joint,,1.64
+BL_calf_joint,,1.70
