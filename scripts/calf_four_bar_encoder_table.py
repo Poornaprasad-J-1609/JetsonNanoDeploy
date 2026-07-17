@@ -194,6 +194,18 @@ def motor_to_knee(motor_position, motor_velocity, motor_torque, calibration):
     return knee_position, knee_velocity, knee_torque
 
 
+def format_table_header(columns):
+    return " | ".join(f"{name:>20}" for name in columns)
+
+
+def format_table_values(values):
+    return " | ".join(f"{value:+20.6f}" for value in values)
+
+
+def print_live_values(values):
+    print("\r\033[2K" + format_table_values(values), end="", flush=True)
+
+
 def capture_encoder(
     prompt,
     buses,
@@ -259,6 +271,11 @@ def main():
     parser.add_argument("--csv", default="calf_four_bar_table.csv")
     parser.add_argument("--extension-encoder", type=float, default=None)
     parser.add_argument("--crouch-encoder", type=float, default=None)
+    parser.add_argument(
+        "--scroll",
+        action="store_true",
+        help="print every sample on a new line instead of updating one live row",
+    )
     args = parser.parse_args()
     if (args.extension_encoder is None) != (args.crouch_encoder is None):
         parser.error("provide both --extension-encoder and --crouch-encoder")
@@ -338,8 +355,11 @@ def main():
 
     print(f"Reading only {args.calf_joint}; motor remains disabled.")
     print("Move the unloaded linkage slowly by hand. Press Ctrl+C to stop.")
-    print(" | ".join(f"{name:>20}" for name in columns))
+    print(format_table_header(columns))
     print("-" * 137)
+    live_display = sys.stdout.isatty() and not args.scroll
+    live_row_started = False
+    live_row_closed = False
 
     try:
         with csv_path.open("w", newline="") as file:
@@ -377,13 +397,22 @@ def main():
                     values = motor_values + knee_values
                     row = dict(zip(columns, values))
                     writer.writerow(row)
-                    print(" | ".join(f"{value:+20.6f}" for value in values))
+                    if live_display:
+                        print_live_values(values)
+                        live_row_started = True
+                    else:
+                        print(format_table_values(values))
 
                 time.sleep(max(0.0, dt - (time.monotonic() - start)))
 
     except KeyboardInterrupt:
+        if live_row_started:
+            print()
+            live_row_closed = True
         print("\nStopped.")
     finally:
+        if live_row_started and not live_row_closed:
+            print()
         layer.send_raw_commands(buses, stop_commands)
         close_can_buses(buses)
 
