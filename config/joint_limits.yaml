@@ -1,76 +1,44 @@
-# Joint safety limits in radians.
-#
-# Edit this file to tune per-joint command limits. The controller clips every
-# policy, sit, and stand target through these limits before MIT packets are sent.
-#
-# dq_max_per_step is specified for the 20 ms reference step in joint_map.yaml.
-# Runtime scales it by actual control_dt, keeping the physical rad/s limit
-# unchanged at 25, 50, or 100 Hz.
-# These values are target slew limits, not hard joint angles. Hard angle limits
-# below are still always applied before MIT packets are sent.
-#
-# Position bounds mirror the IsaacSim training URDF. The policy may request a
-# PD target beyond these bounds, but the simulated articulation itself cannot
-# cross them; deployment must preserve that physical constraint.
-# Optional policy_min/policy_max expands only the commanded PD target window for
-# policy walking. Keep this small for calves: the IsaacSim policy often requests
-# calf targets slightly beyond the URDF joint limit, but the simulated joint
-# itself stays at the limit. On real hardware there is no simulator stop, so
-# this overtravel must stay bounded and consistent with safety_limits.yaml.
-#
-# Walking target rate defaults:
-#   0.080 rad/step = 4.0 rad/s at 50 Hz.
-# The supplied simulation logs routinely change dynamic PD targets by
-# 0.05-0.30 rad/step. The old 0.010 limit erased the gait phase. Sit/stand
-# remain slower because their synchronized pose planner is limited separately.
-
 joint_limits:
   FL_hip_joint:
     min: -0.5
     max: 0.5
-    # Forward/back sim logs show actual hip motion stays near +/-0.1 rad even
-    # when the policy target estimate is larger. Keep sit/stand hard limits
-    # unchanged, but bound walking hip targets so straight W does not over-swing
-    # the ab/adduction joints on real hardware.
-    policy_min: -0.30
-    policy_max: 0.30
-    dq_max_per_step: 0.080
+    policy_min: -0.3
+    policy_max: 0.3
+    dq_max_per_step: 0.08
   FR_hip_joint:
     min: -0.5
     max: 0.5
-    policy_min: -0.30
-    policy_max: 0.30
-    dq_max_per_step: 0.080
+    policy_min: -0.3
+    policy_max: 0.3
+    dq_max_per_step: 0.08
   BL_hip_joint:
     min: -0.5
     max: 0.5
-    policy_min: -0.30
-    policy_max: 0.30
-    dq_max_per_step: 0.080
+    policy_min: -0.3
+    policy_max: 0.3
+    dq_max_per_step: 0.08
   BR_hip_joint:
     min: -0.5
     max: 0.5
-    policy_min: -0.30
-    policy_max: 0.30
-    dq_max_per_step: 0.080
-
+    policy_min: -0.3
+    policy_max: 0.3
+    dq_max_per_step: 0.08
   FL_thigh_joint:
     min: -2.0
     max: 2.0
-    dq_max_per_step: 0.080
+    dq_max_per_step: 0.08
   FR_thigh_joint:
     min: -2.0
     max: 2.0
-    dq_max_per_step: 0.080
+    dq_max_per_step: 0.08
   BL_thigh_joint:
     min: -2.0
     max: 2.0
-    dq_max_per_step: 0.080
+    dq_max_per_step: 0.08
   BR_thigh_joint:
     min: -2.0
     max: 2.0
-    dq_max_per_step: 0.080
-
+    dq_max_per_step: 0.08
   FL_calf_joint:
     min: 0.0
     max: 1.16

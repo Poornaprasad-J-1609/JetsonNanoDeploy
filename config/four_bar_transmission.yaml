@@ -1,41 +1,63 @@
-# Nonlinear four-bar transmission for the four physical calf motors.
-#
-# SAFE DEFAULT: disabled. Do not enable until the measured arrays are filled.
-#
-# motor_angle_rad coordinate:
-#   theta_m = motor_direction * (raw_encoder_position - joint_offset)
-#
-# knee_angle_rad coordinate for each calf profile:
-#   positive flexion magnitude. virtual_sign maps it to the signed Isaac/URDF
-#   calf coordinate used by the trained policy.
-#
-# IMPORTANT: The current walk-branch-jun18 joint limits reach +/-1.70 rad.
-# A table ending at 1.56 rad is not sufficient unless those limits and every
-# stand/crouch pose are reduced first.
-
 four_bar_transmission:
-  enabled: false
-
-  # Refuse to form a nonlinear command without fresh encoder feedback.
+  enabled: true
   require_feedback_for_commands: true
-
-  # The repository currently permits small policy-only calf overtravel beyond
-  # the mechanical hard limit. Keep this true on real linkage hardware.
   clamp_policy_to_hard_limits: true
-
   profiles:
     FR_calf:
-      # Replace the empty arrays with measured, strictly monotonic samples.
-      # Example shape only; never enter guessed/fabricated motor angles.
-      # motor_angle_rad: [theta_at_q0, theta_at_q02, ..., theta_at_q170]
-      # knee_angle_rad:  [0.00, 0.20, ..., 1.70]
-      motor_angle_rad: []
-      knee_angle_rad: []
-
+      motor_angle_rad:
+      - 0.113518
+      - 0.039305
+      - -0.034907
+      - -0.10912
+      - -0.183332
+      - -0.257545
+      - -0.331757
+      - -0.40597
+      - -0.480183
+      - -0.554395
+      - -0.628608
+      - -0.70282
+      - -0.777033
+      - -0.851245
+      - -0.925458
+      - -0.999671
+      - -1.073883
+      - -1.148096
+      - -1.222308
+      - -1.296521
+      - -1.370734
+      - -1.444946
+      - -1.519159
+      - -1.593371
+      - -1.667584
+      knee_angle_rad:
+      - 0.0
+      - 0.046458
+      - 0.09459
+      - 0.144307
+      - 0.195521
+      - 0.248144
+      - 0.302082
+      - 0.357234
+      - 0.413485
+      - 0.470704
+      - 0.528738
+      - 0.587407
+      - 0.646495
+      - 0.705748
+      - 0.764859
+      - 0.823465
+      - 0.881133
+      - 0.937353
+      - 0.991526
+      - 1.042963
+      - 1.090884
+      - 1.134433
+      - 1.172713
+      - 1.204835
+      - 1.23
       efficiency: 1.0
       motor_torque_limit_nm: 120.0
-
-      # Fail near a toggle where |dq_k / dtheta_m| approaches zero.
       min_abs_jacobian: 0.05
 
       # Clamp tiny endpoint noise from encoder quantization/table capture.
@@ -44,12 +66,60 @@ four_bar_transmission:
 
       # Extrapolation is unsafe on hardware.
       clamp_outside_calibration: false
-
-      # tau_m = J*tau_k/eta and K_motor = J^2*K_virtual/eta.
       compensate_efficiency_in_commands: true
     FL_calf:
-      motor_angle_rad: []
-      knee_angle_rad: []
+      motor_angle_rad:
+      - 0.050086
+      - 0.116854
+      - 0.183622
+      - 0.250389
+      - 0.317157
+      - 0.383925
+      - 0.450693
+      - 0.51746
+      - 0.584228
+      - 0.650996
+      - 0.717764
+      - 0.784531
+      - 0.851299
+      - 0.918067
+      - 0.984835
+      - 1.051602
+      - 1.11837
+      - 1.185138
+      - 1.251906
+      - 1.318673
+      - 1.385441
+      - 1.452209
+      - 1.518977
+      - 1.585744
+      - 1.652512
+      knee_angle_rad:
+      - 0.0
+      - 0.041196
+      - 0.083779
+      - 0.127682
+      - 0.172843
+      - 0.219197
+      - 0.26668
+      - 0.315222
+      - 0.36475
+      - 0.415182
+      - 0.466424
+      - 0.518371
+      - 0.570898
+      - 0.623864
+      - 0.677099
+      - 0.730407
+      - 0.783558
+      - 0.836282
+      - 0.888263
+      - 0.939135
+      - 0.988475
+      - 1.035801
+      - 1.08057
+      - 1.122183
+      - 1.16
       efficiency: 1.0
       motor_torque_limit_nm: 120.0
       min_abs_jacobian: 0.05
@@ -57,8 +127,58 @@ four_bar_transmission:
       clamp_outside_calibration: false
       compensate_efficiency_in_commands: true
     BR_calf:
-      motor_angle_rad: []
-      knee_angle_rad: []
+      motor_angle_rad:
+      - 0.308685
+      - 0.220187
+      - 0.13169
+      - 0.043192
+      - -0.045305
+      - -0.133802
+      - -0.2223
+      - -0.310797
+      - -0.399295
+      - -0.487792
+      - -0.576289
+      - -0.664787
+      - -0.753284
+      - -0.841782
+      - -0.930279
+      - -1.018776
+      - -1.107274
+      - -1.195771
+      - -1.284269
+      - -1.372766
+      - -1.461264
+      - -1.549761
+      - -1.638258
+      - -1.726756
+      - -1.815253
+      knee_angle_rad:
+      - 0.0
+      - 0.062007
+      - 0.125182
+      - 0.189199
+      - 0.253768
+      - 0.318631
+      - 0.383546
+      - 0.448281
+      - 0.512606
+      - 0.576291
+      - 0.639093
+      - 0.700754
+      - 0.760993
+      - 0.819503
+      - 0.875946
+      - 0.929943
+      - 0.981082
+      - 1.028907
+      - 1.072931
+      - 1.112646
+      - 1.147537
+      - 1.177112
+      - 1.200929
+      - 1.218637
+      - 1.23
       efficiency: 1.0
       motor_torque_limit_nm: 120.0
       min_abs_jacobian: 0.05
@@ -66,31 +186,77 @@ four_bar_transmission:
       clamp_outside_calibration: false
       compensate_efficiency_in_commands: true
     BL_calf:
-      motor_angle_rad: []
-      knee_angle_rad: []
+      motor_angle_rad:
+      - -0.111217
+      - -0.019496
+      - 0.072225
+      - 0.163947
+      - 0.255668
+      - 0.347389
+      - 0.43911
+      - 0.530832
+      - 0.622553
+      - 0.714274
+      - 0.805995
+      - 0.897717
+      - 0.989438
+      - 1.081159
+      - 1.172881
+      - 1.264602
+      - 1.356323
+      - 1.448044
+      - 1.539766
+      - 1.631487
+      - 1.723208
+      - 1.814929
+      - 1.906651
+      - 1.998372
+      - 2.090093
+      knee_angle_rad:
+      - 0.0
+      - 0.064398
+      - 0.130009
+      - 0.196474
+      - 0.263479
+      - 0.33074
+      - 0.39799
+      - 0.464974
+      - 0.531436
+      - 0.597116
+      - 0.661736
+      - 0.724999
+      - 0.786582
+      - 0.846124
+      - 0.903226
+      - 0.957444
+      - 1.008291
+      - 1.055235
+      - 1.097717
+      - 1.135163
+      - 1.167015
+      - 1.19277
+      - 1.212013
+      - 1.224465
+      - 1.23
       efficiency: 1.0
       motor_torque_limit_nm: 120.0
       min_abs_jacobian: 0.05
       endpoint_tolerance_rad: 0.01
       clamp_outside_calibration: false
       compensate_efficiency_in_commands: true
-
   joints:
     BL_calf_joint:
       enabled: true
       profile: BL_calf
       virtual_sign: 1
-
     FL_calf_joint:
       enabled: true
       profile: FL_calf
       virtual_sign: 1
-
     BR_calf_joint:
       enabled: true
       profile: BR_calf
       virtual_sign: -1
-
     FR_calf_joint:
       enabled: true
       profile: FR_calf
