@@ -49,13 +49,12 @@ DA = 339.73      # fixed thigh link
 KNEE_AT_EXTENSION = 0.00
 KNEE_AT_CROUCH = 1.56
 
-# This selects the physical assembly branch. Change to +1 if the solver says
-# the endpoints are inconsistent with the linkage dimensions.
-ASSEMBLY_BRANCH = -1
+# Default branch hint. The CLI defaults to trying both assembly branches.
+DEFAULT_ASSEMBLY_BRANCH = -1
 APPROX_CRANK_AT_EXTENSION = math.radians(-90.0)
 
 
-def output_angle(theta):
+def output_angle(theta, assembly_branch=DEFAULT_ASSEMBLY_BRANCH):
     """Four-bar forward kinematics: motor crank theta -> knee rocker phi."""
     bx, by = AB * math.cos(theta), AB * math.sin(theta)
     dx, dy = DA - bx, -by
@@ -69,8 +68,8 @@ def output_angle(theta):
     height = math.sqrt(max(0.0, BC**2 - along**2))
     px, py = bx + along * ex, by + along * ey
 
-    cx = px + ASSEMBLY_BRANCH * height * (-ey)
-    cy = py + ASSEMBLY_BRANCH * height * ex
+    cx = px + float(assembly_branch) * height * (-ey)
+    cy = py + float(assembly_branch) * height * ex
     return math.atan2(cy, cx - DA)
 
 
@@ -78,109 +77,175 @@ def angle_difference(a, b):
     return math.atan2(math.sin(a - b), math.cos(a - b))
 
 
-def four_bar_jacobian(theta):
+def four_bar_jacobian(theta, assembly_branch=DEFAULT_ASSEMBLY_BRANCH):
     """Numerical Jacobian d(knee-rocker angle)/d(motor-crank angle)."""
     eps = 1e-6
     return angle_difference(
-        output_angle(theta + eps), output_angle(theta - eps)
+        output_angle(theta + eps, assembly_branch),
+        output_angle(theta - eps, assembly_branch),
     ) / (2.0 * eps)
 
 
-def fit_endpoint_calibration(encoder_extension, encoder_crouch):
+def reachable_output_travel_range(encoder_travel):
+    """Estimate possible rocker travel ranges for the captured encoder travel."""
+    ranges = []
+    for branch in (-1.0, +1.0):
+        for motor_direction in (-1.0, +1.0):
+            crank_travel = motor_direction * float(encoder_travel)
+            values = []
+            for index in range(1440):
+                theta = -math.pi + 2.0 * math.pi * index / 1440
+                try:
+                    values.append(
+                        angle_difference(
+                            output_angle(theta + crank_travel, branch),
+                            output_angle(theta, branch),
+                        )
+                    )
+                except ValueError:
+                    pass
+            if values:
+                ranges.append(
+                    {
+                        "assembly_branch": branch,
+                        "motor_direction": motor_direction,
+                        "min": min(values),
+                        "max": max(values),
+                    }
+                )
+    return ranges
+
+
+def fit_endpoint_calibration(
+    encoder_extension,
+    encoder_crouch,
+    assembly_branch="auto",
+    knee_at_crouch=KNEE_AT_CROUCH,
+):
     """Fit the unknown absolute crank phase using only the two end stops."""
     encoder_travel = encoder_crouch - encoder_extension
-    knee_travel = KNEE_AT_CROUCH - KNEE_AT_EXTENSION
+    knee_travel = float(knee_at_crouch) - KNEE_AT_EXTENSION
     if abs(encoder_travel) < 0.05:
         raise ValueError("extension and crouch encoder readings are too close")
 
     candidates = []
     grid_count = 1440
+    if str(assembly_branch).lower() == "auto":
+        assembly_branches = (-1.0, +1.0)
+    else:
+        assembly_branches = (float(assembly_branch),)
 
-    for motor_direction in (-1.0, +1.0):
-        crank_travel = motor_direction * encoder_travel
-        for output_sign in (-1.0, +1.0):
-            target_output_travel = output_sign * knee_travel
+    for branch in assembly_branches:
+        if branch not in (-1.0, +1.0):
+            raise ValueError("--assembly-branch must be -1, 1, or auto")
+        for motor_direction in (-1.0, +1.0):
+            crank_travel = motor_direction * encoder_travel
+            for output_sign in (-1.0, +1.0):
+                target_output_travel = output_sign * knee_travel
 
-            def error(theta_extension):
-                theta_crouch = theta_extension + crank_travel
-                actual = angle_difference(
-                    output_angle(theta_crouch), output_angle(theta_extension)
-                )
-                return actual - target_output_travel
+                def error(theta_extension):
+                    theta_crouch = theta_extension + crank_travel
+                    actual = angle_difference(
+                        output_angle(theta_crouch, branch),
+                        output_angle(theta_extension, branch),
+                    )
+                    return actual - target_output_travel
 
-            previous_theta = -math.pi
-            previous_error = error(previous_theta)
-            for index in range(1, grid_count + 1):
-                theta = -math.pi + 2.0 * math.pi * index / grid_count
-                current_error = error(theta)
+                previous_theta = -math.pi
+                previous_error = error(previous_theta)
+                for index in range(1, grid_count + 1):
+                    theta = -math.pi + 2.0 * math.pi * index / grid_count
+                    current_error = error(theta)
 
-                if previous_error * current_error <= 0.0:
-                    lo, hi = previous_theta, theta
-                    flo = previous_error
-                    for _ in range(50):
-                        mid = 0.5 * (lo + hi)
-                        fmid = error(mid)
-                        if flo * fmid <= 0.0:
-                            hi = mid
-                        else:
-                            lo, flo = mid, fmid
-                    theta_extension = 0.5 * (lo + hi)
+                    if previous_error * current_error <= 0.0:
+                        lo, hi = previous_theta, theta
+                        flo = previous_error
+                        for _ in range(50):
+                            mid = 0.5 * (lo + hi)
+                            fmid = error(mid)
+                            if flo * fmid <= 0.0:
+                                hi = mid
+                            else:
+                                lo, flo = mid, fmid
+                        theta_extension = 0.5 * (lo + hi)
 
-                    if abs(error(theta_extension)) < 1e-5:
-                        knee_direction = output_sign
-                        monotonic = True
-                        for sample in range(41):
-                            fraction = sample / 40.0
-                            theta_sample = theta_extension + fraction * crank_travel
-                            total_j = (
-                                knee_direction
-                                * four_bar_jacobian(theta_sample)
-                                * motor_direction
-                            )
-                            if total_j * encoder_travel <= 0.0 or abs(total_j) < 1e-4:
-                                monotonic = False
-                                break
-
-                        if monotonic:
-                            score = abs(
-                                angle_difference(
-                                    theta_extension,
-                                    APPROX_CRANK_AT_EXTENSION,
+                        if abs(error(theta_extension)) < 1e-5:
+                            knee_direction = output_sign
+                            monotonic = True
+                            for sample in range(41):
+                                fraction = sample / 40.0
+                                theta_sample = theta_extension + fraction * crank_travel
+                                total_j = (
+                                    knee_direction
+                                    * four_bar_jacobian(theta_sample, branch)
+                                    * motor_direction
                                 )
-                            )
-                            candidates.append(
-                                (score, theta_extension, motor_direction, knee_direction)
-                            )
+                                if total_j * encoder_travel <= 0.0 or abs(total_j) < 1e-4:
+                                    monotonic = False
+                                    break
 
-                previous_theta, previous_error = theta, current_error
+                            if monotonic:
+                                score = abs(
+                                    angle_difference(
+                                        theta_extension,
+                                        APPROX_CRANK_AT_EXTENSION,
+                                    )
+                                )
+                                candidates.append(
+                                    (
+                                        score,
+                                        theta_extension,
+                                        motor_direction,
+                                        knee_direction,
+                                        branch,
+                                    )
+                                )
+
+                    previous_theta, previous_error = theta, current_error
 
     if not candidates:
+        diagnostics = reachable_output_travel_range(encoder_travel)
+        if diagnostics:
+            max_abs = max(
+                max(abs(item["min"]), abs(item["max"])) for item in diagnostics
+            )
+            detail = (
+                f" Captured encoder travel is {encoder_travel:+.6f} rad; "
+                f"with the current link dimensions the largest reachable "
+                f"rocker travel for that motor travel is about {max_abs:.3f} rad, "
+                f"but --knee-at-crouch asks for {knee_travel:.3f} rad."
+            )
+        else:
+            detail = " No valid closure range was found for the captured travel."
         raise ValueError(
             "the two encoder limits are inconsistent with the four-bar dimensions; "
-            "check the endpoints or change ASSEMBLY_BRANCH"
+            "check the endpoints, --knee-at-crouch, link dimensions, or --assembly-branch."
+            + detail
         )
 
-    _, theta_extension, motor_direction, knee_direction = min(candidates)
+    _, theta_extension, motor_direction, knee_direction, branch = min(candidates)
     return {
         "encoder_extension": encoder_extension,
         "encoder_crouch": encoder_crouch,
         "theta_extension": theta_extension,
         "motor_direction": motor_direction,
         "knee_direction": knee_direction,
-        "phi_extension": output_angle(theta_extension),
+        "assembly_branch": branch,
+        "phi_extension": output_angle(theta_extension, branch),
     }
 
 
 def motor_to_knee(motor_position, motor_velocity, motor_torque, calibration):
     """Return knee position, velocity, and torque from motor feedback."""
+    assembly_branch = float(calibration["assembly_branch"])
     theta = calibration["theta_extension"] + calibration["motor_direction"] * (
         motor_position - calibration["encoder_extension"]
     )
-    phi = output_angle(theta)
+    phi = output_angle(theta, assembly_branch)
 
     jacobian = (
         calibration["knee_direction"]
-        * four_bar_jacobian(theta)
+        * four_bar_jacobian(theta, assembly_branch)
         * calibration["motor_direction"]
     )
     if abs(jacobian) < 1e-4:
@@ -272,6 +337,18 @@ def main():
     parser.add_argument("--extension-encoder", type=float, default=None)
     parser.add_argument("--crouch-encoder", type=float, default=None)
     parser.add_argument(
+        "--assembly-branch",
+        choices=("auto", "-1", "1"),
+        default="auto",
+        help="four-bar circle-intersection branch; auto tries both",
+    )
+    parser.add_argument(
+        "--knee-at-crouch",
+        type=float,
+        default=KNEE_AT_CROUCH,
+        help="known knee angle at maximum crouch in radians",
+    )
+    parser.add_argument(
         "--scroll",
         action="store_true",
         help="print every sample on a new line instead of updating one live row",
@@ -331,7 +408,12 @@ def main():
             encoder_extension = args.extension_encoder
             encoder_crouch = args.crouch_encoder
 
-        calibration = fit_endpoint_calibration(encoder_extension, encoder_crouch)
+        calibration = fit_endpoint_calibration(
+            encoder_extension,
+            encoder_crouch,
+            assembly_branch=args.assembly_branch,
+            knee_at_crouch=args.knee_at_crouch,
+        )
     except BaseException:
         layer.send_raw_commands(buses, stop_commands)
         close_can_buses(buses)
@@ -339,7 +421,10 @@ def main():
 
     print(
         "Calibration complete: "
-        f"extension={encoder_extension:+.6f}, crouch={encoder_crouch:+.6f} rad"
+        f"extension={encoder_extension:+.6f}, crouch={encoder_crouch:+.6f} rad, "
+        f"assembly_branch={calibration['assembly_branch']:+.0f}, "
+        f"motor_direction={calibration['motor_direction']:+.0f}, "
+        f"knee_direction={calibration['knee_direction']:+.0f}"
     )
     end_time = None if args.seconds <= 0 else time.monotonic() + args.seconds
 
