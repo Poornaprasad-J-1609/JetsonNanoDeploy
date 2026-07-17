@@ -370,6 +370,7 @@ def write_four_bar_yaml(
     profile.setdefault("efficiency", 1.0)
     profile.setdefault("motor_torque_limit_nm", 120.0)
     profile.setdefault("min_abs_jacobian", 0.05)
+    profile.setdefault("endpoint_tolerance_rad", 0.01)
     profile.setdefault("clamp_outside_calibration", False)
     profile.setdefault("compensate_efficiency_in_commands", True)
 

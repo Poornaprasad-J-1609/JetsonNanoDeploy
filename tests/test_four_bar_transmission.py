@@ -125,6 +125,16 @@ class FourBarTransmissionTests(unittest.TestCase):
         with self.assertRaises(TransmissionRangeError):
             tx.virtual_from_motor("L_calf_joint", 5.0)
 
+    def test_endpoint_tolerance_clamps_small_capture_noise(self):
+        tx = self.transmission_set()
+        self.assertAlmostEqual(
+            tx.virtual_from_motor("L_calf_joint", 3.005),
+            1.6,
+            places=7,
+        )
+        with self.assertRaises(TransmissionRangeError):
+            tx.virtual_from_motor("L_calf_joint", 3.05)
+
     def test_disabled_configuration_is_identity(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)

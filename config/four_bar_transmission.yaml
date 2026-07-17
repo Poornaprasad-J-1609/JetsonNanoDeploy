@@ -38,6 +38,10 @@ four_bar_transmission:
       # Fail near a toggle where |dq_k / dtheta_m| approaches zero.
       min_abs_jacobian: 0.05
 
+      # Clamp tiny endpoint noise from encoder quantization/table capture.
+      # Larger overtravel still raises an error unless clamp_outside_calibration is true.
+      endpoint_tolerance_rad: 0.01
+
       # Extrapolation is unsafe on hardware.
       clamp_outside_calibration: false
 
@@ -49,6 +53,7 @@ four_bar_transmission:
       efficiency: 1.0
       motor_torque_limit_nm: 120.0
       min_abs_jacobian: 0.05
+      endpoint_tolerance_rad: 0.01
       clamp_outside_calibration: false
       compensate_efficiency_in_commands: true
     BR_calf:
@@ -57,6 +62,7 @@ four_bar_transmission:
       efficiency: 1.0
       motor_torque_limit_nm: 120.0
       min_abs_jacobian: 0.05
+      endpoint_tolerance_rad: 0.01
       clamp_outside_calibration: false
       compensate_efficiency_in_commands: true
     BL_calf:
@@ -65,6 +71,7 @@ four_bar_transmission:
       efficiency: 1.0
       motor_torque_limit_nm: 120.0
       min_abs_jacobian: 0.05
+      endpoint_tolerance_rad: 0.01
       clamp_outside_calibration: false
       compensate_efficiency_in_commands: true
 

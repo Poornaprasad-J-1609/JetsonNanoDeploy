@@ -69,6 +69,7 @@ class LookupProfile:
     efficiency: float = 1.0
     min_abs_jacobian: float = 0.05
     motor_torque_limit_nm: float = 120.0
+    endpoint_tolerance_rad: float = 0.01
     clamp_outside_calibration: bool = False
     compensate_efficiency_in_commands: bool = True
 
@@ -110,6 +111,7 @@ class LookupProfile:
         efficiency = float(cfg.get("efficiency", 1.0))
         min_abs_jacobian = float(cfg.get("min_abs_jacobian", 0.05))
         motor_torque_limit_nm = float(cfg.get("motor_torque_limit_nm", 120.0))
+        endpoint_tolerance_rad = float(cfg.get("endpoint_tolerance_rad", 0.01))
         if not np.isfinite(efficiency) or not (0.0 < efficiency <= 1.0):
             raise TransmissionConfigurationError(
                 f"profiles.{name}.efficiency must be in (0, 1]"
@@ -121,6 +123,10 @@ class LookupProfile:
         if not np.isfinite(motor_torque_limit_nm) or motor_torque_limit_nm <= 0.0:
             raise TransmissionConfigurationError(
                 f"profiles.{name}.motor_torque_limit_nm must be finite and > 0"
+            )
+        if not np.isfinite(endpoint_tolerance_rad) or endpoint_tolerance_rad < 0.0:
+            raise TransmissionConfigurationError(
+                f"profiles.{name}.endpoint_tolerance_rad must be finite and >= 0"
             )
         measured_min_j = float(np.min(np.abs(slope)))
         if measured_min_j < min_abs_jacobian:
@@ -138,6 +144,7 @@ class LookupProfile:
             efficiency=efficiency,
             min_abs_jacobian=min_abs_jacobian,
             motor_torque_limit_nm=motor_torque_limit_nm,
+            endpoint_tolerance_rad=endpoint_tolerance_rad,
             clamp_outside_calibration=bool(
                 cfg.get("clamp_outside_calibration", False)
             ),
@@ -168,11 +175,17 @@ class LookupProfile:
             raise TransmissionRangeError(f"{self.name}: {quantity} is NaN or Inf")
         if low <= value <= high:
             return value
+        tolerance = float(self.endpoint_tolerance_rad)
+        if low - tolerance <= value < low:
+            return low
+        if high < value <= high + tolerance:
+            return high
         if self.clamp_outside_calibration:
             return float(np.clip(value, low, high))
         raise TransmissionRangeError(
             f"{self.name}: {quantity}={value:.6f} is outside measured range "
-            f"[{low:.6f}, {high:.6f}]"
+            f"[{low:.6f}, {high:.6f}] with endpoint_tolerance_rad="
+            f"{tolerance:.6f}"
         )
 
     def knee_from_motor(self, motor_angle: float) -> float:
