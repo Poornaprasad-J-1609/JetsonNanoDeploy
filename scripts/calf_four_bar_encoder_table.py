@@ -237,7 +237,15 @@ def fit_endpoint_calibration(
     }
 
 
-def motor_to_knee(motor_position, motor_velocity, motor_torque, calibration):
+def motor_to_knee(
+    motor_position,
+    motor_velocity,
+    motor_torque,
+    calibration,
+    clamp_knee=False,
+    knee_at_crouch=KNEE_AT_CROUCH,
+    clamp_tolerance=0.01,
+):
     """Return knee position, velocity, and torque from motor feedback."""
     assembly_branch = float(calibration["assembly_branch"])
     theta = calibration["theta_extension"] + calibration["motor_direction"] * (
@@ -256,6 +264,14 @@ def motor_to_knee(motor_position, motor_velocity, motor_torque, calibration):
     knee_position = KNEE_AT_EXTENSION + calibration["knee_direction"] * angle_difference(
         phi, calibration["phi_extension"]
     )
+    if clamp_knee:
+        knee_min = float(KNEE_AT_EXTENSION)
+        knee_max = float(knee_at_crouch)
+        tolerance = max(0.0, float(clamp_tolerance))
+        if knee_min - tolerance <= knee_position < knee_min:
+            knee_position = knee_min
+        elif knee_max < knee_position <= knee_max + tolerance:
+            knee_position = knee_max
     knee_velocity = jacobian * motor_velocity
     knee_torque = motor_torque / jacobian
     return knee_position, knee_velocity, knee_torque
@@ -647,7 +663,12 @@ def main():
                         float(feedback["velocity"]),
                         float(feedback["torque"]),
                     )
-                    knee_values = motor_to_knee(*motor_values, calibration)
+                    knee_values = motor_to_knee(
+                        *motor_values,
+                        calibration,
+                        clamp_knee=True,
+                        knee_at_crouch=args.knee_at_crouch,
+                    )
                     values = motor_values + knee_values
                     row = dict(zip(columns, values))
                     writer.writerow(row)
