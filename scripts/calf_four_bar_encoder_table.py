@@ -324,6 +324,37 @@ def generated_lookup_table(
     return motor_angles, knee_angles
 
 
+def trim_low_jacobian_edges(motor_angles, knee_angles, min_abs_jacobian):
+    """Drop only edge samples that are too close to a four-bar toggle."""
+    motor_angles = list(motor_angles)
+    knee_angles = list(knee_angles)
+    threshold = float(min_abs_jacobian)
+    trimmed_front = 0
+    trimmed_back = 0
+
+    while len(motor_angles) > 3:
+        slopes = [
+            abs((knee_angles[i + 1] - knee_angles[i]) / (motor_angles[i + 1] - motor_angles[i]))
+            for i in range(len(motor_angles) - 1)
+        ]
+        low_indices = [i for i, slope in enumerate(slopes) if slope < threshold]
+        if not low_indices:
+            break
+
+        if low_indices[0] == 0:
+            motor_angles.pop(0)
+            knee_angles.pop(0)
+            trimmed_front += 1
+        elif low_indices[-1] == len(slopes) - 1:
+            motor_angles.pop()
+            knee_angles.pop()
+            trimmed_back += 1
+        else:
+            break
+
+    return motor_angles, knee_angles, trimmed_front, trimmed_back
+
+
 def finite_monotonic(values):
     if len(values) < 3:
         return False
@@ -355,6 +386,8 @@ def write_four_bar_yaml(
     profiles = root.setdefault("profiles", {})
     joints = root.setdefault("joints", {})
     profile_name = profile_name_for_joint(joint_name)
+    profile = profiles.setdefault(profile_name, {})
+    min_abs_jacobian = float(profile.get("min_abs_jacobian", 0.05))
     motor_angles, knee_angles = generated_lookup_table(
         joint_name=joint_name,
         layer=layer,
@@ -363,8 +396,18 @@ def write_four_bar_yaml(
         calibration=calibration,
         points=table_points,
     )
+    motor_angles, knee_angles, trimmed_front, trimmed_back = trim_low_jacobian_edges(
+        motor_angles,
+        knee_angles,
+        min_abs_jacobian=min_abs_jacobian,
+    )
+    if trimmed_front or trimmed_back:
+        print(
+            "Trimmed four-bar lookup near toggle: "
+            f"front={trimmed_front}, back={trimmed_back}, "
+            f"min_abs_jacobian={min_abs_jacobian:.4f}"
+        )
 
-    profile = profiles.setdefault(profile_name, {})
     profile["motor_angle_rad"] = motor_angles
     profile["knee_angle_rad"] = knee_angles
     profile.setdefault("efficiency", 1.0)
