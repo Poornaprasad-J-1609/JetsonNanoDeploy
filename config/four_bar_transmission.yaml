@@ -14,7 +14,7 @@
 # stand/crouch pose are reduced first.
 
 four_bar_transmission:
-  enabled: true
+  enabled: false
 
   # Refuse to form a nonlinear command without fresh encoder feedback.
   require_feedback_for_commands: true

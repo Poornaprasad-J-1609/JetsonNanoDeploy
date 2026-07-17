@@ -272,11 +272,24 @@ class FourBarTransmissionSet:
             )
 
         profiles_cfg = cfg.get("profiles", {}) or {}
-        profiles = {
-            str(name): LookupProfile.from_config(str(name), profile_cfg or {})
-            for name, profile_cfg in profiles_cfg.items()
-        }
         joints_cfg = cfg.get("joints", {}) or {}
+        required_profiles = {
+            str((item or {}).get("profile", "")).strip()
+            for item in joints_cfg.values()
+            if bool((item or {}).get("enabled", True))
+        }
+        required_profiles.discard("")
+        profiles = {}
+        for profile_name in sorted(required_profiles):
+            if profile_name not in profiles_cfg:
+                raise TransmissionConfigurationError(
+                    f"profile '{profile_name}' is referenced by an enabled joint "
+                    "but is not defined"
+                )
+            profiles[profile_name] = LookupProfile.from_config(
+                profile_name,
+                profiles_cfg.get(profile_name) or {},
+            )
         joints: Dict[str, JointTransmission] = {}
         for joint_name, item in joints_cfg.items():
             item = item or {}

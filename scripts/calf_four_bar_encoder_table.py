@@ -17,6 +17,8 @@ import sys
 import time
 from pathlib import Path
 
+import yaml
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
@@ -271,6 +273,143 @@ def print_live_values(values):
     print("\r\033[2K" + format_table_values(values), end="", flush=True)
 
 
+def profile_name_for_joint(joint_name):
+    return str(joint_name).replace("_joint", "")
+
+
+def virtual_sign_for_joint(joint_name):
+    return -1 if str(joint_name).startswith(("FR_", "BR_")) else 1
+
+
+def generated_lookup_table(
+    joint_name,
+    layer,
+    encoder_extension,
+    encoder_crouch,
+    calibration,
+    points,
+):
+    points = int(points)
+    if points < 3:
+        raise ValueError("lookup table needs at least 3 points")
+    offset = float(layer.joint_offsets[joint_name])
+    direction = float(layer.joint_directions[joint_name])
+    motor_angles = []
+    knee_angles = []
+    for index in range(points):
+        ratio = index / float(points - 1)
+        raw_encoder = float(encoder_extension) + ratio * (
+            float(encoder_crouch) - float(encoder_extension)
+        )
+        motor_theta = direction * (raw_encoder - offset)
+        knee_angle, _, _ = motor_to_knee(raw_encoder, 0.0, 0.0, calibration)
+        motor_angles.append(round(float(motor_theta), 6))
+        knee_angles.append(round(float(knee_angle), 6))
+    return motor_angles, knee_angles
+
+
+def finite_monotonic(values):
+    if len(values) < 3:
+        return False
+    if not all(math.isfinite(float(value)) for value in values):
+        return False
+    deltas = [b - a for a, b in zip(values, values[1:])]
+    return all(delta > 0.0 for delta in deltas) or all(delta < 0.0 for delta in deltas)
+
+
+def profile_is_valid(profile):
+    motor = [float(v) for v in profile.get("motor_angle_rad", [])]
+    knee = [float(v) for v in profile.get("knee_angle_rad", [])]
+    return len(motor) == len(knee) and finite_monotonic(motor) and finite_monotonic(knee)
+
+
+def write_four_bar_yaml(
+    joint_name,
+    layer,
+    encoder_extension,
+    encoder_crouch,
+    calibration,
+    table_points,
+    enable_yaml,
+):
+    path = ROOT / "config" / "four_bar_transmission.yaml"
+    with path.open("r", encoding="utf-8") as stream:
+        cfg = yaml.safe_load(stream) or {}
+    root = cfg.setdefault("four_bar_transmission", {})
+    profiles = root.setdefault("profiles", {})
+    joints = root.setdefault("joints", {})
+    profile_name = profile_name_for_joint(joint_name)
+    motor_angles, knee_angles = generated_lookup_table(
+        joint_name=joint_name,
+        layer=layer,
+        encoder_extension=encoder_extension,
+        encoder_crouch=encoder_crouch,
+        calibration=calibration,
+        points=table_points,
+    )
+
+    profile = profiles.setdefault(profile_name, {})
+    profile["motor_angle_rad"] = motor_angles
+    profile["knee_angle_rad"] = knee_angles
+    profile.setdefault("efficiency", 1.0)
+    profile.setdefault("motor_torque_limit_nm", 120.0)
+    profile.setdefault("min_abs_jacobian", 0.05)
+    profile.setdefault("clamp_outside_calibration", False)
+    profile.setdefault("compensate_efficiency_in_commands", True)
+
+    joints[joint_name] = {
+        "enabled": True,
+        "profile": profile_name,
+        "virtual_sign": virtual_sign_for_joint(joint_name),
+    }
+
+    required_calf_joints = (
+        "FR_calf_joint",
+        "FL_calf_joint",
+        "BR_calf_joint",
+        "BL_calf_joint",
+    )
+    for other_joint, item in list(joints.items()):
+        other_profile = profiles.get(str((item or {}).get("profile", "")), {})
+        if not profile_is_valid(other_profile):
+            item["enabled"] = False
+
+    calibrated_calf_joints = []
+    for calf_joint in required_calf_joints:
+        item = joints.get(calf_joint, {}) or {}
+        other_profile = profiles.get(str(item.get("profile", "")), {})
+        if bool(item.get("enabled", False)) and profile_is_valid(other_profile):
+            calibrated_calf_joints.append(calf_joint)
+
+    if enable_yaml:
+        missing = [
+            name for name in required_calf_joints if name not in calibrated_calf_joints
+        ]
+        if missing:
+            root["enabled"] = False
+            print(
+                "WARNING: four-bar remains globally disabled until all calf "
+                "profiles are calibrated: " + ", ".join(missing)
+            )
+        else:
+            root["enabled"] = True
+            print("Four-bar transmission globally enabled for all calf joints.")
+    else:
+        root["enabled"] = False
+        print(
+            "Four-bar lookup was written, but global four-bar is still disabled. "
+            "Use --enable-yaml after all four calf profiles are calibrated."
+        )
+
+    backup = path.with_suffix(path.suffix + ".bak")
+    backup.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with tmp.open("w", encoding="utf-8") as stream:
+        yaml.safe_dump(cfg, stream, sort_keys=False)
+    tmp.replace(path)
+    return path, backup, motor_angles, knee_angles
+
+
 def capture_encoder(
     prompt,
     buses,
@@ -353,6 +492,22 @@ def main():
         action="store_true",
         help="print every sample on a new line instead of updating one live row",
     )
+    parser.add_argument(
+        "--write-yaml",
+        action="store_true",
+        help="write the generated lookup table into config/four_bar_transmission.yaml",
+    )
+    parser.add_argument(
+        "--enable-yaml",
+        action="store_true",
+        help="also set four_bar_transmission.enabled=true after writing YAML",
+    )
+    parser.add_argument(
+        "--table-points",
+        type=int,
+        default=25,
+        help="number of generated lookup samples between extension and crouch",
+    )
     args = parser.parse_args()
     if (args.extension_encoder is None) != (args.crouch_encoder is None):
         parser.error("provide both --extension-encoder and --crouch-encoder")
@@ -426,6 +581,20 @@ def main():
         f"motor_direction={calibration['motor_direction']:+.0f}, "
         f"knee_direction={calibration['knee_direction']:+.0f}"
     )
+    if args.write_yaml:
+        yaml_path, backup_path, motor_table, knee_table = write_four_bar_yaml(
+            joint_name=args.calf_joint,
+            layer=layer,
+            encoder_extension=encoder_extension,
+            encoder_crouch=encoder_crouch,
+            calibration=calibration,
+            table_points=args.table_points,
+            enable_yaml=args.enable_yaml,
+        )
+        print(f"Wrote four-bar lookup for {args.calf_joint}: {yaml_path}")
+        print(f"Backup: {backup_path}")
+        print(f"motor_angle_rad: {motor_table}")
+        print(f"knee_angle_rad:  {knee_table}")
     end_time = None if args.seconds <= 0 else time.monotonic() + args.seconds
 
     columns = [
