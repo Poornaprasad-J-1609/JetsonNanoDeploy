@@ -215,7 +215,17 @@ class FourBarMotorCommandLayer(MotorCommandLayer):
                 "motor_velocity",
             )
         )
-        if self.transmissions.require_feedback_for_commands and not feedback_ok:
+        # Policy/leveling commands use the live motor-side Jacobian to estimate
+        # and limit PD torque around the measured linkage state. Startup,
+        # sit/stand and hold pose moves can still be mapped safely from the
+        # calibrated virtual target when feedback is momentarily stale; this
+        # avoids a bootstrapping deadlock where we cannot send the next MIT
+        # command needed to refresh active feedback.
+        feedback_required = (
+            self.transmissions.require_feedback_for_commands
+            and phase in ("policy", "leveling")
+        )
+        if feedback_required and not feedback_ok:
             raise RuntimeError(
                 f"{joint_name}: nonlinear four-bar command requires fresh "
                 "motor feedback"
