@@ -2080,9 +2080,8 @@ def run_policy_loop(
     if policy_sim_match:
         print(
             "WARNING: policy_sim_match bypasses deployment action clipping, "
-            "action slew limiting, smoothing, policy target rate limiting, "
-            "and software PD torque target rewriting. "
-            "Use it only for suspended/dry sim comparison, not first ground walking."
+            "action slew limiting, smoothing, and policy target rate limiting. "
+            "Per-joint software PD torque clipping remains active."
         )
     print("stand_policy_stabilization:", bool(stand_policy_stabilization))
     print("walking_armed:", bool(walking_armed))
@@ -3710,8 +3709,6 @@ def main():
     )
     if args.policy_pd_torque_limit > 0.0:
         motor_layer.set_policy_pd_torque_limit(args.policy_pd_torque_limit)
-    elif args.policy_sim_match:
-        motor_layer.set_policy_pd_torque_limit(0.0)
     active_port_by_bus = ports_for_active_joints(
         port_by_bus,
         joint_can_bus,

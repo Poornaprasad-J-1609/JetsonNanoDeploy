@@ -318,8 +318,6 @@ def main():
         motor_ids=motor_cfg["motor_ids"],
         active_joints=runner.policy_order,
     )
-    if args.policy_sim_match:
-        motor_layer.set_policy_pd_torque_limit(0.0)
     directions = np.asarray(
         [motor_layer.joint_directions[name] for name in runner.policy_order],
         dtype=np.float32,
@@ -524,7 +522,15 @@ def main():
         ),
     )
     print("Simulation-match path on logged physical state:")
-    print("  estimated PD torque limit:", policy_torque_limit)
+    policy_torque_limits = [
+        motor_layer.policy_pd_torque_limit_for_joint(joint_name)
+        for joint_name in runner.policy_order
+    ]
+    print(
+        "  estimated PD torque limits:",
+        f"min={min(policy_torque_limits):.1f}",
+        f"max={max(policy_torque_limits):.1f}",
+    )
     print(
         "  sent-vs-sim target max/mean error:",
         float(np.nanmax(np.abs(sim_match_targets - sim_targets))),
