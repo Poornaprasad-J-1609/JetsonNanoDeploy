@@ -772,7 +772,9 @@ def main():
     parser.add_argument("--no-clear", action="store_true",
                         help="do not clear/redraw the terminal table")
     parser.add_argument("--disable-four-bar-transmission", action="store_true",
-                        help="force direct motor-angle decoding even if config/four_bar_transmission.yaml is enabled")
+                        help="force direct motor-angle decoding")
+    parser.add_argument("--enable-four-bar-transmission", action="store_true",
+                        help="opt in to four-bar encoder decoding from config/four_bar_transmission.yaml")
     args = parser.parse_args()
     if not math.isclose(float(args.set_zero_value_rad), 0.0, abs_tol=1e-12):
         parser.error("--set-zero-value-rad must be 0.0 for persistent motor hardware zero")
@@ -793,7 +795,8 @@ def main():
     motor_ids = motor_cfg["motor_ids"]
     display_joints = connection_display_order(joints, motor_ids)
     joint_can_bus = resolve_joint_can_bus(policy_order, args.can_count)
-    layer_cls = DirectMotorCommandLayer if args.disable_four_bar_transmission else FourBarMotorCommandLayer
+    use_four_bar = bool(args.enable_four_bar_transmission) and not bool(args.disable_four_bar_transmission)
+    layer_cls = FourBarMotorCommandLayer if use_four_bar else DirectMotorCommandLayer
     try:
         layer = layer_cls(
             policy_order=policy_order,
@@ -802,7 +805,7 @@ def main():
             joint_can_bus=joint_can_bus,
         )
     except Exception as exc:
-        if args.disable_four_bar_transmission:
+        if not use_four_bar:
             raise
         print("ERROR: four-bar transmission configuration is not usable:", exc)
         print(

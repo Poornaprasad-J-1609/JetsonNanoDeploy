@@ -1,0 +1,270 @@
+==== GRALLATOR JETSON MIT CONTROLLER ====
+Mode: print
+Command source: fixed
+Initial command: [0.05 0.   0.  ]
+Initial speed scale: 1.00
+Policy command gain: 1.50
+Policy command caps: vx=0.200 vy=0.140 yaw=0.000
+Policy action clip: 3.200
+Policy action smoothing: 0.25
+Policy action delta limit: 0.320
+Policy entry ramp: 0.90 s
+Policy PD torque limit: 30.00 Nm
+Walk command grace: 0.00 s
+Start control mode: policy
+Startup action: hold
+Policy: /home/poornaprasad/Work/WORKSPACE/Issacsim/isaaclab/GRALLATOR_DEPLOY/policy/policy.pt
+Policy SHA256: 965e94c4cebfc45b9ef609d4a677a5ee35961a895700aad478603f43844b3779
+Policy hash verified: True
+Policy format: torchscript
+Policy obs/actions: 48 12
+Control rate: runtime=50.00 Hz dt=0.0200s trained=50.00 Hz
+CAN topology: 2 adapter(s)
+  front -> /dev/ttyUSB0
+  back  -> /dev/ttyUSB0
+CAN backend: auto
+CAN bitrate: 1000000
+Serial adapter baud: 921600
+Feedback source: fake
+IMU source: fake
+IMU policy filter: enabled gyro_alpha=0.45 gyro_clip=[0.75, 0.45, 0.45]
+Active joints: all
+Fallback fake start pose: stand
+
+Joint order and motor IDs:
+00: BL_hip_joint     -> motor_id=0x0A
+01: BR_hip_joint     -> motor_id=0x07
+02: FL_hip_joint     -> motor_id=0x04
+03: FR_hip_joint     -> motor_id=0x01
+04: BL_thigh_joint   -> motor_id=0x0B
+05: BR_thigh_joint   -> motor_id=0x08
+06: FL_thigh_joint   -> motor_id=0x05
+07: FR_thigh_joint   -> motor_id=0x02
+08: BL_calf_joint    -> motor_id=0x0C
+09: BR_calf_joint    -> motor_id=0x09
+10: FL_calf_joint    -> motor_id=0x06
+11: FR_calf_joint    -> motor_id=0x03
+
+CSV log: /home/poornaprasad/Work/WORKSPACE/Issacsim/isaaclab/GRALLATOR_DEPLOY/logs/grallator_run_2026-07-18_11-01-47.csv
+CSV automatic Git push: disabled
+CSV policy I/O: input=obs_000..047, raw_output=action_00..11, sent_output=sent_action_00..11, motor_target=q_target_00..11/qd_target_00..11, feedback=q_00..11/qd_00..11, named_joint_columns=<joint>_q_fb/<joint>_q_target/<joint>_fb_position_raw/<joint>_fb_torque
+
+IMU opened: fake port: none
+
+################################################################################
+STARTUP PHASE: PASSIVE / IDLE
+################################################################################
+No hold, sit, stand, or walking command is sent until controller input.
+
+################################################################################
+RUNTIME CONTROL PHASE
+################################################################################
+mode: print
+Joystick buttons:
+  button 4    -> STOP walking and SIT/CROUCH pose
+  button 5    -> STAND pose
+  buttons 0-3 -> EMERGENCY STOP
+  D-pad zero request -> ignored while fixed hardware stand-zero is active
+Joystick axes:
+  left stick Y  -> forward/back vx
+  left stick X  -> left/right vy
+  right stick X -> turn/yaw
+Terminal keys:
+  w/s -> straight vx, a/d -> lateral vy, combine for xy diagonal
+  q/e -> positive/negative yaw; combine with translation if needed
+  c -> SIT/CROUCH, space -> STAND
+  up/down arrows -> increase/decrease speed scale
+  h -> HOLD current position, x -> EMERGENCY STOP
+start_control_mode: policy
+walk_command_threshold: 0.02
+walk_command_grace_seconds: 0.0
+base_lin_vel_source: zero
+zero_frame: stand
+zero_calibrated: True
+auto_stand_zero: False
+auto_sit_zero: False
+pose_sync_error_rad: 0.0
+policy_command_gain: 1.5
+policy_command_caps: vx=0.200 vy=0.140 yaw=0.000 (0 disables each cap)
+policy_action_clip: 3.2 (0 disables)
+policy_action_smoothing: 0.25 (0 disables)
+policy_action_delta_limit: 0.32 (0 disables)
+policy_entry_ramp_seconds: 0.9
+policy_sim_match: False (hard joint, encoder, tilt, and torque safety remain active)
+stand_policy_stabilization: False
+walking_armed: True
+hold_capture_seconds: 0.35
+hold_command_repeats: 2
+fresh_feedback_max_age_s: 0.04
+pose_transition_speed_rad_s: 0.4
+pose_transition_min_seconds: 1.5
+crouch_calibration_value: 0.0
+stand_calibration_value: 0.0
+imu_stabilization: False
+gait_assist: False
+policy_steps: 160
+step=000000 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 0.000 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000001 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 0.002 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000002 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 0.004 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000003 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 0.007 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000004 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 0.011 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000005 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 0.016 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000006 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 0.022 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000007 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 0.029 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000008 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 0.036 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000009 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 0.045 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000010 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 0.055 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000011 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 0.066 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.7 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000012 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 0.078 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.7 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000013 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 0.092 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000014 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 0.107 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000015 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 0.123 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.9 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000016 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 0.142 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000017 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 0.163 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000018 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 0.185 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000019 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 0.211 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000020 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 0.239 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000021 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 0.270 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000022 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 0.305 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000023 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 0.344 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000024 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 0.387 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000025 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 0.435 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.7 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000026 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 0.489 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000027 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 0.550 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000028 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 0.618 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.9 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000029 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 0.695 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.7 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000030 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 0.781 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000031 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 0.879 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000032 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 0.989 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000033 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 1.112 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.7 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000034 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 1.251 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000035 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 1.408 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.7 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000036 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 1.584 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.7 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000037 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 1.780 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000038 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 1.998 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000039 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 2.238 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000040 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 2.501 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.7 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000041 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 2.624 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000042 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 2.927 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.7 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000043 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.127 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.7 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000044 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.182 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.7 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000045 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.195 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.7 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000046 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.199 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000047 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.200 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000048 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.200 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000049 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.200 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000050 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.200 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000051 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.200 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000052 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.200 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.7 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000053 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 2.938 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000054 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.135 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000055 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 2.815 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000056 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.060 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000057 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.165 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.7 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000058 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.191 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.7 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000059 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.118 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000060 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.180 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000061 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.118 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000062 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.180 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.7 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000063 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.058 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000064 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.165 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.7 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000065 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.012 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000066 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.153 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000067 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.003 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000068 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.151 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000069 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.016 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000070 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.154 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000071 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.025 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000072 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.156 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000073 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.026 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000074 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.157 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000075 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.025 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000076 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.156 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000077 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.023 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000078 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.156 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000079 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.023 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000080 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.156 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.7 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000081 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.023 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.7 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000082 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.156 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.7 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000083 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.023 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.7 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000084 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.156 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000085 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.023 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000086 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.156 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.7 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000087 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.023 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.7 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000088 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.156 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000089 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.023 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000090 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.156 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000091 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.023 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000092 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.156 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000093 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.023 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000094 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.156 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000095 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.023 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000096 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.156 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000097 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.023 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000098 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.156 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.7 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000099 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.023 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.7 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000100 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.156 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000101 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.023 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000102 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.156 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.6 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000103 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.023 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000104 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.156 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.7 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000105 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.023 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.7 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000106 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.156 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.7 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000107 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.023 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000108 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.156 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000109 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.023 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000110 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.156 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000111 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.023 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000112 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.156 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.7 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000113 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.023 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.7 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000114 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.156 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000115 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.023 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000116 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.156 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000117 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.023 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000118 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.156 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000119 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.023 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000120 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.156 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000121 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.023 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000122 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.156 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000123 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.023 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000124 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.156 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000125 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.023 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000126 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.156 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000127 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.023 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.7 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000128 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.156 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000129 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.023 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000130 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.156 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000131 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.023 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.7 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000132 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.156 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000133 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.023 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.7 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000134 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.156 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000135 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.023 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000136 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.156 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000137 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.023 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000138 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.156 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000139 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.023 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000140 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.156 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000141 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.023 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000142 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.156 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.7 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000143 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.023 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000144 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.156 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000145 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.023 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000146 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.156 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000147 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.023 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000148 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.156 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.7 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000149 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.023 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000150 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.156 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.7 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000151 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.023 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.7 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000152 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.156 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.7 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000153 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.023 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.7 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000154 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.156 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000155 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.023 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000156 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.156 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.7 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000157 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.023 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.7 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000158 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.156 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.8 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+step=000159 mode=policy vx= 0.050 vy= 0.000 vxy= 0.050 yaw= 0.000 speed=1.00 imu=fake tilt_rp=[-0.0,+0.0]deg imu_corr=0.000 act_max= 3.023 tau_cmd= 0.000 tau_cmd_max= 0.000 cmds=12 bus=back:06 front:06 hz=49.7 policy_cmd=[ 0.075, 0.000, 0.000] tau_fb=na tau_fb_max=na
+
+Runtime control phase completed.
+CSV log saved: /home/poornaprasad/Work/WORKSPACE/Issacsim/isaaclab/GRALLATOR_DEPLOY/logs/grallator_run_2026-07-18_11-01-47.csv
+
+Controller finished.

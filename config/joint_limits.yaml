@@ -41,28 +41,29 @@ joint_limits:
     dq_max_per_step: 0.08
   FL_calf_joint:
     min: 0.0
-    max: 1.16
-    # Allow only a small policy over-target past the hard stop side. The sim
-    # actuator can ask beyond the stop while the simulated joint remains
-    # clamped; the real motor has to be bounded before safety trips.
-    policy_min: 0.0
-    policy_max: 1.16
+    max: 1.7
+    # IsaacSim's actuator is allowed to request PD targets beyond the
+    # articulation stop while the simulated joint itself remains bounded.
+    # Keep sit/crouch hard limits signed, but let policy targets use the full
+    # direct motor range so calf gait is not flattened to zero.
+    policy_min: -1.7
+    policy_max: 1.7
     dq_max_per_step: 0.080
   FR_calf_joint:
-    min: -1.16
+    min: -1.7
     max: 0.0
-    policy_min: -1.16
-    policy_max: 0.0
+    policy_min: -1.7
+    policy_max: 1.7
     dq_max_per_step: 0.080
   BL_calf_joint:
     min: 0.0
-    max: 1.16
-    policy_min: 0.0
-    policy_max: 1.16
+    max: 1.7
+    policy_min: -1.7
+    policy_max: 1.7
     dq_max_per_step: 0.080
   BR_calf_joint:
-    min: -1.16
+    min: -1.7
     max: 0.0
-    policy_min: -1.16
-    policy_max: 0.0
+    policy_min: -1.7
+    policy_max: 1.7
     dq_max_per_step: 0.080

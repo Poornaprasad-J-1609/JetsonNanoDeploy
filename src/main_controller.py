@@ -21,8 +21,7 @@ from safety_monitor import SafetyMonitor
 from state_estimator import FakeStateEstimator, MitFeedbackStateEstimator
 from joystick_interface import CommandSource, load_joystick_defaults, load_speed_scale_defaults
 from imu_interface import create_imu_sensor, load_imu_config
-from four_bar_motor_command_layer import FourBarMotorCommandLayer as MotorCommandLayer
-from motor_command_layer import print_mit_commands
+from motor_command_layer import MotorCommandLayer, print_mit_commands
 from can_topology import (
     add_can_topology_args,
     close_can_buses,
@@ -1453,6 +1452,9 @@ def encoder_safety_stop_reason(
     q_shift=None,
     feedback_by_joint=None,
 ):
+    if not encoder_feedback_required(mode, estimator) and feedback_by_joint is None:
+        return None
+
     q_current = getattr(estimator, "q_current", None)
     if q_current is None:
         return "ABNORMAL ENCODER ANGLE: estimator has no joint position vector"

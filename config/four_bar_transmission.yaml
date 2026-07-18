@@ -1,5 +1,5 @@
 four_bar_transmission:
-  enabled: true
+  enabled: false
   require_feedback_for_commands: true
   clamp_policy_to_hard_limits: true
   profiles:
