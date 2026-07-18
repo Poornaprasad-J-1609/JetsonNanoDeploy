@@ -276,6 +276,7 @@ class SafetyMonitor:
         active_joints=None,
         feedback_by_joint=None,
         require_feedback=False,
+        use_policy_limits=False,
     ):
         """
         Stop motion when measured encoder angles are clearly impossible/unsafe.
@@ -403,8 +404,10 @@ class SafetyMonitor:
                 continue
 
             q = float(q_current[index])
-            q_min = float(self.q_min[index]) - margin
-            q_max = float(self.q_max[index]) + margin
+            limit_min = self.policy_q_min if use_policy_limits else self.q_min
+            limit_max = self.policy_q_max if use_policy_limits else self.q_max
+            q_min = float(limit_min[index]) - margin
+            q_max = float(limit_max[index]) + margin
 
             if not np.isfinite(q):
                 violations.append(f"{joint_name}=non-finite")

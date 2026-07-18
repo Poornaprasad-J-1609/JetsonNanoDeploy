@@ -984,13 +984,22 @@ class CsvRunLogger:
                 return candidate
             repeat += 1
 
-    def __init__(self, enabled=True, log_dir=None, log_file=None, policy_order=None):
+    def __init__(
+        self,
+        enabled=True,
+        log_dir=None,
+        log_file=None,
+        policy_order=None,
+        flush_every=1,
+    ):
         self.enabled = bool(enabled)
         self.path = None
         self.run_id = datetime.now().astimezone().strftime("%Y-%m-%d_%H-%M-%S")
         self.start_time = time.monotonic()
         self._file = None
         self._writer = None
+        self.flush_every = max(1, int(flush_every))
+        self._rows_since_flush = 0
         self.fieldnames = list(self.BASE_FIELDNAMES)
         self.fieldnames.extend(joint_telemetry_fieldnames(policy_order or []))
 
@@ -1030,10 +1039,14 @@ class CsvRunLogger:
         if row["tau_fb_max"] is None:
             row["tau_fb_max"] = ""
         self._writer.writerow(row)
-        self._file.flush()
+        self._rows_since_flush += 1
+        if self._rows_since_flush >= self.flush_every:
+            self._file.flush()
+            self._rows_since_flush = 0
 
     def close(self):
         if self._file is not None:
+            self._file.flush()
             self._file.close()
             self._file = None
 
@@ -1451,6 +1464,7 @@ def encoder_safety_stop_reason(
     require_feedback=None,
     q_shift=None,
     feedback_by_joint=None,
+    use_policy_limits=False,
 ):
     if not encoder_feedback_required(mode, estimator) and feedback_by_joint is None:
         return None
@@ -1474,6 +1488,7 @@ def encoder_safety_stop_reason(
             else feedback_by_joint
         ),
         require_feedback=require_feedback,
+        use_policy_limits=use_policy_limits,
     )
     return reason if stop else None
 
@@ -1882,6 +1897,7 @@ def run_policy_loop(
     q_previous_target,
     steps,
     log_every,
+    print_every,
     show_hex,
     start_control_mode,
     feedback_timeout,
@@ -2552,7 +2568,7 @@ def run_policy_loop(
         )
         if not walking_armed and walk_requested:
             walk_requested = False
-            if step % max(1, log_every) == 0:
+            if step % max(1, print_every) == 0:
                 print("[POSE] walking blocked until STAND reaches its target.")
         if (
             walk_requested
@@ -2572,7 +2588,7 @@ def run_policy_loop(
                 live_feedback_max_age_s,
             )
             if fresh < len(motor_layer.active_joints):
-                if step % max(1, log_every) == 0:
+                if step % max(1, print_every) == 0:
                     print(
                         f"[FEEDBACK] walking blocked: only {fresh}/"
                         f"{len(motor_layer.active_joints)} active joints have fresh MIT feedback."
@@ -2632,7 +2648,7 @@ def run_policy_loop(
                 )
 
             if live_feedback_missing:
-                if step % max(1, log_every) == 0:
+                if step % max(1, print_every) == 0:
                     shown = ", ".join(live_feedback_missing[:4])
                     if len(live_feedback_missing) > 4:
                         shown += f", +{len(live_feedback_missing) - 4} more"
@@ -2867,7 +2883,7 @@ def run_policy_loop(
             and encoder_feedback_required(mode, estimator)
             and post_send_missing_feedback
         )
-        if post_send_feedback_incomplete and step % max(1, log_every) == 0:
+        if post_send_feedback_incomplete and step % max(1, print_every) == 0:
             shown = ", ".join(post_send_missing_feedback[:4])
             if len(post_send_missing_feedback) > 4:
                 shown += f", +{len(post_send_missing_feedback) - 4} more"
@@ -2891,6 +2907,7 @@ def run_policy_loop(
             require_feedback=require_command_feedback,
             q_shift=q_coordinate_shift,
             feedback_by_joint=safety_feedback_by_joint,
+            use_policy_limits=(active_control_mode == "policy"),
         )
         if reason is not None:
             print("\nEMERGENCY STOP:", reason)
@@ -2942,7 +2959,7 @@ def run_policy_loop(
                     # joint follows more slowly than the others. Hard joint,
                     # rate, torque, encoder, and tilt limits remain enforced.
                     target_advance_scale = max(0.15, smoothstep(normalized))
-                    if step % max(1, log_every) == 0:
+                    if step % max(1, print_every) == 0:
                         print(
                             f"[SYNC] slowing pose trajectory: max joint lag "
                             f"{sync_error:.3f} rad, advance="
@@ -3082,7 +3099,9 @@ def run_policy_loop(
                         f"q={float(crouch_calibration_value):+.3f}."
                     )
 
-        if step % log_every == 0:
+        should_log_csv = step % max(1, log_every) == 0
+        should_print = step % max(1, print_every) == 0
+        if should_log_csv or should_print:
             telemetry_record = compact_telemetry_record(
                 step=step,
                 mode=active_control_mode,
@@ -3113,14 +3132,15 @@ def run_policy_loop(
                 feedback_age_max_s=feedback_age_max_s,
                 feedback_fresh_count=feedback_fresh_count,
             )
-            print(compact_telemetry_line(telemetry_record))
-            if csv_logger is not None:
+            if should_print:
+                print(compact_telemetry_line(telemetry_record))
+            if csv_logger is not None and should_log_csv:
                 csv_logger.log(telemetry_record)
-            if show_hex and commands:
+            if show_hex and commands and should_print:
                 print_mit_commands(commands, show_hex=True)
-            if joystick_debug:
+            if joystick_debug and should_print:
                 print_joystick_debug(command_source)
-            if joint_debug:
+            if joint_debug and should_print:
                 print_joint_debug(commands, estimator)
 
         q_sent_target = np.asarray(q_safe_target, dtype=np.float32).copy()
@@ -3347,6 +3367,12 @@ def main():
     )
     parser.add_argument("--standup-seconds", type=float, default=None)
     parser.add_argument("--log-every", type=int, default=25)
+    parser.add_argument(
+        "--print-every",
+        type=int,
+        default=0,
+        help="terminal telemetry print interval in control steps; 0 follows --log-every",
+    )
     parser.add_argument("--show-hex", action="store_true")
     parser.add_argument("--start-control-mode", choices=["idle", "hold", "stand", "sit", "policy"], default="idle")
     parser.add_argument("--startup-action", choices=["hold", "stand"], default="hold")
@@ -3613,6 +3639,12 @@ def main():
         help="exact CSV log file path; overrides --log-dir",
     )
     parser.add_argument(
+        "--csv-flush-every",
+        type=int,
+        default=1,
+        help="flush the CSV file after this many logged rows; increase to reduce disk stalls",
+    )
+    parser.add_argument(
         "--auto-push-log",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -3629,6 +3661,8 @@ def main():
 
     args = parser.parse_args()
     args.log_every = max(1, args.log_every)
+    args.print_every = args.log_every if args.print_every <= 0 else max(1, args.print_every)
+    args.csv_flush_every = max(1, int(args.csv_flush_every))
     args.policy_steps = None if args.policy_steps <= 0 else args.policy_steps
     args.walk_command_threshold = max(0.0, args.walk_command_threshold)
     args.walk_command_grace_seconds = max(0.0, float(args.walk_command_grace_seconds))
@@ -3873,6 +3907,7 @@ def main():
             log_dir=args.log_dir,
             log_file=args.log_file,
             policy_order=runner.policy_order,
+            flush_every=args.csv_flush_every,
         )
         if csv_logger.enabled:
             print("\nCSV log:", csv_logger.path)
@@ -4098,6 +4133,7 @@ def main():
             q_previous_target=q_previous_target,
             steps=args.policy_steps,
             log_every=args.log_every,
+            print_every=args.print_every,
             show_hex=args.show_hex,
             start_control_mode=args.start_control_mode,
             feedback_timeout=args.feedback_timeout,
