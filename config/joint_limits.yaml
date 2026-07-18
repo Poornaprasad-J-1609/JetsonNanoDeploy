@@ -2,68 +2,75 @@ joint_limits:
   FL_hip_joint:
     min: -0.5
     max: 0.5
-    policy_min: -0.3
-    policy_max: 0.3
+    policy_min: -0.90
+    policy_max: 0.90
     dq_max_per_step: 0.08
   FR_hip_joint:
     min: -0.5
     max: 0.5
-    policy_min: -0.3
-    policy_max: 0.3
+    policy_min: -0.90
+    policy_max: 0.90
     dq_max_per_step: 0.08
   BL_hip_joint:
     min: -0.5
     max: 0.5
-    policy_min: -0.3
-    policy_max: 0.3
+    policy_min: -0.90
+    policy_max: 0.90
     dq_max_per_step: 0.08
   BR_hip_joint:
     min: -0.5
     max: 0.5
-    policy_min: -0.3
-    policy_max: 0.3
+    policy_min: -0.90
+    policy_max: 0.90
     dq_max_per_step: 0.08
   FL_thigh_joint:
     min: -2.0
     max: 2.0
+    policy_min: -1.68
+    policy_max: 1.68
     dq_max_per_step: 0.08
   FR_thigh_joint:
     min: -2.0
     max: 2.0
+    policy_min: -1.68
+    policy_max: 1.68
     dq_max_per_step: 0.08
   BL_thigh_joint:
     min: -2.0
     max: 2.0
+    policy_min: -1.68
+    policy_max: 1.68
     dq_max_per_step: 0.08
   BR_thigh_joint:
     min: -2.0
     max: 2.0
+    policy_min: -1.68
+    policy_max: 1.68
     dq_max_per_step: 0.08
   FL_calf_joint:
     min: 0.0
     max: 1.36
-    # IsaacSim's actuator is allowed to request PD targets beyond the
-    # articulation stop while the simulated joint itself remains bounded.
-    # Keep sit/crouch hard limits signed, but let policy targets use the full
-    # direct motor range so calf gait is not flattened to zero.
-    policy_min: 0.0
-    policy_max: 1.36
+    # Walking policy targets follow q_default + 0.25 * raw_action. Keep this
+    # wider than the crouch hard stop so the actor's gait is not flattened.
+    # Measured encoder sanity still uses min/max plus margin below.
+    policy_min: -2.0
+    policy_max: 2.0
     dq_max_per_step: 0.080
   FR_calf_joint:
     min: -1.36
     max: 0.0
-    policy_min: -1.36
-    policy_max: 0
+    policy_min: -2.0
+    policy_max: 2.0
     dq_max_per_step: 0.080
   BL_calf_joint:
     min: 0.0
     max: 1.36
-    policy_min: 0
-    policy_max: 1.36
+    policy_min: -2.0
+    policy_max: 2.0
     dq_max_per_step: 0.080
   BR_calf_joint:
     min: -1.36
     max: 0.0
-    policy_min: -1.36
-    policy_max: 0
+    policy_min: -2.0
+    policy_max: 2.0
     dq_max_per_step: 0.080

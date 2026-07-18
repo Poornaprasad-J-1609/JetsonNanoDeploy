@@ -2080,7 +2080,8 @@ def run_policy_loop(
     if policy_sim_match:
         print(
             "WARNING: policy_sim_match bypasses deployment action clipping, "
-            "action slew limiting, smoothing, and policy target rate limiting. "
+            "action slew limiting, smoothing, policy target rate limiting, "
+            "and software PD torque target rewriting. "
             "Use it only for suspended/dry sim comparison, not first ground walking."
         )
     print("stand_policy_stabilization:", bool(stand_policy_stabilization))
@@ -3565,8 +3566,11 @@ def main():
     parser.add_argument(
         "--policy-pd-torque-limit",
         type=float,
-        default=float(policy_deploy_defaults.get("estimated_pd_torque_limit", 25.0)),
-        help="estimated per-joint policy PD torque ceiling in Nm; must be positive",
+        default=0.0,
+        help=(
+            "override all YAML policy PD torque limits in Nm; 0 uses "
+            "config/control_limits.yaml, including per-joint limits"
+        ),
     )
     parser.add_argument(
         "--policy-sim-match",
@@ -3638,8 +3642,8 @@ def main():
     args.policy_action_delta_limit = max(0.0, float(args.policy_action_delta_limit))
     if not np.isfinite(args.policy_entry_ramp_seconds) or args.policy_entry_ramp_seconds < 0.0:
         parser.error("--policy-entry-ramp-seconds must be finite and >= 0")
-    if not np.isfinite(args.policy_pd_torque_limit) or args.policy_pd_torque_limit <= 0.0:
-        parser.error("--policy-pd-torque-limit must be finite and > 0")
+    if not np.isfinite(args.policy_pd_torque_limit) or args.policy_pd_torque_limit < 0.0:
+        parser.error("--policy-pd-torque-limit must be finite and >= 0")
     if not np.isfinite(args.fresh_feedback_max_age) or args.fresh_feedback_max_age < 0.0:
         parser.error("--fresh-feedback-max-age must be finite and >= 0")
     if not np.isfinite(args.control_hz) or args.control_hz < 0.0:
@@ -3704,7 +3708,10 @@ def main():
         active_joints=active_joints,
         joint_can_bus=joint_can_bus,
     )
-    motor_layer.set_policy_pd_torque_limit(args.policy_pd_torque_limit)
+    if args.policy_pd_torque_limit > 0.0:
+        motor_layer.set_policy_pd_torque_limit(args.policy_pd_torque_limit)
+    elif args.policy_sim_match:
+        motor_layer.set_policy_pd_torque_limit(0.0)
     active_port_by_bus = ports_for_active_joints(
         port_by_bus,
         joint_can_bus,
@@ -3795,7 +3802,18 @@ def main():
     print("Policy action smoothing:", f"{args.policy_action_smoothing:.2f}")
     print("Policy action delta limit:", f"{args.policy_action_delta_limit:.3f}")
     print("Policy entry ramp:", f"{args.policy_entry_ramp_seconds:.2f} s")
-    print("Policy PD torque limit:", f"{args.policy_pd_torque_limit:.2f} Nm")
+    if args.policy_pd_torque_limit > 0.0:
+        print("Policy PD torque limit:", f"{args.policy_pd_torque_limit:.2f} Nm override")
+    else:
+        torque_limits = [
+            motor_layer.policy_pd_torque_limit_for_joint(joint_name)
+            for joint_name in runner.policy_order
+        ]
+        print(
+            "Policy PD torque limits:",
+            f"config per-joint min={min(torque_limits):.2f} "
+            f"max={max(torque_limits):.2f} Nm",
+        )
     print("Walk command grace:", f"{args.walk_command_grace_seconds:.2f} s")
     print("Start control mode:", args.start_control_mode)
     print("Startup action:", args.startup_action)

@@ -31,35 +31,41 @@ policy_deployment:
   # These affect only the policy inference path. The joystick speed_scale still
   # limits the real commanded velocity, and config/joint_limits.yaml is still
   # the final hard wall before MIT packets are sent.
-  command_gain: 1.5
+  command_gain: 1.0
   # Absolute caps after command_gain. Use 0.0 to disable a cap and match the
   # IsaacSim play script more directly.
-  # Keep first ground walking tests slow enough to show gait without a large
-  # stance-leg torque step when W/S is pressed.
-  command_vx_abs_max: 0.20
-  command_vy_abs_max: 0.14
+  # 0 disables the cap so obs[9:12] matches the sim keyboard command pipeline.
+  command_vx_abs_max: 0.0
+  command_vy_abs_max: 0.0
   command_yaw_abs_max: 0.0
-  # The 20260713 IsaacLab log has walking action p95 around 3-4. A 1.2 clip
-  # erased the gait. For first real ground tests, keep enough action for trot
-  # rhythm while trimming the largest target jumps.
-  action_clip_abs: 3.2
-  action_smoothing: 0.25
-  # Hardware-side action slew guard. At 50 Hz and action_scale=0.25,
-  # 0.22 action units is about 0.055 rad target change per control cycle.
-  # The raw policy action is still logged and fed back to obs[36:48] unchanged.
-  action_delta_limit_abs: 0.32
-  # Blend from the settled stand pose into the first walking targets. Keep this
-  # under one second for terminal-keyboard tests; a long ramp makes W feel
-  # delayed and the gait only becomes visible after the key is released.
-  policy_entry_ramp_seconds: 0.9
+  # Sim-matching defaults: the actor output is used directly with action_scale
+  # from config/joint_map.yaml. Add CLI filtering only for intentionally
+  # softened hardware tests.
+  action_clip_abs: 0.0
+  action_smoothing: 0.0
+  action_delta_limit_abs: 0.0
+  policy_entry_ramp_seconds: 0.0
   # Before packing a walking MIT command, constrain its estimated joint-space
   # PD torque around fresh encoder feedback. The independent measured-feedback
   # emergency stop remains in config/safety_limits.yaml.
-  # The 2026-07-14 ground log showed thigh lag near 0.5 rad while policy
-  # commands were pinned at 40 Nm. A 47 kg robot needs more stance/support
-  # authority; measured torque emergency remains separately guarded by
-  # config/safety_limits.yaml.
-  estimated_pd_torque_limit: 60.0
+  # Fallback limit when a joint is not listed below.
+  estimated_pd_torque_limit: 95.0
+  # Per-joint effort limits copied from the MuJoCo sim2real metadata, capped at
+  # the RS04 practical command range where needed. This avoids flattening all
+  # joints through one global 60 Nm limiter.
+  estimated_pd_torque_limits:
+    BL_hip_joint: 75.0
+    BR_hip_joint: 75.0
+    FL_hip_joint: 60.0
+    FR_hip_joint: 60.0
+    BL_thigh_joint: 120.0
+    BR_thigh_joint: 120.0
+    FL_thigh_joint: 90.0
+    FR_thigh_joint: 90.0
+    BL_calf_joint: 120.0
+    BR_calf_joint: 120.0
+    FL_calf_joint: 95.0
+    FR_calf_joint: 95.0
 
 joint_position:
   enabled: true

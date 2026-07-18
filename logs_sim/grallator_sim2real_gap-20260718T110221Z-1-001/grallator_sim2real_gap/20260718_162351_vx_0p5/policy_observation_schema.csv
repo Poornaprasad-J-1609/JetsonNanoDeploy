@@ -1,0 +1,49 @@
+observation_index,csv_column,meaning,source,units
+0,obs_000,base_linear_velocity_x,hardcoded_exact_zero,m/s
+1,obs_001,base_linear_velocity_y,hardcoded_exact_zero,m/s
+2,obs_002,base_linear_velocity_z,hardcoded_exact_zero,m/s
+3,obs_003,base_angular_velocity_body_x,MuJoCo xsens_mti630_gyro,rad/s
+4,obs_004,base_angular_velocity_body_y,MuJoCo xsens_mti630_gyro,rad/s
+5,obs_005,base_angular_velocity_body_z,MuJoCo xsens_mti630_gyro,rad/s
+6,obs_006,projected_gravity_body_x,"R_world_body.T @ [0,0,-1]",unitless
+7,obs_007,projected_gravity_body_y,"R_world_body.T @ [0,0,-1]",unitless
+8,obs_008,projected_gravity_body_z,"R_world_body.T @ [0,0,-1]",unitless
+9,obs_009,command_vx,scripted_gap_test_or_logitech,m/s
+10,obs_010,command_vy,scripted_gap_test_or_logitech,m/s
+11,obs_011,command_yaw_rate,scripted_gap_test_or_logitech,rad/s
+12,obs_012,joint_position_relative_BL_hip_joint,q - q_default,rad
+13,obs_013,joint_position_relative_BR_hip_joint,q - q_default,rad
+14,obs_014,joint_position_relative_FL_hip_joint,q - q_default,rad
+15,obs_015,joint_position_relative_FR_hip_joint,q - q_default,rad
+16,obs_016,joint_position_relative_BL_thigh_joint,q - q_default,rad
+17,obs_017,joint_position_relative_BR_thigh_joint,q - q_default,rad
+18,obs_018,joint_position_relative_FL_thigh_joint,q - q_default,rad
+19,obs_019,joint_position_relative_FR_thigh_joint,q - q_default,rad
+20,obs_020,joint_position_relative_BL_calf_joint,q - q_default,rad
+21,obs_021,joint_position_relative_BR_calf_joint,q - q_default,rad
+22,obs_022,joint_position_relative_FL_calf_joint,q - q_default,rad
+23,obs_023,joint_position_relative_FR_calf_joint,q - q_default,rad
+24,obs_024,joint_velocity_BL_hip_joint,MuJoCo qvel,rad/s
+25,obs_025,joint_velocity_BR_hip_joint,MuJoCo qvel,rad/s
+26,obs_026,joint_velocity_FL_hip_joint,MuJoCo qvel,rad/s
+27,obs_027,joint_velocity_FR_hip_joint,MuJoCo qvel,rad/s
+28,obs_028,joint_velocity_BL_thigh_joint,MuJoCo qvel,rad/s
+29,obs_029,joint_velocity_BR_thigh_joint,MuJoCo qvel,rad/s
+30,obs_030,joint_velocity_FL_thigh_joint,MuJoCo qvel,rad/s
+31,obs_031,joint_velocity_FR_thigh_joint,MuJoCo qvel,rad/s
+32,obs_032,joint_velocity_BL_calf_joint,MuJoCo qvel,rad/s
+33,obs_033,joint_velocity_BR_calf_joint,MuJoCo qvel,rad/s
+34,obs_034,joint_velocity_FL_calf_joint,MuJoCo qvel,rad/s
+35,obs_035,joint_velocity_FR_calf_joint,MuJoCo qvel,rad/s
+36,obs_036,previous_policy_action_BL_hip_joint,raw_actor_output_from_previous_policy_step,unitless
+37,obs_037,previous_policy_action_BR_hip_joint,raw_actor_output_from_previous_policy_step,unitless
+38,obs_038,previous_policy_action_FL_hip_joint,raw_actor_output_from_previous_policy_step,unitless
+39,obs_039,previous_policy_action_FR_hip_joint,raw_actor_output_from_previous_policy_step,unitless
+40,obs_040,previous_policy_action_BL_thigh_joint,raw_actor_output_from_previous_policy_step,unitless
+41,obs_041,previous_policy_action_BR_thigh_joint,raw_actor_output_from_previous_policy_step,unitless
+42,obs_042,previous_policy_action_FL_thigh_joint,raw_actor_output_from_previous_policy_step,unitless
+43,obs_043,previous_policy_action_FR_thigh_joint,raw_actor_output_from_previous_policy_step,unitless
+44,obs_044,previous_policy_action_BL_calf_joint,raw_actor_output_from_previous_policy_step,unitless
+45,obs_045,previous_policy_action_BR_calf_joint,raw_actor_output_from_previous_policy_step,unitless
+46,obs_046,previous_policy_action_FL_calf_joint,raw_actor_output_from_previous_policy_step,unitless
+47,obs_047,previous_policy_action_FR_calf_joint,raw_actor_output_from_previous_policy_step,unitless

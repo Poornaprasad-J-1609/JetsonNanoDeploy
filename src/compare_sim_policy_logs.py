@@ -123,6 +123,14 @@ def main():
             "base linear velocity for the 48-slot zero-base policy contract"
         ),
     )
+    parser.add_argument(
+        "--policy-sim-match",
+        action="store_true",
+        help=(
+            "compare the raw sim-matching runtime path: no action shaping, "
+            "no target rate limiting, and no software PD torque target rewrite"
+        ),
+    )
     args = parser.parse_args()
 
     runner = PolicyRunner(policy_path=args.policy_path)
@@ -247,6 +255,10 @@ def main():
     action_clip = float(deployment_cfg.get("action_clip_abs", 0.0))
     action_smoothing = float(deployment_cfg.get("action_smoothing", 0.0))
     action_delta_limit = float(deployment_cfg.get("action_delta_limit_abs", 0.0))
+    if args.policy_sim_match:
+        action_clip = 0.0
+        action_smoothing = 0.0
+        action_delta_limit = 0.0
 
     shaped_actions = np.zeros_like(replay_actions)
     shaped_logged_actions = np.zeros_like(sim_actions)
@@ -279,16 +291,19 @@ def main():
         safety.policy_q_min[None, :],
         safety.policy_q_max[None, :],
     )
-    runtime_targets = np.zeros_like(shaped_policy_targets)
-    previous_target = runner.q_default.copy()
-    for index in range(len(rows)):
-        runtime_targets[index] = safety.safety_filter(
-            shaped_logged_targets[index],
-            previous_target,
-            apply_rate_limit=True,
-            use_policy_limits=True,
-        )
-        previous_target = runtime_targets[index]
+    if args.policy_sim_match:
+        runtime_targets = shaped_policy_targets.copy()
+    else:
+        runtime_targets = np.zeros_like(shaped_policy_targets)
+        previous_target = runner.q_default.copy()
+        for index in range(len(rows)):
+            runtime_targets[index] = safety.safety_filter(
+                shaped_logged_targets[index],
+                previous_target,
+                apply_rate_limit=True,
+                use_policy_limits=True,
+            )
+            previous_target = runtime_targets[index]
 
     action_shaping_error = np.abs(shaped_logged_actions - sim_actions)
     hard_limit_error = np.abs(shaped_policy_targets - shaped_logged_targets)
@@ -303,6 +318,8 @@ def main():
         motor_ids=motor_cfg["motor_ids"],
         active_joints=runner.policy_order,
     )
+    if args.policy_sim_match:
+        motor_layer.set_policy_pd_torque_limit(0.0)
     directions = np.asarray(
         [motor_layer.joint_directions[name] for name in runner.policy_order],
         dtype=np.float32,
@@ -355,7 +372,6 @@ def main():
         safety.policy_q_max[None, :],
     )
     sim_match_torque_estimate = np.full_like(sim_match_targets, np.nan)
-    policy_torque_limit = float(motor_layer.policy_pd_torque_limit)
     policy_command_proto = motor_layer.command_proto_for_phase("policy")
     for joint_index, joint_name in enumerate(runner.policy_order):
         group = joint_group(joint_name)
@@ -379,6 +395,7 @@ def main():
             & np.isfinite(sim_positions[:, joint_index])
             & np.isfinite(sim_velocities[:, joint_index])
         )
+        policy_torque_limit = motor_layer.policy_pd_torque_limit_for_joint(joint_name)
         q_feedback = sim_positions[valid, joint_index]
         qd_feedback = sim_velocities[valid, joint_index]
         velocity_torque = -effective_kd * qd_feedback
