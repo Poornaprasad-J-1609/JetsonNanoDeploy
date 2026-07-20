@@ -56,6 +56,106 @@ class ImuReading:
     cross_err: float | None = None
 
 
+def policy_frame_roll_pitch_from_gravity(projected_gravity_b):
+    g = np.asarray(projected_gravity_b, dtype=np.float32).reshape(3)
+    down_z = max(1e-6, -float(g[2]))
+    roll = float(np.arctan2(-float(g[1]), down_z))
+    pitch = float(np.arctan2(float(g[0]), down_z))
+    return roll, pitch
+
+
+def imu_reading_quality(
+    reading,
+    previous_timestamp=None,
+    require_timestamp_advance=False,
+    stale_timeout=0.25,
+    now=None,
+    gravity_norm_tolerance=0.25,
+    max_roll_pitch_deg=60.0,
+):
+    """Validate the policy-frame IMU sample without changing the sample."""
+    if reading is None:
+        return False, "no IMU sample"
+
+    now = time.monotonic() if now is None else float(now)
+    reasons = []
+
+    timestamp = getattr(reading, "timestamp", None)
+    try:
+        timestamp = float(timestamp)
+    except (TypeError, ValueError):
+        timestamp = None
+        reasons.append("timestamp missing")
+
+    if timestamp is not None:
+        age = now - timestamp
+        if not np.isfinite(age) or age < -0.05:
+            reasons.append(f"timestamp invalid age={age!r}")
+        elif age > float(stale_timeout):
+            reasons.append(f"stale age={age:.3f}s timeout={float(stale_timeout):.3f}s")
+        if previous_timestamp is not None and bool(require_timestamp_advance):
+            try:
+                previous_timestamp = float(previous_timestamp)
+            except (TypeError, ValueError):
+                previous_timestamp = None
+            if previous_timestamp is not None and timestamp <= previous_timestamp:
+                reasons.append("timestamp did not advance")
+
+    gyro = np.asarray(getattr(reading, "base_ang_vel_b", []), dtype=np.float32)
+    if gyro.shape != (3,) or not np.all(np.isfinite(gyro)):
+        reasons.append("gyro is not finite 3-vector")
+
+    gravity = np.asarray(getattr(reading, "projected_gravity_b", []), dtype=np.float32)
+    if gravity.shape != (3,) or not np.all(np.isfinite(gravity)):
+        reasons.append("projected gravity is not finite 3-vector")
+    else:
+        gravity_norm = float(np.linalg.norm(gravity))
+        if (
+            not np.isfinite(gravity_norm)
+            or abs(gravity_norm - 1.0) > float(gravity_norm_tolerance)
+        ):
+            reasons.append(f"projected gravity norm={gravity_norm:.3f}")
+        roll, pitch = policy_frame_roll_pitch_from_gravity(gravity)
+        max_rp = math.radians(float(max_roll_pitch_deg))
+        if abs(roll) > max_rp or abs(pitch) > max_rp:
+            reasons.append(
+                f"roll/pitch outside plausible range: "
+                f"roll={math.degrees(roll):+.1f}deg pitch={math.degrees(pitch):+.1f}deg"
+            )
+
+    quat = getattr(reading, "quaternion_wxyz", None)
+    if quat is not None:
+        quat = np.asarray(quat, dtype=np.float32)
+        if quat.shape != (4,) or not np.all(np.isfinite(quat)):
+            reasons.append("quaternion is not finite 4-vector")
+        else:
+            quat_norm = float(np.linalg.norm(quat))
+            if not np.isfinite(quat_norm) or not (0.5 <= quat_norm <= 1.5):
+                reasons.append(f"quaternion norm={quat_norm:.3f}")
+
+    det_r = getattr(reading, "det_r", None)
+    if det_r is not None:
+        try:
+            det_r = float(det_r)
+        except (TypeError, ValueError):
+            det_r = None
+        if det_r is None or not np.isfinite(det_r) or abs(det_r - 1.0) > 0.05:
+            reasons.append(f"rotation determinant invalid: {det_r}")
+
+    cross_err = getattr(reading, "cross_err", None)
+    if cross_err is not None:
+        try:
+            cross_err = float(cross_err)
+        except (TypeError, ValueError):
+            cross_err = None
+        if cross_err is None or not np.isfinite(cross_err) or cross_err > 0.05:
+            reasons.append(f"rotation cross error invalid: {cross_err}")
+
+    if reasons:
+        return False, "; ".join(reasons)
+    return True, "ok"
+
+
 def as_vector3(value, name):
     arr = np.asarray(value, dtype=np.float32)
     if arr.shape != (3,):

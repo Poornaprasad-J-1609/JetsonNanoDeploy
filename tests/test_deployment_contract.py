@@ -17,8 +17,13 @@ from can_topology import (
     resolve_port_by_bus,
     validate_unique_motor_ids_per_physical_bus,
 )
+from imu_interface import ImuReading, imu_reading_quality
 from joystick_interface import CommandSource
-from main_controller import action_equivalent_for_q_target, smoothstep
+from main_controller import (
+    action_equivalent_for_q_target,
+    validate_required_policy_imu,
+    smoothstep,
+)
 from motor_command_layer import (
     MotorCommandLayer,
     decode_mit_feedback_frame,
@@ -107,6 +112,78 @@ def test_policy_contract_observation_and_action():
     assert np.all(np.isfinite(action))
     with pytest.raises(ValueError):
         runner.infer_action(np.zeros(45, dtype=np.float32))
+
+
+def test_live_imu_populates_policy_slots_without_base_velocity():
+    runner = PolicyRunner()
+    gyro = np.array([0.11, -0.22, 0.33], dtype=np.float32)
+    gravity = np.array([0.05, -0.04, -0.998], dtype=np.float32)
+    previous = np.linspace(-0.2, 0.2, 12, dtype=np.float32)
+    obs = runner.build_observation(
+        base_ang_vel_b=gyro,
+        projected_gravity_b=gravity,
+        command=np.array([0.1, 0.0, 0.0], dtype=np.float32),
+        q_current=runner.q_default.copy(),
+        qd_current=np.zeros(12, dtype=np.float32),
+        previous_action=previous,
+    )
+    np.testing.assert_array_equal(obs[0:3], np.zeros(3, dtype=np.float32))
+    np.testing.assert_allclose(obs[3:6], gyro)
+    np.testing.assert_allclose(obs[6:9], gravity)
+    np.testing.assert_allclose(obs[36:48], previous)
+
+
+def test_imu_reading_quality_accepts_valid_and_rejects_bad_vectors():
+    valid = ImuReading(
+        base_ang_vel_b=np.array([0.01, 0.02, 0.03], dtype=np.float32),
+        projected_gravity_b=np.array([0.0, 0.0, -1.0], dtype=np.float32),
+        base_lin_vel_b=np.zeros(3, dtype=np.float32),
+        timestamp=time.monotonic(),
+        quaternion_wxyz=np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32),
+        rpy_abs_deg=np.zeros(3, dtype=np.float32),
+        det_r=1.0,
+        cross_err=0.0,
+    )
+    ok, reason = imu_reading_quality(valid)
+    assert ok, reason
+
+    invalid_quat = ImuReading(
+        base_ang_vel_b=np.zeros(3, dtype=np.float32),
+        projected_gravity_b=np.array([0.0, 0.0, -1.0], dtype=np.float32),
+        base_lin_vel_b=np.zeros(3, dtype=np.float32),
+        timestamp=time.monotonic(),
+        quaternion_wxyz=np.array([np.nan, 0.0, 0.0, 0.0], dtype=np.float32),
+    )
+    ok, reason = imu_reading_quality(invalid_quat)
+    assert not ok
+    assert "quaternion" in reason
+
+
+def test_required_stale_imu_blocks_active_motion_guard():
+    class RequiredImu:
+        required = True
+        stale_timeout = 0.01
+        source_name = "xsens"
+
+        def read(self):
+            return None
+
+    class Estimator:
+        imu_sensor = RequiredImu()
+        last_imu_reading = None
+
+        def imu_required(self):
+            return True
+
+        def refresh_imu(self):
+            return False
+
+        def imu_status(self):
+            return "xsens:missing"
+
+    reason = validate_required_policy_imu(Estimator())
+    assert reason is not None
+    assert "required IMU" in reason
 
 
 def test_exact_policy_entry_blend_preserves_raw_action_after_entry():

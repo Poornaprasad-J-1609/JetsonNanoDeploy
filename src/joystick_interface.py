@@ -208,8 +208,13 @@ class KeyboardCommandSource:
         speed_scale_max=1.0,
         speed_scale_step=0.1,
         command_timeout_s=0.35,
+        control_mode="repeat",
+        latched_combo_window_s=0.18,
     ):
         self.source_name = "keyboard"
+        self.control_mode = str(control_mode or "repeat").strip().lower()
+        if self.control_mode not in ("repeat", "latched"):
+            raise ValueError("keyboard control_mode must be 'repeat' or 'latched'")
         self.max_vx = float(max_vx)
         self.max_vy = float(max_vy)
         self.max_yaw = float(max_yaw)
@@ -228,6 +233,9 @@ class KeyboardCommandSource:
             "q": -1.0,
             "e": -1.0,
         }
+        self.latched_combo_window_s = float(max(0.02, latched_combo_window_s))
+        self.latched_keys = set()
+        self.last_latched_movement_time = -1.0e9
         self.command = np.zeros(3, dtype=np.float32)
         self.command_limits = load_command_limits()
         self.key_queue = deque()
@@ -253,7 +261,14 @@ class KeyboardCommandSource:
         print("  space -> stand")
         print("  h -> hold current position")
         print("  x -> emergency stop")
-        print(f"  speed scale: {self.speed_scale:.2f}")
+        print(f"  keyboard mode: {self.control_mode}")
+        print(f"  speed scale: {self.speed_scale:.3f}")
+        if self.control_mode == "latched":
+            print(
+                "  WARNING: latched keyboard mode keeps the last movement command active "
+                "until H, Space, C, X, or another movement command is pressed."
+            )
+            print(f"  diagonal/yaw combo window: {self.latched_combo_window_s:.2f}s")
         print(f"  movement key timeout: {self.command_timeout_s:.2f}s")
         if self.command_timeout_s > 0.75:
             print(
@@ -314,40 +329,12 @@ class KeyboardCommandSource:
             )
             print(
                 "[KEYBOARD] "
-                f"speed_scale={self.speed_scale:.2f} "
+                f"speed_scale={self.speed_scale:.3f} "
                 "effective_command_max="
                 f"[{effective[0]:.3f}, {effective[1]:.3f}, {effective[2]:.3f}]"
             )
 
-    def _process_movement_keys(self):
-        self._poll_keys()
-
-        now = time.monotonic()
-        kept = deque()
-        while self.key_queue:
-            key = self.key_queue.popleft()
-            consumed = True
-            if key in self.movement_key_deadlines:
-                self.movement_key_deadlines[key] = now + self.command_timeout_s
-            elif key == "arrow_up":
-                self._change_speed_scale(self.speed_scale_step)
-            elif key == "arrow_down":
-                self._change_speed_scale(-self.speed_scale_step)
-            else:
-                consumed = False
-
-            if not consumed:
-                kept.append(key)
-        self.key_queue = kept
-        self._update_command_from_active_keys(now)
-
-    def _update_command_from_active_keys(self, now=None):
-        now = time.monotonic() if now is None else float(now)
-        active = {
-            key for key, deadline in self.movement_key_deadlines.items()
-            if now <= float(deadline)
-        }
-
+    def _movement_command_from_keys(self, active):
         vx = 0.0
         vy = 0.0
         if "w" in active and "s" not in active:
@@ -366,12 +353,79 @@ class KeyboardCommandSource:
         elif "e" in active and "q" not in active:
             yaw = -self.max_yaw
 
-        self.command = np.array([vx, vy, yaw], dtype=np.float32)
+        return np.array([vx, vy, yaw], dtype=np.float32)
+
+    def _print_latched_command(self):
+        cmd = clip_command(self.command * self.speed_scale, self.command_limits)
+        print(
+            "[KEYBOARD] latched command: "
+            f"vx={float(cmd[0]):+.3f} "
+            f"vy={float(cmd[1]):+.3f} "
+            f"yaw={float(cmd[2]):+.3f}"
+        )
+
+    def _apply_latched_movement_key(self, key, now):
+        if now - self.last_latched_movement_time > self.latched_combo_window_s:
+            self.latched_keys.clear()
+        opposites = {
+            "w": "s",
+            "s": "w",
+            "a": "d",
+            "d": "a",
+            "q": "e",
+            "e": "q",
+        }
+        self.latched_keys.discard(opposites[key])
+        self.latched_keys.add(key)
+        self.last_latched_movement_time = now
+        self._update_command_from_latched_keys()
+        self._print_latched_command()
+
+    def _process_movement_keys(self):
+        self._poll_keys()
+
+        now = time.monotonic()
+        kept = deque()
+        while self.key_queue:
+            key = self.key_queue.popleft()
+            consumed = True
+            if key in self.movement_key_deadlines:
+                if self.control_mode == "latched":
+                    self._apply_latched_movement_key(key, now)
+                else:
+                    self.movement_key_deadlines[key] = now + self.command_timeout_s
+            elif key == "arrow_up":
+                self._change_speed_scale(self.speed_scale_step)
+            elif key == "arrow_down":
+                self._change_speed_scale(-self.speed_scale_step)
+            else:
+                consumed = False
+
+            if not consumed:
+                kept.append(key)
+        self.key_queue = kept
+        if self.control_mode == "latched":
+            self._update_command_from_latched_keys()
+        else:
+            self._update_command_from_active_keys(now)
+
+    def _update_command_from_active_keys(self, now=None):
+        now = time.monotonic() if now is None else float(now)
+        active = {
+            key for key, deadline in self.movement_key_deadlines.items()
+            if now <= float(deadline)
+        }
+        self.command = self._movement_command_from_keys(active)
+
+    def _update_command_from_latched_keys(self):
+        self.command = self._movement_command_from_keys(self.latched_keys)
 
     def _clear_motion_command(self):
         self.command = np.zeros(3, dtype=np.float32)
         for key in self.movement_key_deadlines:
             self.movement_key_deadlines[key] = -1.0
+        self.latched_keys.clear()
+        self.last_latched_movement_time = -1.0e9
 
     def _pop_matching_key(self, mapping):
         self._poll_keys()
@@ -393,7 +447,10 @@ class KeyboardCommandSource:
 
     def read(self):
         self._process_movement_keys()
-        self._update_command_from_active_keys()
+        if self.control_mode == "latched":
+            self._update_command_from_latched_keys()
+        else:
+            self._update_command_from_active_keys()
         self.command_limits = load_command_limits()
         return clip_command(self.command * self.speed_scale, self.command_limits)
 
@@ -421,7 +478,8 @@ class KeyboardCommandSource:
             "active_keys": [
                 key for key, deadline in self.movement_key_deadlines.items()
                 if time.monotonic() <= float(deadline)
-            ],
+            ] if self.control_mode == "repeat" else sorted(self.latched_keys),
+            "keyboard_control_mode": self.control_mode,
             "command": [float(x) for x in self.command],
         }
 
@@ -819,6 +877,8 @@ class CommandSource:
                 speed_scale_max=kwargs.get("speed_scale_max", speed_defaults["max"]),
                 speed_scale_step=kwargs.get("speed_scale_step", speed_defaults["step"]),
                 command_timeout_s=kwargs.get("keyboard_command_timeout", 0.35),
+                control_mode=kwargs.get("keyboard_control_mode", "repeat"),
+                latched_combo_window_s=kwargs.get("keyboard_latched_combo_window", 0.18),
             )
         elif source == "joystick":
             defaults = load_joystick_defaults()

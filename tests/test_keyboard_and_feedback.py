@@ -32,6 +32,21 @@ class KeyboardAndFeedbackTests(unittest.TestCase):
                 command_timeout_s=0.2,
             )
 
+    def make_latched_keyboard(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            return KeyboardCommandSource(
+                max_vx=1.8,
+                max_vy=0.8,
+                max_yaw=0.8,
+                speed_scale_initial=1.0,
+                speed_scale_min=0.5,
+                speed_scale_max=1.2,
+                speed_scale_step=0.1,
+                command_timeout_s=0.05,
+                control_mode="latched",
+                latched_combo_window_s=0.25,
+            )
+
     def command_for_keys(self, *keys):
         source = self.make_keyboard()
         now = time.monotonic()
@@ -85,6 +100,43 @@ class KeyboardAndFeedbackTests(unittest.TestCase):
             source.get_emergency_stop_request(),
             "terminal keyboard emergency stop key x",
         )
+        source.close()
+
+    def test_latched_keyboard_w_remains_active_without_repeat(self):
+        source = self.make_latched_keyboard()
+        source.key_queue.append("w")
+        np.testing.assert_allclose(source.read(), [1.8, 0.0, 0.0])
+        time.sleep(0.08)
+        np.testing.assert_allclose(source.read(), [1.8, 0.0, 0.0])
+        source.close()
+
+    def test_latched_keyboard_pose_keys_clear_motion(self):
+        source = self.make_latched_keyboard()
+        source.key_queue.append("w")
+        source.read()
+        source.key_queue.append("h")
+        self.assertEqual(source.get_mode_request(), "hold")
+        np.testing.assert_allclose(source.read(), [0.0, 0.0, 0.0])
+        source.key_queue.append("w")
+        source.read()
+        source.key_queue.append(" ")
+        self.assertEqual(source.get_mode_request(), "stand")
+        np.testing.assert_allclose(source.read(), [0.0, 0.0, 0.0])
+        source.key_queue.append("c")
+        self.assertEqual(source.get_mode_request(), "sit")
+        source.key_queue.append("x")
+        self.assertEqual(
+            source.get_emergency_stop_request(),
+            "terminal keyboard emergency stop key x",
+        )
+        source.close()
+
+    def test_latched_keyboard_speed_change_keeps_command(self):
+        source = self.make_latched_keyboard()
+        source.key_queue.append("w")
+        np.testing.assert_allclose(source.read(), [1.8, 0.0, 0.0])
+        source.key_queue.append("arrow_down")
+        np.testing.assert_allclose(source.read(), [1.62, 0.0, 0.0])
         source.close()
 
     def test_encoder_safety_skips_fake_dry_mode(self):

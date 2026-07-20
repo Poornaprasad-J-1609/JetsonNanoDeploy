@@ -20,7 +20,12 @@ from policy_runner import PolicyRunner
 from safety_monitor import SafetyMonitor
 from state_estimator import FakeStateEstimator, MitFeedbackStateEstimator
 from joystick_interface import CommandSource, load_joystick_defaults, load_speed_scale_defaults
-from imu_interface import create_imu_sensor, load_imu_config
+from imu_interface import (
+    create_imu_sensor,
+    imu_reading_quality,
+    load_imu_config,
+    policy_frame_roll_pitch_from_gravity,
+)
 from motor_command_layer import MotorCommandLayer, print_mit_commands
 from timing_scheduler import DeadlineScheduler
 from can_topology import (
@@ -305,15 +310,11 @@ def action_equivalent_for_q_target(runner, q_target):
 
 
 def projected_gravity_to_roll_pitch(projected_gravity_b):
-    g = np.asarray(projected_gravity_b, dtype=np.float32)
-    down_z = max(1e-6, -float(g[2]))
     # projected_gravity_b = R_world_from_body.T @ [0, 0, -1]. Therefore a
     # positive body roll produces negative gravity-Y, and positive pitch
     # produces positive gravity-X. These signs match IsaacLab and the Xsens
     # world-from-body quaternion conversion in imu_interface.py.
-    roll = float(np.arctan2(-float(g[1]), down_z))
-    pitch = float(np.arctan2(float(g[0]), down_z))
-    return roll, pitch
+    return policy_frame_roll_pitch_from_gravity(projected_gravity_b)
 
 
 def imu_posture_correction(projected_gravity_b, policy_order, cfg):
@@ -605,6 +606,99 @@ def estimator_imu_status(estimator):
     return "none"
 
 
+def format_vector(values, precision=4):
+    arr = np.asarray(values, dtype=np.float32).reshape(-1)
+    return "[" + ", ".join(f"{float(value):+.{precision}f}" for value in arr) + "]"
+
+
+def validate_required_policy_imu(estimator, max_roll_pitch_deg=60.0):
+    if not hasattr(estimator, "imu_required") or not estimator.imu_required():
+        return None
+    if hasattr(estimator, "refresh_imu"):
+        estimator.refresh_imu()
+    reading = getattr(estimator, "last_imu_reading", None)
+    stale_timeout = float(getattr(getattr(estimator, "imu_sensor", None), "stale_timeout", 0.25))
+    ok, reason = imu_reading_quality(
+        reading,
+        stale_timeout=stale_timeout,
+        max_roll_pitch_deg=max_roll_pitch_deg,
+    )
+    if not ok:
+        return f"required IMU invalid/stale ({estimator_imu_status(estimator)}): {reason}"
+    return None
+
+
+def wait_for_live_policy_imu(
+    estimator,
+    source_name,
+    samples=5,
+    timeout_s=5.0,
+    max_roll_pitch_deg=60.0,
+):
+    if not hasattr(estimator, "imu_required") or not estimator.imu_required():
+        return True
+
+    samples = max(1, int(samples))
+    deadline = time.monotonic() + max(0.1, float(timeout_s))
+    last_counted_timestamp = None
+    counted_timestamps = []
+    last_reason = "no samples received"
+    reading = None
+    while time.monotonic() < deadline and len(counted_timestamps) < samples:
+        if hasattr(estimator, "refresh_imu"):
+            estimator.refresh_imu()
+        reading = getattr(estimator, "last_imu_reading", None)
+        timestamp = None if reading is None else getattr(reading, "timestamp", None)
+        try:
+            timestamp = None if timestamp is None else float(timestamp)
+        except (TypeError, ValueError):
+            timestamp = None
+        if timestamp is None or timestamp == last_counted_timestamp:
+            time.sleep(0.01)
+            continue
+        ok, reason = imu_reading_quality(
+            reading,
+            previous_timestamp=last_counted_timestamp,
+            require_timestamp_advance=last_counted_timestamp is not None,
+            stale_timeout=float(getattr(getattr(estimator, "imu_sensor", None), "stale_timeout", 0.25)),
+            max_roll_pitch_deg=max_roll_pitch_deg,
+        )
+        if ok:
+            counted_timestamps.append(timestamp)
+            last_counted_timestamp = timestamp
+        else:
+            last_reason = reason
+            counted_timestamps.clear()
+            last_counted_timestamp = None
+        time.sleep(0.01)
+
+    if len(counted_timestamps) < samples:
+        print(
+            "\nERROR: required live IMU did not produce "
+            f"{samples} consecutive valid policy-frame sample(s): {last_reason}"
+        )
+        return False
+
+    if hasattr(estimator, "refresh_imu"):
+        estimator.refresh_imu()
+    reading = getattr(estimator, "last_imu_reading", reading)
+    gyro = getattr(estimator, "base_ang_vel_b", getattr(reading, "base_ang_vel_b", np.zeros(3)))
+    gravity = getattr(
+        estimator,
+        "projected_gravity_b",
+        getattr(reading, "projected_gravity_b", np.array([0.0, 0.0, -1.0])),
+    )
+    roll, pitch = projected_gravity_to_roll_pitch(gravity)
+    elapsed = max(1.0e-6, counted_timestamps[-1] - counted_timestamps[0])
+    sample_rate = 0.0 if len(counted_timestamps) < 2 else (len(counted_timestamps) - 1) / elapsed
+    print(f"[IMU] source={source_name} status=live")
+    print(f"[IMU] gyro_body={format_vector(gyro)}")
+    print(f"[IMU] projected_gravity={format_vector(gravity)}")
+    print(f"[IMU] roll={np.degrees(roll):+.2f}deg pitch={np.degrees(pitch):+.2f}deg")
+    print(f"[IMU] sample_rate={sample_rate:.1f}Hz")
+    return True
+
+
 def compact_telemetry_record(
     step,
     mode,
@@ -621,10 +715,17 @@ def compact_telemetry_record(
     q_current=None,
     qd_current=None,
     q_actor_target=None,
+    q_entry_blended_target=None,
     q_safety_target=None,
     q_target=None,
+    target_joint_limited=None,
+    target_rate_limited=None,
     policy_order=None,
     policy_sha256=None,
+    policy_entry_scale=0.0,
+    policy_entry_elapsed_s=0.0,
+    policy_entry_restart_count=0,
+    policy_entry_restart_reason="",
     imu_correction_abs_max=0.0,
     loop_dt_s=None,
     loop_period_s=None,
@@ -752,6 +853,10 @@ def compact_telemetry_record(
         "max_cycle_work_ms": 1000.0 * float(max_cycle_work_s),
         "max_lateness_ms": 1000.0 * float(max_lateness_s),
         "policy_steady_cycles": int(policy_steady_cycles),
+        "policy_entry_scale": float(policy_entry_scale),
+        "policy_entry_elapsed_s": float(policy_entry_elapsed_s),
+        "policy_entry_restart_count": int(policy_entry_restart_count),
+        "policy_entry_restart_reason": str(policy_entry_restart_reason or ""),
         "tau_fb": None,
         "tau_fb_max": None,
         "fault_reason": "",
@@ -782,6 +887,7 @@ def compact_telemetry_record(
         "q": (q_current, 12, 2),
         "qd": (qd_current, 12, 2),
         "q_actor_target": (q_actor_target, 12, 2),
+        "q_entry_blended_target": (q_entry_blended_target, 12, 2),
         "q_safety_target": (q_safety_target, 12, 2),
         "q_target": (q_target_sent, 12, 2),
         "qd_target": (qd_target_sent, 12, 2),
@@ -811,6 +917,18 @@ def compact_telemetry_record(
             record[f"{prefix}_count_{index:02d}"] = count
             record[f"{prefix}_percent_{index:02d}"] = 100.0 * count / denominator
 
+    for prefix, values in (
+        ("target_joint_limited", target_joint_limited),
+        ("target_rate_limited", target_rate_limited),
+    ):
+        if values is None:
+            continue
+        values = np.asarray(values, dtype=bool).reshape(-1)
+        if values.shape != (12,):
+            continue
+        for index, value in enumerate(values):
+            record[f"{prefix}_{index:02d}"] = int(bool(value))
+
     if policy_order is not None:
         command_by_joint = {
             command_item.get("joint_name"): command_item
@@ -832,6 +950,11 @@ def compact_telemetry_record(
             if q_actor_target is None
             else np.asarray(q_actor_target, dtype=np.float32).reshape(-1)
         )
+        q_entry_blended_target_values = (
+            None
+            if q_entry_blended_target is None
+            else np.asarray(q_entry_blended_target, dtype=np.float32).reshape(-1)
+        )
         q_safety_target_values = (
             None
             if q_safety_target is None
@@ -847,6 +970,12 @@ def compact_telemetry_record(
         )
         sent_action_values = (
             None if sent_action is None else np.asarray(sent_action, dtype=np.float32).reshape(-1)
+        )
+        target_joint_limited_values = (
+            None if target_joint_limited is None else np.asarray(target_joint_limited, dtype=bool).reshape(-1)
+        )
+        target_rate_limited_values = (
+            None if target_rate_limited is None else np.asarray(target_rate_limited, dtype=bool).reshape(-1)
         )
         obs_values = (
             None if observation is None else np.asarray(observation, dtype=np.float32).reshape(-1)
@@ -864,18 +993,32 @@ def compact_telemetry_record(
                 record[f"{prefix}_qd_fb"] = float(qd_values[index])
             if q_actor_target_values is not None and q_actor_target_values.shape[0] > index:
                 record[f"{prefix}_q_actor_target"] = float(q_actor_target_values[index])
+                record[f"{prefix}_actor_q_target"] = float(q_actor_target_values[index])
+            if (
+                q_entry_blended_target_values is not None
+                and q_entry_blended_target_values.shape[0] > index
+            ):
+                record[f"{prefix}_entry_blended_q_target"] = float(q_entry_blended_target_values[index])
             if q_safety_target_values is not None and q_safety_target_values.shape[0] > index:
                 record[f"{prefix}_q_safety_target"] = float(q_safety_target_values[index])
+                record[f"{prefix}_safety_filtered_q_target"] = float(q_safety_target_values[index])
             if q_target_values is not None and q_target_values.shape[0] > index:
                 record[f"{prefix}_q_target"] = float(q_target_values[index])
+                record[f"{prefix}_q_des_transmitted"] = float(q_target_values[index])
                 if q_values is not None and q_values.shape[0] > index:
                     record[f"{prefix}_q_error"] = float(q_target_values[index] - q_values[index])
+                    record[f"{prefix}_q_tracking_error"] = float(q_target_values[index] - q_values[index])
             if qd_target_values is not None and qd_target_values.shape[0] > index:
                 record[f"{prefix}_qd_target"] = float(qd_target_values[index])
             if raw_action_values is not None and raw_action_values.shape[0] > index:
                 record[f"{prefix}_action_raw"] = float(raw_action_values[index])
+                record[f"{prefix}_raw_actor_action"] = float(raw_action_values[index])
             if sent_action_values is not None and sent_action_values.shape[0] > index:
                 record[f"{prefix}_action_sent"] = float(sent_action_values[index])
+            if target_joint_limited_values is not None and target_joint_limited_values.shape[0] > index:
+                record[f"{prefix}_target_joint_limited"] = int(bool(target_joint_limited_values[index]))
+            if target_rate_limited_values is not None and target_rate_limited_values.shape[0] > index:
+                record[f"{prefix}_target_rate_limited"] = int(bool(target_rate_limited_values[index]))
             if obs_values is not None and obs_values.shape[0] >= 48:
                 record[f"{prefix}_obs_joint_pos"] = float(obs_values[12 + index])
                 record[f"{prefix}_obs_joint_vel"] = float(obs_values[24 + index])
@@ -922,6 +1065,7 @@ def compact_telemetry_record(
                     age_ms = None
                 if age_ms is not None and np.isfinite(age_ms):
                     record[f"{prefix}_fb_age_ms"] = float(age_ms)
+                    record[f"{prefix}_feedback_age_ms"] = float(age_ms)
                 for key in (
                     "comm_type",
                     "motor_id",
@@ -944,6 +1088,15 @@ def compact_telemetry_record(
                     if value is None:
                         continue
                     record[f"{prefix}_fb_{key}"] = value
+                if feedback.get("joint_torque") is not None:
+                    record[f"{prefix}_measured_torque"] = feedback.get("joint_torque")
+            if command_item:
+                if command_item.get("tau_pd_est") is not None:
+                    record[f"{prefix}_estimated_pd_torque"] = command_item.get("tau_pd_est")
+                if command_item.get("q_before_torque_limit") is not None:
+                    record[f"{prefix}_q_before_torque_limit"] = command_item.get("q_before_torque_limit")
+                if command_item.get("torque_limited") is not None:
+                    record[f"{prefix}_torque_limited"] = int(bool(command_item.get("torque_limited")))
     return record
 
 
@@ -954,15 +1107,28 @@ def joint_telemetry_fieldnames(policy_order):
         "q_fb",
         "qd_fb",
         "q_actor_target",
+        "actor_q_target",
+        "entry_blended_q_target",
         "q_safety_target",
+        "safety_filtered_q_target",
         "q_target",
+        "q_des_transmitted",
         "qd_target",
         "q_error",
+        "q_tracking_error",
         "action_raw",
+        "raw_actor_action",
         "action_sent",
         "obs_joint_pos",
         "obs_joint_vel",
         "obs_prev_action",
+        "target_joint_limited",
+        "target_rate_limited",
+        "estimated_pd_torque",
+        "measured_torque",
+        "q_before_torque_limit",
+        "torque_limited",
+        "feedback_age_ms",
     ]
     command_fields = [
         "motor_id",
@@ -1026,7 +1192,7 @@ def compact_telemetry_line(record):
         f"vy={float(record['vy']): .3f} "
         f"vxy={float(record['vxy']): .3f} "
         f"yaw={float(record['yaw']): .3f} "
-        f"speed={float(record['speed']):.2f} "
+        f"speed_scale={float(record['speed']):.3f} "
         f"imu={record['imu']} "
         f"tilt_rp=[{float(record.get('imu_roll_deg', 0.0)):+.1f},"
         f"{float(record.get('imu_pitch_deg', 0.0)):+.1f}]deg "
@@ -1065,10 +1231,15 @@ def compact_telemetry_line(record):
         or abs(float(record.get("policy_yaw", record["yaw"])) - float(record["yaw"])) > 1e-5
     ):
         line += (
-            f" policy_cmd=["
-            f"{float(record['policy_vx']): .3f},"
-            f"{float(record['policy_vy']): .3f},"
-            f"{float(record['policy_yaw']): .3f}]"
+            f" policy_command=[vx={float(record['policy_vx']): .3f},"
+            f"vy={float(record['policy_vy']): .3f},"
+            f"yaw={float(record['policy_yaw']): .3f}]"
+        )
+    else:
+        line += (
+            f" policy_command=[vx={float(record['policy_vx']): .3f},"
+            f"vy={float(record['policy_vy']): .3f},"
+            f"yaw={float(record['policy_yaw']): .3f}]"
         )
 
     if record["tau_fb"] is None:
@@ -1176,6 +1347,10 @@ class CsvRunLogger:
         "max_cycle_work_ms",
         "max_lateness_ms",
         "policy_steady_cycles",
+        "policy_entry_scale",
+        "policy_entry_elapsed_s",
+        "policy_entry_restart_count",
+        "policy_entry_restart_reason",
         "tau_fb",
         "tau_fb_max",
         "fault_reason",
@@ -1195,9 +1370,12 @@ class CsvRunLogger:
     BASE_FIELDNAMES += [f"q_{index:02d}" for index in range(12)]
     BASE_FIELDNAMES += [f"qd_{index:02d}" for index in range(12)]
     BASE_FIELDNAMES += [f"q_actor_target_{index:02d}" for index in range(12)]
+    BASE_FIELDNAMES += [f"q_entry_blended_target_{index:02d}" for index in range(12)]
     BASE_FIELDNAMES += [f"q_safety_target_{index:02d}" for index in range(12)]
     BASE_FIELDNAMES += [f"q_target_{index:02d}" for index in range(12)]
     BASE_FIELDNAMES += [f"qd_target_{index:02d}" for index in range(12)]
+    BASE_FIELDNAMES += [f"target_joint_limited_{index:02d}" for index in range(12)]
+    BASE_FIELDNAMES += [f"target_rate_limited_{index:02d}" for index in range(12)]
     BASE_FIELDNAMES += [f"policy_clip_count_{index:02d}" for index in range(12)]
     BASE_FIELDNAMES += [f"policy_clip_percent_{index:02d}" for index in range(12)]
     BASE_FIELDNAMES += [f"torque_clip_count_{index:02d}" for index in range(12)]
@@ -1458,6 +1636,178 @@ def print_joint_debug(commands, estimator):
         if tau_fb is not None:
             line += f" tau_fb={tau_fb:+.3f}"
         print(line)
+
+
+def init_policy_joint_summary(policy_order):
+    n = len(policy_order)
+    inf = np.full(n, np.inf, dtype=np.float64)
+    neg_inf = np.full(n, -np.inf, dtype=np.float64)
+    return {
+        "cycles": np.zeros(n, dtype=np.int64),
+        "actor_min": inf.copy(),
+        "actor_max": neg_inf.copy(),
+        "sent_min": inf.copy(),
+        "sent_max": neg_inf.copy(),
+        "measured_min": inf.copy(),
+        "measured_max": neg_inf.copy(),
+        "tracking_error_sq": np.zeros(n, dtype=np.float64),
+        "tracking_error_abs_max": np.zeros(n, dtype=np.float64),
+        "joint_limited": np.zeros(n, dtype=np.int64),
+        "rate_limited": np.zeros(n, dtype=np.int64),
+        "torque_limited": np.zeros(n, dtype=np.int64),
+        "max_estimated_torque": np.zeros(n, dtype=np.float64),
+        "max_measured_torque": np.zeros(n, dtype=np.float64),
+        "max_feedback_age_ms": np.zeros(n, dtype=np.float64),
+    }
+
+
+def update_policy_joint_summary(
+    summary,
+    policy_order,
+    commands,
+    estimator,
+    q_actor_target,
+    q_des_transmitted,
+    target_joint_limited=None,
+    target_rate_limited=None,
+):
+    if q_actor_target is None or q_des_transmitted is None:
+        return
+
+    q_actor_target = np.asarray(q_actor_target, dtype=np.float32).reshape(-1)
+    q_des_transmitted = np.asarray(q_des_transmitted, dtype=np.float32).reshape(-1)
+    q_current = np.asarray(getattr(estimator, "q_current", []), dtype=np.float32).reshape(-1)
+    if q_actor_target.shape[0] != len(policy_order) or q_des_transmitted.shape[0] != len(policy_order):
+        return
+    if q_current.shape[0] != len(policy_order):
+        return
+
+    target_joint_limited = (
+        np.zeros(len(policy_order), dtype=bool)
+        if target_joint_limited is None
+        else np.asarray(target_joint_limited, dtype=bool).reshape(-1)
+    )
+    target_rate_limited = (
+        np.zeros(len(policy_order), dtype=bool)
+        if target_rate_limited is None
+        else np.asarray(target_rate_limited, dtype=bool).reshape(-1)
+    )
+    command_by_joint = {
+        item.get("joint_name"): item
+        for item in (commands or [])
+        if item.get("joint_name") is not None
+    }
+    feedback_by_joint = getattr(estimator, "last_feedback_by_joint", {}) or {}
+    now = time.monotonic()
+
+    for index, joint_name in enumerate(policy_order):
+        summary["cycles"][index] += 1
+        summary["actor_min"][index] = min(summary["actor_min"][index], float(q_actor_target[index]))
+        summary["actor_max"][index] = max(summary["actor_max"][index], float(q_actor_target[index]))
+        summary["sent_min"][index] = min(summary["sent_min"][index], float(q_des_transmitted[index]))
+        summary["sent_max"][index] = max(summary["sent_max"][index], float(q_des_transmitted[index]))
+        summary["measured_min"][index] = min(summary["measured_min"][index], float(q_current[index]))
+        summary["measured_max"][index] = max(summary["measured_max"][index], float(q_current[index]))
+
+        error = float(q_des_transmitted[index] - q_current[index])
+        summary["tracking_error_sq"][index] += error * error
+        summary["tracking_error_abs_max"][index] = max(
+            summary["tracking_error_abs_max"][index],
+            abs(error),
+        )
+        if target_joint_limited.shape[0] == len(policy_order) and target_joint_limited[index]:
+            summary["joint_limited"][index] += 1
+        if target_rate_limited.shape[0] == len(policy_order) and target_rate_limited[index]:
+            summary["rate_limited"][index] += 1
+
+        command = command_by_joint.get(joint_name, {})
+        if command.get("torque_limited"):
+            summary["torque_limited"][index] += 1
+        tau_est = command.get("tau_pd_est")
+        if tau_est is not None:
+            try:
+                tau_est = abs(float(tau_est))
+                if np.isfinite(tau_est):
+                    summary["max_estimated_torque"][index] = max(
+                        summary["max_estimated_torque"][index],
+                        tau_est,
+                    )
+            except (TypeError, ValueError):
+                pass
+
+        feedback = feedback_by_joint.get(joint_name, {})
+        if isinstance(feedback, dict):
+            tau_measured = feedback.get("joint_torque", feedback.get("torque"))
+            try:
+                tau_measured = abs(float(tau_measured))
+                if np.isfinite(tau_measured):
+                    summary["max_measured_torque"][index] = max(
+                        summary["max_measured_torque"][index],
+                        tau_measured,
+                    )
+            except (TypeError, ValueError):
+                pass
+            timestamp = feedback.get("timestamp")
+            try:
+                age_ms = 1000.0 * (now - float(timestamp))
+                if np.isfinite(age_ms):
+                    summary["max_feedback_age_ms"][index] = max(
+                        summary["max_feedback_age_ms"][index],
+                        age_ms,
+                    )
+            except (TypeError, ValueError):
+                pass
+
+
+def print_policy_joint_summary(summary, policy_order, steady_cycles=0, steady_torque_counts=None):
+    total_cycles = np.asarray(summary["cycles"], dtype=np.int64)
+    if not np.any(total_cycles > 0):
+        return
+
+    print("\nPOLICY JOINT TRACKING SUMMARY")
+    print("-" * 80)
+    steady_torque_counts = (
+        np.asarray(summary["torque_limited"], dtype=np.int64)
+        if steady_torque_counts is None
+        else np.asarray(steady_torque_counts, dtype=np.int64)
+    )
+    steady_denominator = max(1, int(steady_cycles))
+    for index, joint_name in enumerate(policy_order):
+        cycles = int(total_cycles[index])
+        if cycles <= 0:
+            continue
+        rms = float(np.sqrt(summary["tracking_error_sq"][index] / max(1, cycles)))
+        joint_pct = 100.0 * int(summary["joint_limited"][index]) / max(1, cycles)
+        rate_pct = 100.0 * int(summary["rate_limited"][index]) / max(1, cycles)
+        torque_pct = 100.0 * int(summary["torque_limited"][index]) / max(1, cycles)
+        steady_torque_pct = 100.0 * int(steady_torque_counts[index]) / steady_denominator
+        print(f"{joint_name}:")
+        print(f"  policy cycles: {cycles}")
+        print(
+            "  actor target range: "
+            f"[{summary['actor_min'][index]:+.3f}, {summary['actor_max'][index]:+.3f}] rad"
+        )
+        print(
+            "  transmitted range: "
+            f"[{summary['sent_min'][index]:+.3f}, {summary['sent_max'][index]:+.3f}] rad"
+        )
+        print(
+            "  measured range: "
+            f"[{summary['measured_min'][index]:+.3f}, {summary['measured_max'][index]:+.3f}] rad"
+        )
+        print(f"  RMS tracking error: {rms:.3f} rad")
+        print(f"  maximum tracking error: {summary['tracking_error_abs_max'][index]:.3f} rad")
+        print(f"  joint limited: {joint_pct:.1f}%")
+        print(f"  rate limited: {rate_pct:.1f}%")
+        print(f"  torque limited: {torque_pct:.1f}%")
+        print(f"  maximum estimated torque: {summary['max_estimated_torque'][index]:.3f} Nm")
+        print(f"  maximum measured torque: {summary['max_measured_torque'][index]:.3f} Nm")
+        print(f"  maximum feedback age: {summary['max_feedback_age_ms'][index]:.1f} ms")
+        if steady_torque_pct > 20.0:
+            print(
+                f"[POLICY LIMIT] {joint_name} torque-limited during "
+                f"{steady_torque_pct:.1f}% of steady policy cycles"
+            )
 
 
 def request_feedback_snapshot(motor_layer, buses, mode):
@@ -1886,6 +2236,48 @@ def shifted_safety_filter(
     return (filtered + q_shift).astype(np.float32)
 
 
+def shifted_safety_filter_with_diagnostics(
+    safety,
+    q_target,
+    q_previous,
+    q_shift,
+    apply_rate_limit=True,
+    use_policy_limits=False,
+):
+    q_target = np.asarray(q_target, dtype=np.float32)
+    q_previous = np.asarray(q_previous, dtype=np.float32)
+    q_shift = np.asarray(q_shift, dtype=np.float32)
+    shifted_target = q_target - q_shift
+    shifted_previous = q_previous - q_shift
+
+    clipped = safety.clip_q_target(
+        shifted_target,
+        use_policy_limits=use_policy_limits,
+    )
+    joint_limited = np.abs(clipped - shifted_target) > 1.0e-6
+
+    if apply_rate_limit:
+        rate_limited_target = safety.rate_limit_q_target(clipped, shifted_previous)
+        rate_limited = np.abs(rate_limited_target - clipped) > 1.0e-6
+    else:
+        rate_limited_target = clipped
+        rate_limited = np.zeros_like(clipped, dtype=bool)
+
+    final_clipped = safety.clip_q_target(
+        rate_limited_target,
+        use_policy_limits=use_policy_limits,
+    )
+    joint_limited = np.logical_or(
+        joint_limited,
+        np.abs(final_clipped - rate_limited_target) > 1.0e-6,
+    )
+    filtered = (final_clipped + q_shift).astype(np.float32)
+    return filtered, {
+        "target_joint_limited": joint_limited.astype(bool),
+        "target_rate_limited": rate_limited.astype(bool),
+    }
+
+
 def apply_software_zero_calibration(
     estimator,
     motor_layer,
@@ -2183,6 +2575,7 @@ def run_policy_loop(
     feedback_timeout,
     walk_command_threshold,
     walk_command_grace_seconds,
+    walk_stop_confirm_seconds,
     joystick_debug,
     joint_debug,
     base_lin_vel_source,
@@ -2213,6 +2606,8 @@ def run_policy_loop(
     pose_transition_min_seconds,
     fresh_feedback_max_age_s,
     steady_feedback_budget_s,
+    suspension_status_seconds,
+    imu_active_max_roll_pitch_deg,
     deadline_tolerance_s,
     deadline_resync_s,
     timing_fault_consecutive,
@@ -2238,9 +2633,12 @@ def run_policy_loop(
     policy_entry_elapsed_s = 0.0
     policy_entry_scale = 0.0
     policy_entry_q_start = np.asarray(q_previous_target, dtype=np.float32).copy()
+    policy_entry_restart_count = 0
+    policy_entry_restart_reason = ""
     previous_walk_requested = False
     last_walk_command = np.zeros(3, dtype=np.float32)
     last_walk_command_step = -10**9
+    walk_stop_candidate_step = -1
     policy_has_started = False
     direct_imu_stabilization_enabled = bool(
         motion_assist_cfg.get("imu_posture", {}).get("enabled", False)
@@ -2352,6 +2750,7 @@ def run_policy_loop(
     print("start_control_mode:", control_mode)
     print("walk_command_threshold:", walk_command_threshold)
     print("walk_command_grace_seconds:", float(walk_command_grace_seconds))
+    print("walk_stop_confirm_seconds:", float(walk_stop_confirm_seconds))
     print("base_lin_vel_source:", base_lin_vel_source)
     print("zero_frame:", zero_frame)
     print("zero_calibrated:", bool(zero_calibrated))
@@ -2398,6 +2797,7 @@ def run_policy_loop(
     print("hold_command_repeats:", int(hold_command_repeats))
     print("fresh_feedback_max_age_s:", float(live_feedback_max_age_s))
     print("steady_feedback_budget_ms:", 1000.0 * float(steady_feedback_budget_s))
+    print("suspension_status_seconds:", float(suspension_status_seconds))
     print("pose_transition_speed_rad_s:", float(pose_transition_speed_rad_s))
     print("pose_transition_min_seconds:", float(pose_transition_min_seconds))
     print("crouch_calibration_value:", float(crouch_calibration_value))
@@ -2428,6 +2828,8 @@ def run_policy_loop(
     policy_steady_cycles = 0
     policy_target_clip_counts = np.zeros(action_dim, dtype=np.int64)
     policy_torque_clip_counts = np.zeros(action_dim, dtype=np.int64)
+    policy_joint_summary = init_policy_joint_summary(runner.policy_order)
+    last_suspension_status_time = -1.0e9
     command_build_s = 0.0
 
     def build_loop_mit_commands(q_target, phase, feedback_by_joint=None):
@@ -2452,7 +2854,10 @@ def run_policy_loop(
         observation_for_log = None
         raw_action = np.zeros(action_dim, dtype=np.float32)
         q_actor_target_for_log = None
+        q_entry_blended_target_for_log = None
         imu_correction_abs_max = 0.0
+        target_joint_limited_mask = np.zeros(action_dim, dtype=bool)
+        target_rate_limited_mask = np.zeros(action_dim, dtype=bool)
         policy_inference_s = 0.0
         command_build_s = 0.0
         feedback_read_s = 0.0
@@ -2650,8 +3055,14 @@ def run_policy_loop(
                 phase="policy",
             )
             break
-        if hasattr(estimator, "imu_stale") and estimator.imu_stale():
-            reason = "IMU data missing or stale"
+        required_imu_fault = validate_required_policy_imu(
+            estimator,
+            max_roll_pitch_deg=imu_active_max_roll_pitch_deg,
+        )
+        if required_imu_fault is not None and (
+            has_motion_target or control_mode not in ("idle",)
+        ):
+            reason = required_imu_fault
             print("\nEMERGENCY STOP:", reason)
             command = command_source.read()
             publish_safety_fault(
@@ -2675,6 +3086,14 @@ def run_policy_loop(
             # repeated pose request must not recapture feedback and restart the
             # trajectory, which causes a visible stop and torque ramp.
             mode_request = None
+        if mode_request in ("stand", "sit", "hold"):
+            required_imu_fault = validate_required_policy_imu(
+                estimator,
+                max_roll_pitch_deg=imu_active_max_roll_pitch_deg,
+            )
+            if required_imu_fault is not None:
+                print(f"[IMU] active command blocked: {required_imu_fault}")
+                mode_request = None
         if mode_request is not None:
             if mode_request == "stand" and zero_frame == "crouch" and not zero_calibrated:
                 print("\n[ZERO CAL] first pose command is auto-zeroing current crouch/default pose.")
@@ -2891,6 +3310,7 @@ def run_policy_loop(
                 if control_mode in ("stand", "sit", "hold"):
                     last_walk_command.fill(0.0)
                     last_walk_command_step = -10**9
+                    walk_stop_candidate_step = -1
                 if control_mode in ("stand", "sit"):
                     begin_pose_transition(control_mode, q_current, step)
                 else:
@@ -2906,17 +3326,42 @@ def run_policy_loop(
         if raw_walk_requested:
             last_walk_command = np.asarray(command, dtype=np.float32).copy()
             last_walk_command_step = int(step)
+            walk_stop_candidate_step = -1
         elif (
             getattr(command_source, "source_name", "") == "keyboard"
             and walking_armed
             and control_mode == "stand"
-            and float(walk_command_grace_seconds) > 0.0
             and joystick_walk_requested(last_walk_command, walk_command_threshold)
         ):
             elapsed_since_walk_s = (int(step) - int(last_walk_command_step)) * float(dt)
             if elapsed_since_walk_s <= float(walk_command_grace_seconds):
                 command = last_walk_command.copy()
                 walk_requested = True
+                walk_stop_candidate_step = -1
+            elif previous_walk_requested and float(walk_stop_confirm_seconds) > 0.0:
+                if walk_stop_candidate_step < 0:
+                    walk_stop_candidate_step = int(step)
+                neutral_elapsed_s = (
+                    int(step) - int(walk_stop_candidate_step)
+                ) * float(dt)
+                if neutral_elapsed_s < float(walk_stop_confirm_seconds):
+                    command = last_walk_command.copy()
+                    walk_requested = True
+                else:
+                    walk_requested = False
+            else:
+                walk_stop_candidate_step = -1
+        elif not previous_walk_requested:
+            walk_stop_candidate_step = -1
+        if walk_requested:
+            required_imu_fault = validate_required_policy_imu(
+                estimator,
+                max_roll_pitch_deg=imu_active_max_roll_pitch_deg,
+            )
+            if required_imu_fault is not None:
+                if step % max(1, print_every) == 0:
+                    print(f"[IMU] walking command blocked: {required_imu_fault}")
+                walk_requested = False
         policy_command = scaled_policy_command(
             command=command,
             gain=policy_command_gain,
@@ -3027,6 +3472,7 @@ def run_policy_loop(
                     live_feedback_max_age_s,
                 )
 
+        policy_was_started = bool(policy_has_started)
         if walk_requested:
             has_motion_target = True
             policy_has_started = True
@@ -3034,6 +3480,13 @@ def run_policy_loop(
         walk_just_stopped = bool(previous_walk_requested and not walk_requested)
         if walk_requested:
             if not previous_walk_requested:
+                policy_entry_restart_count += 1
+                policy_entry_restart_reason = (
+                    "initial movement command"
+                    if not policy_was_started
+                    else "movement re-entered after intentional stop"
+                )
+                print(f"[POLICY ENTRY] started: {policy_entry_restart_reason}")
                 policy_entry_elapsed_s = 0.0
                 policy_entry_q_start = np.asarray(q_previous_target, dtype=np.float32).copy()
                 scheduler.request_resync("policy entry initialized")
@@ -3131,12 +3584,15 @@ def run_policy_loop(
                 stand_command_phase = "leveling"
             elif not stand_policy_stabilization:
                 direct_leveling_correction.fill(0.0)
-            q_safe_target = shifted_safety_filter(
+            q_entry_blended_target_for_log = q_policy_target.copy()
+            q_safe_target, target_diag = shifted_safety_filter_with_diagnostics(
                 safety,
                 q_policy_target,
                 q_previous_target,
                 q_coordinate_shift,
             )
+            target_joint_limited_mask = target_diag["target_joint_limited"]
+            target_rate_limited_mask = target_diag["target_rate_limited"]
             commands = build_loop_mit_commands(
                 q_safe_target,
                 phase=stand_command_phase,
@@ -3145,12 +3601,15 @@ def run_policy_loop(
 
         elif active_control_mode == "sit":
             q_policy_target = current_pose_transition_target("sit", step)
-            q_safe_target = shifted_safety_filter(
+            q_entry_blended_target_for_log = q_policy_target.copy()
+            q_safe_target, target_diag = shifted_safety_filter_with_diagnostics(
                 safety,
                 q_policy_target,
                 q_previous_target,
                 q_coordinate_shift,
             )
+            target_joint_limited_mask = target_diag["target_joint_limited"]
+            target_rate_limited_mask = target_diag["target_rate_limited"]
             commands = build_loop_mit_commands(
                 q_safe_target,
                 phase="startup",
@@ -3198,6 +3657,7 @@ def run_policy_loop(
                 )
                 action = np.asarray(action, dtype=np.float32) * float(policy_entry_scale)
                 q_policy_target = runner.action_to_q_target(action)
+            q_entry_blended_target_for_log = q_policy_target.copy()
             imu_correction = imu_posture_correction(
                 projected_gravity_b=projected_gravity_b,
                 policy_order=runner.policy_order,
@@ -3218,7 +3678,7 @@ def run_policy_loop(
                 (not bool(exact_policy_after_entry) and not policy_sim_match)
                 or float(policy_entry_scale) < 0.999
             )
-            q_safe_target = shifted_safety_filter(
+            q_safe_target, target_diag = shifted_safety_filter_with_diagnostics(
                 safety,
                 q_policy_target,
                 q_previous_target,
@@ -3226,6 +3686,8 @@ def run_policy_loop(
                 apply_rate_limit=policy_entry_rate_limit_active,
                 use_policy_limits=True,
             )
+            target_joint_limited_mask = target_diag["target_joint_limited"]
+            target_rate_limited_mask = target_diag["target_rate_limited"]
             commands = build_loop_mit_commands(
                 q_safe_target,
                 phase="policy",
@@ -3554,10 +4016,17 @@ def run_policy_loop(
                 q_current=q_current,
                 qd_current=qd_current,
                 q_actor_target=q_actor_target_for_log,
+                q_entry_blended_target=q_entry_blended_target_for_log,
                 q_safety_target=q_safe_target,
                 q_target=q_safe_target,
+                target_joint_limited=target_joint_limited_mask,
+                target_rate_limited=target_rate_limited_mask,
                 policy_order=runner.policy_order,
                 policy_sha256=runner.policy_sha256,
+                policy_entry_scale=policy_entry_scale,
+                policy_entry_elapsed_s=policy_entry_elapsed_s,
+                policy_entry_restart_count=policy_entry_restart_count,
+                policy_entry_restart_reason=policy_entry_restart_reason,
                 imu_correction_abs_max=imu_correction_abs_max,
                 loop_dt_s=loop_dt_s,
                 loop_period_s=loop_dt_s,
@@ -3610,6 +4079,60 @@ def run_policy_loop(
             index = motor_layer.policy_index_by_joint.get(joint_name)
             if index is not None and "q_des" in command_item:
                 q_sent_target[index] = float(command_item["q_des"])
+
+        if active_control_mode == "policy":
+            update_policy_joint_summary(
+                policy_joint_summary,
+                runner.policy_order,
+                commands,
+                estimator,
+                q_actor_target_for_log,
+                q_sent_target,
+                target_joint_limited=target_joint_limited_mask,
+                target_rate_limited=target_rate_limited_mask,
+            )
+            now_status = time.monotonic()
+            if (
+                float(suspension_status_seconds) > 0.0
+                and now_status - last_suspension_status_time
+                >= float(suspension_status_seconds)
+            ):
+                last_suspension_status_time = now_status
+                raw_action_max = (
+                    0.0
+                    if raw_action is None
+                    else float(np.max(np.abs(np.asarray(raw_action, dtype=np.float32))))
+                )
+                actor_motion_max = (
+                    0.0
+                    if q_actor_target_for_log is None
+                    else float(np.max(np.abs(q_actor_target_for_log - q_previous_target)))
+                )
+                sent_motion_max = float(np.max(np.abs(q_sent_target - q_previous_target)))
+                q_fb = np.asarray(getattr(estimator, "q_current", q_sent_target), dtype=np.float32)
+                tracking_error_max = float(np.max(np.abs(q_sent_target - q_fb)))
+                torque_limited_joints = sum(1 for item in commands if item.get("torque_limited"))
+                joint_limited_joints = int(np.count_nonzero(target_joint_limited_mask))
+                fresh_count = (
+                    0 if feedback_fresh_count in (None, "") else int(feedback_fresh_count)
+                )
+                print(
+                    "[SUSPENSION] "
+                    f"mode={active_control_mode} "
+                    f"imu={estimator_imu_status(estimator)} "
+                    f"command=[{float(policy_command[0]):+.3f},"
+                    f"{float(policy_command[1]):+.3f},"
+                    f"{float(policy_command[2]):+.3f}] "
+                    f"entry={100.0 * float(policy_entry_scale):.0f}% "
+                    f"raw_action_max={raw_action_max:.3f} "
+                    f"actor_target_motion_max={actor_motion_max:.3f} "
+                    f"sent_target_motion_max={sent_motion_max:.3f} "
+                    f"tracking_error_max={tracking_error_max:.3f} "
+                    f"torque_limited_joints={torque_limited_joints} "
+                    f"joint_limited_joints={joint_limited_joints} "
+                    f"fresh_feedback={fresh_count}/{len(motor_layer.active_joints)} "
+                    f"loop_work={1000.0 * scheduler.last_snapshot.cycle_work_s:.1f}ms"
+                )
 
         estimator.dry_update_as_if_robot_followed(q_sent_target, dt)
 
@@ -3703,6 +4226,12 @@ def run_policy_loop(
             )
             break
 
+    print_policy_joint_summary(
+        policy_joint_summary,
+        runner.policy_order,
+        steady_cycles=policy_steady_cycles,
+        steady_torque_counts=policy_torque_clip_counts,
+    )
     print("\nRuntime control phase completed.")
 
 
@@ -3771,6 +4300,18 @@ def main():
         type=float,
         default=0.35,
         help="seconds a terminal movement key remains active unless repeated; hold w/a/s/d to keep moving",
+    )
+    parser.add_argument(
+        "--keyboard-control-mode",
+        choices=["repeat", "latched"],
+        default="repeat",
+        help="repeat uses terminal key-repeat; latched keeps the last movement command active until pose/hold/e-stop",
+    )
+    parser.add_argument(
+        "--keyboard-latched-combo-window",
+        type=float,
+        default=0.18,
+        help="seconds in latched mode for combining w/a/s/d/q/e into diagonal or turn commands",
     )
 
     parser.add_argument("--axis-vx", type=int, default=int(joystick_defaults["axes"]["vx_axis"]))
@@ -3985,6 +4526,12 @@ def main():
         ),
     )
     parser.add_argument(
+        "--walk-stop-confirm-seconds",
+        type=float,
+        default=0.25,
+        help="repeat-mode neutral confirmation time before leaving policy walking",
+    )
+    parser.add_argument(
         "--joystick-debug",
         action="store_true",
         help="print raw joystick axes/buttons/hats at each telemetry line",
@@ -4057,6 +4604,30 @@ def main():
     )
     parser.add_argument("--imu-port", default=None)
     parser.add_argument("--imu-baud", type=int, default=None)
+    parser.add_argument(
+        "--imu-startup-samples",
+        type=int,
+        default=5,
+        help="consecutive valid live IMU samples required before active control when the IMU source is required",
+    )
+    parser.add_argument(
+        "--imu-startup-timeout",
+        type=float,
+        default=5.0,
+        help="seconds to wait for required live IMU startup validation",
+    )
+    parser.add_argument(
+        "--imu-max-startup-roll-pitch-deg",
+        type=float,
+        default=60.0,
+        help="maximum absolute roll/pitch accepted during startup IMU validation",
+    )
+    parser.add_argument(
+        "--imu-max-active-roll-pitch-deg",
+        type=float,
+        default=75.0,
+        help="maximum absolute roll/pitch accepted for required IMU active-motion validation",
+    )
     parser.add_argument(
         "--base-lin-vel-source",
         choices=["zero"],
@@ -4172,6 +4743,12 @@ def main():
         ),
     )
     parser.add_argument(
+        "--suspension-status-seconds",
+        type=float,
+        default=0.5,
+        help="seconds between [SUSPENSION] diagnostic lines; 0 disables",
+    )
+    parser.add_argument(
         "--fake-start",
         choices=["stand", "crouch", "random_small"],
         default="stand",
@@ -4231,6 +4808,8 @@ def main():
     args.policy_steps = None if args.policy_steps <= 0 else args.policy_steps
     args.walk_command_threshold = max(0.0, args.walk_command_threshold)
     args.walk_command_grace_seconds = max(0.0, float(args.walk_command_grace_seconds))
+    args.walk_stop_confirm_seconds = max(0.0, float(args.walk_stop_confirm_seconds))
+    args.keyboard_latched_combo_window = max(0.02, float(args.keyboard_latched_combo_window))
     args.policy_command_gain = max(0.0, float(args.policy_command_gain))
     args.policy_command_vx_max = max(0.0, float(args.policy_command_vx_max))
     args.policy_command_vy_max = max(0.0, float(args.policy_command_vy_max))
@@ -4266,6 +4845,24 @@ def main():
         parser.error("--deadline-resync-ms must be finite and > 0")
     if int(args.timing_fault_consecutive) <= 0:
         parser.error("--timing-fault-consecutive must be > 0")
+    if int(args.imu_startup_samples) < 1:
+        parser.error("--imu-startup-samples must be >= 1")
+    if not np.isfinite(args.imu_startup_timeout) or args.imu_startup_timeout <= 0.0:
+        parser.error("--imu-startup-timeout must be finite and > 0")
+    if (
+        not np.isfinite(args.imu_max_startup_roll_pitch_deg)
+        or args.imu_max_startup_roll_pitch_deg <= 0.0
+        or args.imu_max_startup_roll_pitch_deg > 89.0
+    ):
+        parser.error("--imu-max-startup-roll-pitch-deg must be within 0..89")
+    if (
+        not np.isfinite(args.imu_max_active_roll_pitch_deg)
+        or args.imu_max_active_roll_pitch_deg <= 0.0
+        or args.imu_max_active_roll_pitch_deg > 89.0
+    ):
+        parser.error("--imu-max-active-roll-pitch-deg must be within 0..89")
+    if not np.isfinite(args.suspension_status_seconds) or args.suspension_status_seconds < 0.0:
+        parser.error("--suspension-status-seconds must be finite and >= 0")
     if not np.isfinite(args.fresh_feedback_max_age) or args.fresh_feedback_max_age < 0.0:
         parser.error("--fresh-feedback-max-age must be finite and >= 0")
     if (
@@ -4434,6 +5031,8 @@ def main():
             speed_scale_max=args.speed_scale_max,
             speed_scale_step=args.speed_scale_step,
             keyboard_command_timeout=args.keyboard_command_timeout,
+            keyboard_control_mode=args.keyboard_control_mode,
+            keyboard_latched_combo_window=args.keyboard_latched_combo_window,
             deadzone=args.deadzone,
             expo=args.expo,
             smoothing=args.smoothing,
@@ -4452,7 +5051,7 @@ def main():
     print("Mode:", args.mode)
     print("Command source:", args.command_source)
     print("Initial command:", command_source.read())
-    print("Initial speed scale:", f"{command_speed_scale(command_source):.2f}")
+    print("Initial speed scale:", f"{command_speed_scale(command_source):.3f}")
     print("Policy command gain:", f"{args.policy_command_gain:.2f}")
     print(
         "Policy command caps:",
@@ -4469,7 +5068,7 @@ def main():
         "enabled" if args.exact_policy_after_entry else "disabled",
     )
     if args.policy_pd_torque_limit > 0.0:
-        print("Policy PD torque limit:", f"{args.policy_pd_torque_limit:.2f} Nm override")
+        print("Policy PD torque limit:", f"{args.policy_pd_torque_limit:.1f} Nm")
     else:
         torque_limits = [
             motor_layer.policy_pd_torque_limit_for_joint(joint_name)
@@ -4666,6 +5265,17 @@ def main():
                 imu_filter_cfg=imu_policy_filter_cfg,
             )
 
+        if hasattr(estimator, "imu_required") and estimator.imu_required():
+            imu_ok = wait_for_live_policy_imu(
+                estimator,
+                source_name=getattr(imu_sensor, "source_name", active_imu_source),
+                samples=int(args.imu_startup_samples),
+                timeout_s=float(args.imu_startup_timeout),
+                max_roll_pitch_deg=float(args.imu_max_startup_roll_pitch_deg),
+            )
+            if not imu_ok:
+                return 1
+
         if args.auto_zero_on_startup and str(args.initial_zero_frame).lower() == "crouch":
             print("\n[ZERO CAL] startup auto-zero enabled for current crouch/default pose.")
             fresh, n_active = collect_complete_feedback_before_zero(
@@ -4801,6 +5411,7 @@ def main():
             feedback_timeout=args.feedback_timeout,
             walk_command_threshold=args.walk_command_threshold,
             walk_command_grace_seconds=args.walk_command_grace_seconds,
+            walk_stop_confirm_seconds=args.walk_stop_confirm_seconds,
             joystick_debug=args.joystick_debug,
             joint_debug=args.joint_debug,
             base_lin_vel_source=args.base_lin_vel_source,
@@ -4831,6 +5442,8 @@ def main():
             pose_transition_min_seconds=float(args.pose_transition_min_seconds),
             fresh_feedback_max_age_s=float(args.fresh_feedback_max_age),
             steady_feedback_budget_s=0.001 * float(args.steady_feedback_budget_ms),
+            suspension_status_seconds=float(args.suspension_status_seconds),
+            imu_active_max_roll_pitch_deg=float(args.imu_max_active_roll_pitch_deg),
             deadline_tolerance_s=0.001 * float(args.deadline_tolerance_ms),
             deadline_resync_s=0.001 * float(args.deadline_resync_ms),
             timing_fault_consecutive=int(args.timing_fault_consecutive),
