@@ -3,9 +3,11 @@ import argparse
 import csv
 import json
 import os
+import queue
 import socket
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -699,6 +701,338 @@ def wait_for_live_policy_imu(
     return True
 
 
+TORQUE_PROFILE_STAGES = {
+    "stage14": (14.0, 14.0),
+    "stage18": (14.0, 18.0),
+    "stage24": (14.0, 24.0),
+    "stage30": (14.0, 30.0),
+    "stage40": (14.0, 40.0),
+}
+
+
+def constant_joint_map(policy_order, value):
+    value = float(value)
+    return {joint_name: value for joint_name in policy_order}
+
+
+def resolve_profile_values(section, policy_order, fallback):
+    if section is None:
+        return dict(fallback)
+    if not isinstance(section, dict):
+        raise ValueError("policy torque profile section must be a mapping")
+    default = float(section.get("default", np.nan))
+    resolved = {}
+    for joint_name in policy_order:
+        if joint_name in section:
+            value = float(section[joint_name])
+        elif np.isfinite(default):
+            value = default
+        else:
+            value = float(fallback[joint_name])
+        if not np.isfinite(value) or value < 0.0:
+            raise ValueError(f"{joint_name}: torque profile value must be finite and >= 0")
+        resolved[joint_name] = value
+    unknown = sorted(set(section) - set(policy_order) - {"default"})
+    if unknown:
+        raise KeyError("Unknown torque profile joint(s): " + ", ".join(unknown))
+    return resolved
+
+
+def load_policy_torque_profile(path, policy_order, start_fallback, final_fallback):
+    cfg = load_yaml(Path(path).expanduser())
+    profile = (cfg or {}).get("policy_torque_profile", cfg or {})
+    if not isinstance(profile, dict):
+        raise ValueError("policy torque profile YAML must contain a mapping")
+    start = resolve_profile_values(
+        profile.get("start_nm"),
+        policy_order,
+        start_fallback,
+    )
+    final = resolve_profile_values(
+        profile.get("final_nm"),
+        policy_order,
+        final_fallback,
+    )
+    return start, final
+
+
+def validate_torque_profile(start_by_joint, final_by_joint, policy_order, ceiling):
+    ceiling = float(ceiling)
+    if not np.isfinite(ceiling) or ceiling <= 0.0:
+        raise ValueError("absolute torque ceiling must be finite and > 0")
+    for joint_name in policy_order:
+        start = float(start_by_joint[joint_name])
+        final = float(final_by_joint[joint_name])
+        if not np.isfinite(start) or not np.isfinite(final):
+            raise ValueError(f"{joint_name}: torque profile contains NaN/Inf")
+        if start < 0.0 or final < 0.0:
+            raise ValueError(f"{joint_name}: torque profile values must be >= 0")
+        if start > final:
+            raise ValueError(f"{joint_name}: torque start {start:.2f} exceeds final {final:.2f}")
+        if final > ceiling:
+            raise ValueError(
+                f"{joint_name}: torque final {final:.2f} exceeds absolute ceiling {ceiling:.2f}"
+            )
+
+
+def joint_group_soft_limit(joint_name, soft_limits):
+    group = "calf" if "calf" in joint_name else "thigh" if "thigh" in joint_name else "hip"
+    return float(soft_limits.get(group, soft_limits.get("default", 40.0)))
+
+
+class MeasuredTorqueSupervisor:
+    def __init__(self, policy_order, soft_limits, window=12):
+        self.policy_order = list(policy_order)
+        self.soft_limits = dict(soft_limits)
+        self.window = max(1, int(window))
+        self.history = {joint_name: [] for joint_name in self.policy_order}
+
+    def update(self, estimator):
+        feedback_by_joint = getattr(estimator, "last_feedback_by_joint", {}) or {}
+        current_by_joint = {}
+        average_by_joint = {}
+        window_max_by_joint = {}
+        soft_limit_active_by_joint = {}
+        max_abs = 0.0
+        for joint_name in self.policy_order:
+            feedback = feedback_by_joint.get(joint_name, {})
+            value = feedback.get("joint_torque", feedback.get("torque"))
+            try:
+                torque = float(value)
+            except (TypeError, ValueError):
+                torque = 0.0
+            current_by_joint[joint_name] = torque
+            max_abs = max(max_abs, abs(torque))
+
+            history = self.history[joint_name]
+            history.append(abs(torque))
+            if len(history) > self.window:
+                del history[:-self.window]
+            average = float(np.mean(history)) if history else 0.0
+            window_max = float(max(history)) if history else 0.0
+            average_by_joint[joint_name] = average
+            window_max_by_joint[joint_name] = window_max
+
+            soft_limit = joint_group_soft_limit(joint_name, self.soft_limits)
+            soft_limit_active_by_joint[joint_name] = bool(window_max > soft_limit)
+
+        return {
+            "current_by_joint": current_by_joint,
+            "average_by_joint": average_by_joint,
+            "window_max_by_joint": window_max_by_joint,
+            "soft_limit_active_by_joint": soft_limit_active_by_joint,
+            "max_abs": max_abs,
+        }
+
+
+def encoder_margin_to_policy_limits(safety, q_values, policy_order):
+    try:
+        q_values = np.asarray(q_values, dtype=np.float32).reshape(-1)
+        lower = np.asarray(safety.policy_q_min, dtype=np.float32)
+        upper = np.asarray(safety.policy_q_max, dtype=np.float32)
+    except Exception:
+        return float("inf"), ""
+    margins = []
+    labels = []
+    for index, joint_name in enumerate(policy_order):
+        if index >= q_values.size:
+            continue
+        margin = min(
+            float(q_values[index] - lower[index]),
+            float(upper[index] - q_values[index]),
+        )
+        margins.append(margin)
+        labels.append((margin, joint_name))
+    if not margins:
+        return float("inf"), ""
+    margin, joint_name = min(labels, key=lambda item: item[0])
+    return float(margin), str(joint_name)
+
+
+class PolicyTorqueRamp:
+    def __init__(
+        self,
+        policy_order,
+        start_by_joint,
+        final_by_joint,
+        delay_s=2.0,
+        ramp_s=8.0,
+        require_clean=True,
+        max_tracking_error_rad=0.25,
+        max_measured_torque=30.0,
+        min_encoder_margin_rad=0.08,
+        max_feedback_age_s=0.04,
+        max_cycle_work_s=0.020,
+        print_interval_s=1.0,
+    ):
+        self.policy_order = list(policy_order)
+        self.start_by_joint = {name: float(start_by_joint[name]) for name in self.policy_order}
+        self.final_by_joint = {name: float(final_by_joint[name]) for name in self.policy_order}
+        self.effective_by_joint = dict(self.start_by_joint)
+        self.delay_s = max(0.0, float(delay_s))
+        self.ramp_s = max(1.0e-6, float(ramp_s))
+        self.require_clean = bool(require_clean)
+        self.max_tracking_error_rad = float(max_tracking_error_rad)
+        self.max_measured_torque = float(max_measured_torque)
+        self.min_encoder_margin_rad = float(min_encoder_margin_rad)
+        self.max_feedback_age_s = float(max_feedback_age_s)
+        self.max_cycle_work_s = float(max_cycle_work_s)
+        self.print_interval_s = max(0.25, float(print_interval_s))
+        self.progress = 0.0
+        self.paused = False
+        self.pause_reason = ""
+        self.violation_count = 0
+        self._last_state = None
+        self._last_print_time = -1.0e9
+
+    @property
+    def start_max(self):
+        return max(self.start_by_joint.values(), default=0.0)
+
+    @property
+    def final_max(self):
+        return max(self.final_by_joint.values(), default=0.0)
+
+    @property
+    def effective_max(self):
+        return max(self.effective_by_joint.values(), default=0.0)
+
+    def _reason(
+        self,
+        entry_complete,
+        imu_fault,
+        feedback_fresh_count,
+        feedback_count_expected,
+        feedback_age_max_s,
+        encoder_margin_rad,
+        encoder_margin_joint,
+        tracking_error_max,
+        measured_torque_max,
+        measured_soft_limit_active,
+        cycle_work_s,
+        motor_fault,
+        timing_fault,
+    ):
+        if not entry_complete:
+            return "policy entry blend active"
+        if imu_fault:
+            return str(imu_fault)
+        if feedback_fresh_count < feedback_count_expected:
+            return f"fresh feedback {feedback_fresh_count}/{feedback_count_expected}"
+        if np.isfinite(feedback_age_max_s) and feedback_age_max_s > self.max_feedback_age_s:
+            return f"feedback age {feedback_age_max_s:.3f}s"
+        if np.isfinite(encoder_margin_rad) and encoder_margin_rad < self.min_encoder_margin_rad:
+            return f"{encoder_margin_joint or 'joint'} encoder margin {encoder_margin_rad:.3f} rad"
+        if np.isfinite(tracking_error_max) and tracking_error_max > self.max_tracking_error_rad:
+            return f"tracking error {tracking_error_max:.3f} rad"
+        if np.isfinite(measured_torque_max) and measured_torque_max > self.max_measured_torque:
+            return f"measured torque {measured_torque_max:.2f} Nm"
+        if measured_soft_limit_active:
+            return "measured torque soft limit active"
+        if np.isfinite(cycle_work_s) and cycle_work_s > self.max_cycle_work_s:
+            return f"cycle work {1000.0 * cycle_work_s:.1f} ms"
+        if motor_fault:
+            return str(motor_fault)
+        if timing_fault:
+            return "timing overrun"
+        return ""
+
+    def update(
+        self,
+        steady_policy_elapsed_s,
+        entry_complete,
+        imu_fault=None,
+        feedback_fresh_count=0,
+        feedback_count_expected=12,
+        feedback_age_max_s=float("inf"),
+        encoder_margin_rad=float("inf"),
+        encoder_margin_joint="",
+        tracking_error_max=0.0,
+        measured_torque_max=0.0,
+        measured_soft_limit_active=False,
+        cycle_work_s=0.0,
+        motor_fault=None,
+        timing_fault=False,
+        now=None,
+        print_fn=None,
+    ):
+        now = time.monotonic() if now is None else float(now)
+        reason = self._reason(
+            entry_complete=entry_complete,
+            imu_fault=imu_fault,
+            feedback_fresh_count=int(feedback_fresh_count or 0),
+            feedback_count_expected=int(feedback_count_expected or 0),
+            feedback_age_max_s=float(feedback_age_max_s),
+            encoder_margin_rad=float(encoder_margin_rad),
+            encoder_margin_joint=encoder_margin_joint,
+            tracking_error_max=float(tracking_error_max),
+            measured_torque_max=float(measured_torque_max),
+            measured_soft_limit_active=bool(measured_soft_limit_active),
+            cycle_work_s=float(cycle_work_s),
+            motor_fault=motor_fault,
+            timing_fault=timing_fault,
+        )
+        clean = reason == ""
+        if self.require_clean and not clean:
+            self.paused = True
+            self.pause_reason = reason
+            self.violation_count += 1
+            if self.violation_count >= 5:
+                self.progress = 0.0
+                self.effective_by_joint = dict(self.start_by_joint)
+        else:
+            self.paused = False
+            self.pause_reason = ""
+            self.violation_count = 0
+            alpha = smoothstep(
+                np.clip(
+                    (float(steady_policy_elapsed_s) - self.delay_s) / self.ramp_s,
+                    0.0,
+                    1.0,
+                )
+            )
+            self.progress = float(alpha)
+            self.effective_by_joint = {
+                joint_name: self.start_by_joint[joint_name]
+                + self.progress
+                * (self.final_by_joint[joint_name] - self.start_by_joint[joint_name])
+                for joint_name in self.policy_order
+            }
+
+        state = "paused" if self.paused else "running"
+        if print_fn is not None:
+            if state != self._last_state:
+                if self.paused:
+                    print_fn(f"[TORQUE RAMP PAUSED] {self.pause_reason}")
+                elif self._last_state == "paused":
+                    print_fn("[TORQUE RAMP RESUMED]")
+                self._last_state = state
+            if self.violation_count == 5:
+                print_fn(
+                    "[TORQUE RAMP REDUCED] "
+                    f"effective torque returned to {self.start_max:.1f} Nm"
+                )
+            if now - self._last_print_time >= self.print_interval_s and not self.paused:
+                self._last_print_time = now
+                print_fn(
+                    "[TORQUE RAMP] "
+                    f"effective={self.effective_max:.1f} Nm "
+                    f"start={self.start_max:.1f} final={self.final_max:.1f} "
+                    f"progress={100.0 * self.progress:.0f}%"
+                )
+        return self.effective_by_joint
+
+    def telemetry(self):
+        return {
+            "policy_torque_limit_start_nm": self.start_max,
+            "policy_torque_limit_final_nm": self.final_max,
+            "policy_torque_limit_effective_nm": self.effective_max,
+            "policy_torque_ramp_progress": self.progress,
+            "policy_torque_ramp_paused": int(bool(self.paused)),
+            "policy_torque_ramp_pause_reason": self.pause_reason,
+        }
+
+
 def compact_telemetry_record(
     step,
     mode,
@@ -754,6 +1088,10 @@ def compact_telemetry_record(
     feedback_previous_cycle_count=None,
     feedback_missing_count=None,
     feedback_stale_count=None,
+    torque_ramp_state=None,
+    measured_soft_limit_active_by_joint=None,
+    measured_torque_average_by_joint=None,
+    measured_torque_window_max_by_joint=None,
     missed_deadlines=0,
     consecutive_overruns=0,
     max_overrun_s=0.0,
@@ -892,6 +1230,12 @@ def compact_telemetry_record(
         "policy_entry_restart_count": int(policy_entry_restart_count),
         "policy_entry_restart_reason": str(policy_entry_restart_reason or ""),
         "entry_blend_active": int(bool(entry_blend_active)),
+        "policy_torque_limit_start_nm": "",
+        "policy_torque_limit_final_nm": "",
+        "policy_torque_limit_effective_nm": "",
+        "policy_torque_ramp_progress": "",
+        "policy_torque_ramp_paused": "",
+        "policy_torque_ramp_pause_reason": "",
         "tau_fb": None,
         "tau_fb_max": None,
         "fault_reason": "",
@@ -967,6 +1311,9 @@ def compact_telemetry_record(
             record[f"{prefix}_{index:02d}"] = int(bool(value))
 
     if policy_order is not None:
+        measured_soft_limit_active_by_joint = measured_soft_limit_active_by_joint or {}
+        measured_torque_average_by_joint = measured_torque_average_by_joint or {}
+        measured_torque_window_max_by_joint = measured_torque_window_max_by_joint or {}
         command_by_joint = {
             command_item.get("joint_name"): command_item
             for command_item in (commands or [])
@@ -1098,6 +1445,9 @@ def compact_telemetry_record(
                     "q_des",
                     "q_before_torque_limit",
                     "torque_limited",
+                    "torque_limit_effective",
+                    "torque_limit_start",
+                    "torque_limit_final",
                     "tau_pd_est",
                     "offset",
                     "direction",
@@ -1154,9 +1504,23 @@ def compact_telemetry_record(
                     record[f"{prefix}_fb_{key}"] = value
                 if feedback.get("joint_torque") is not None:
                     record[f"{prefix}_measured_torque"] = feedback.get("joint_torque")
+            record[f"{prefix}_measured_torque_avg"] = measured_torque_average_by_joint.get(
+                joint_name,
+                "",
+            )
+            record[f"{prefix}_measured_torque_window_max"] = (
+                measured_torque_window_max_by_joint.get(joint_name, "")
+            )
             if command_item:
                 if command_item.get("tau_pd_est") is not None:
                     record[f"{prefix}_estimated_pd_torque"] = command_item.get("tau_pd_est")
+                    measured = feedback.get("joint_torque", feedback.get("torque")) if isinstance(feedback, dict) else None
+                    try:
+                        denom = abs(float(command_item.get("tau_pd_est")))
+                        ratio = 0.0 if denom < 1.0e-6 else abs(float(measured)) / denom
+                    except (TypeError, ValueError):
+                        ratio = ""
+                    record[f"{prefix}_measured_to_estimated_ratio"] = ratio
                 if command_item.get("q_before_torque_limit") is not None:
                     record[f"{prefix}_q_before_torque_limit"] = command_item.get("q_before_torque_limit")
                 if command_item.get("q_des") is not None:
@@ -1164,6 +1528,16 @@ def compact_telemetry_record(
                 if command_item.get("torque_limited") is not None:
                     record[f"{prefix}_torque_limited"] = int(bool(command_item.get("torque_limited")))
                     record[f"{prefix}_torque_limit_active"] = int(bool(command_item.get("torque_limited")))
+                if command_item.get("torque_limit_effective") is not None:
+                    record[f"{prefix}_effective_torque_limit"] = command_item.get("torque_limit_effective")
+                    record[f"{prefix}_torque_limit_effective"] = command_item.get("torque_limit_effective")
+                if command_item.get("torque_limit_start") is not None:
+                    record[f"{prefix}_torque_limit_start"] = command_item.get("torque_limit_start")
+                if command_item.get("torque_limit_final") is not None:
+                    record[f"{prefix}_torque_limit_final"] = command_item.get("torque_limit_final")
+            record[f"{prefix}_measured_soft_limit_active"] = int(
+                bool(measured_soft_limit_active_by_joint.get(joint_name, False))
+            )
 
     imu_sensor = getattr(estimator, "imu_sensor", None)
     if imu_sensor is not None and hasattr(imu_sensor, "status"):
@@ -1178,6 +1552,8 @@ def compact_telemetry_record(
         record["imu_invalid_count"] = status.get("invalid_count", "")
         record["imu_parse_errors"] = status.get("parse_errors", "")
         record["imu_last_quality_reason"] = status.get("last_quality_reason", "")
+    if torque_ramp_state:
+        record.update(torque_ramp_state)
     return record
 
 
@@ -1212,8 +1588,16 @@ def joint_telemetry_fieldnames(policy_order):
         "entry_blend_active",
         "estimated_pd_torque",
         "measured_torque",
+        "measured_to_estimated_ratio",
+        "measured_torque_avg",
+        "measured_torque_window_max",
+        "effective_torque_limit",
+        "measured_soft_limit_active",
         "q_before_torque_limit",
         "q_after_torque_limit",
+        "torque_limit_effective",
+        "torque_limit_start",
+        "torque_limit_final",
         "torque_limited",
         "torque_limit_active",
         "feedback_age_ms",
@@ -1227,6 +1611,9 @@ def joint_telemetry_fieldnames(policy_order):
         "q_des",
         "q_before_torque_limit",
         "torque_limited",
+        "torque_limit_effective",
+        "torque_limit_start",
+        "torque_limit_final",
         "tau_pd_est",
         "offset",
         "direction",
@@ -1297,6 +1684,13 @@ def compact_telemetry_line(record):
         line += f" work={float(record['cycle_work_ms']):.1f}ms"
     if float(record.get("deadline_lateness_ms") or 0.0) > 0.0:
         line += f" late={float(record['deadline_lateness_ms']):.1f}ms"
+    if record.get("policy_torque_limit_effective_nm") not in (None, ""):
+        line += (
+            f" torque_limit={float(record['policy_torque_limit_effective_nm']):.1f}Nm"
+            f" ramp={100.0 * float(record.get('policy_torque_ramp_progress') or 0.0):.0f}%"
+        )
+        if int(record.get("policy_torque_ramp_paused") or 0):
+            line += f" ramp_paused={record.get('policy_torque_ramp_pause_reason', '')}"
     if int(record.get("consecutive_work_overruns") or 0) > 0:
         line += f" work_ovr={int(record['consecutive_work_overruns'])}"
         line += (
@@ -1436,6 +1830,8 @@ class CsvRunLogger:
         "safety_check_ms",
         "logging_ms",
         "csv_logging_ms",
+        "csv_queue_depth",
+        "csv_dropped_records",
         "terminal_print_ms",
         "imu_cache_read_ms",
         "imu_serial_read_ms",
@@ -1467,6 +1863,12 @@ class CsvRunLogger:
         "policy_entry_restart_count",
         "policy_entry_restart_reason",
         "entry_blend_active",
+        "policy_torque_limit_start_nm",
+        "policy_torque_limit_final_nm",
+        "policy_torque_limit_effective_nm",
+        "policy_torque_ramp_progress",
+        "policy_torque_ramp_paused",
+        "policy_torque_ramp_pause_reason",
         "tau_fb",
         "tau_fb_max",
         "fault_reason",
@@ -1479,6 +1881,11 @@ class CsvRunLogger:
         "exact_policy_after_entry",
         "can_topology",
         "can_backend",
+        "torque_profile_stage",
+        "policy_torque_start_max_nm",
+        "policy_torque_final_max_nm",
+        "policy_torque_ramp_delay_s",
+        "policy_torque_ramp_seconds",
     ]
     BASE_FIELDNAMES += [f"obs_{index:03d}" for index in range(48)]
     BASE_FIELDNAMES += [f"action_{index:02d}" for index in range(12)]
@@ -1520,6 +1927,9 @@ class CsvRunLogger:
         policy_order=None,
         flush_every=1,
         run_metadata=None,
+        async_enabled=True,
+        queue_size=500,
+        flush_seconds=1.0,
     ):
         self.enabled = bool(enabled)
         self.path = None
@@ -1530,6 +1940,14 @@ class CsvRunLogger:
         self.flush_every = max(1, int(flush_every))
         self._rows_since_flush = 0
         self.last_log_duration_s = 0.0
+        self.async_enabled = bool(async_enabled)
+        self.queue_size = max(1, int(queue_size))
+        self.flush_seconds = max(0.05, float(flush_seconds))
+        self.dropped_records = 0
+        self._queue = None
+        self._stop_event = threading.Event()
+        self._worker = None
+        self._last_flush_time = time.monotonic()
         self.run_metadata = dict(run_metadata or {})
         self.fieldnames = list(self.BASE_FIELDNAMES)
         self.fieldnames.extend(joint_telemetry_fieldnames(policy_order or []))
@@ -1554,17 +1972,23 @@ class CsvRunLogger:
         )
         self._writer.writeheader()
         self._file.flush()
+        if self.async_enabled:
+            self._queue = queue.Queue(maxsize=self.queue_size)
+            self._worker = threading.Thread(
+                target=self._run_worker,
+                name="AsyncCsvWriter",
+                daemon=True,
+            )
+            self._worker.start()
 
-    def log(self, record):
-        if not self.enabled or self._writer is None:
-            return 0.0
-
-        started = time.monotonic()
+    def _row_from_record(self, record):
         row = {field: "" for field in self.fieldnames}
         row.update(self.run_metadata)
         row.update(record)
         if "csv_logging_ms" in row and row["csv_logging_ms"] in ("", None, 0.0):
             row["csv_logging_ms"] = 1000.0 * float(self.last_log_duration_s)
+        row["csv_queue_depth"] = self.queue_depth()
+        row["csv_dropped_records"] = int(self.dropped_records)
         row["run_id"] = self.run_id
         row["wall_time"] = datetime.now().isoformat(timespec="milliseconds")
         row["elapsed_s"] = f"{time.monotonic() - self.start_time:.6f}"
@@ -1573,15 +1997,72 @@ class CsvRunLogger:
             row["tau_fb"] = ""
         if row["tau_fb_max"] is None:
             row["tau_fb_max"] = ""
+        return row
+
+    def _write_record(self, record):
+        started = time.monotonic()
+        row = self._row_from_record(record)
         self._writer.writerow(row)
         self._rows_since_flush += 1
-        if self._rows_since_flush >= self.flush_every:
+        now = time.monotonic()
+        if (
+            self._rows_since_flush >= self.flush_every
+            or now - self._last_flush_time >= self.flush_seconds
+        ):
             self._file.flush()
             self._rows_since_flush = 0
+            self._last_flush_time = now
         self.last_log_duration_s = time.monotonic() - started
         return self.last_log_duration_s
 
+    def _run_worker(self):
+        while not self._stop_event.is_set() or (
+            self._queue is not None and not self._queue.empty()
+        ):
+            try:
+                record = self._queue.get(timeout=0.05)
+            except queue.Empty:
+                if (
+                    self._file is not None
+                    and time.monotonic() - self._last_flush_time >= self.flush_seconds
+                ):
+                    self._file.flush()
+                    self._rows_since_flush = 0
+                    self._last_flush_time = time.monotonic()
+                continue
+            try:
+                self._write_record(record)
+            finally:
+                self._queue.task_done()
+
+    def queue_depth(self):
+        if self._queue is None:
+            return 0
+        return int(self._queue.qsize())
+
+    def submit(self, record):
+        if not self.enabled or self._writer is None:
+            return 0.0
+        if not self.async_enabled:
+            return self._write_record(record)
+        started = time.monotonic()
+        lightweight_record = dict(record)
+        lightweight_record["csv_queue_depth"] = self.queue_depth()
+        lightweight_record["csv_dropped_records"] = int(self.dropped_records)
+        try:
+            self._queue.put_nowait(lightweight_record)
+        except queue.Full:
+            self.dropped_records += 1
+        return time.monotonic() - started
+
+    def log(self, record):
+        return self.submit(record)
+
     def close(self):
+        self._stop_event.set()
+        if self._worker is not None:
+            self._worker.join(timeout=3.0)
+            self._worker = None
         if self._file is not None:
             self._file.flush()
             self._file.close()
@@ -1985,6 +2466,144 @@ def count_fresh_active_feedback(estimator, active_joints, max_age_s):
         if np.isfinite(age) and age <= float(max_age_s):
             count += 1
     return count
+
+
+def run_calf_range_check(
+    runner,
+    safety,
+    motor_layer,
+    estimator,
+    buses,
+    mode,
+    feedback_timeout=0.10,
+    samples=8,
+    sample_period_s=0.04,
+):
+    """Read-only calf encoder/transmission diagnostic.
+
+    This intentionally sends only feedback poll frames. It never enables MIT
+    torque and never builds policy or pose commands.
+    """
+    if mode != "mit-signal" or buses is None:
+        print("ERROR: --calf-range-check requires --mode mit-signal with real CAN buses.")
+        return False
+
+    calf_joints = [
+        joint_name
+        for joint_name in runner.policy_order
+        if "calf" in joint_name and joint_name in motor_layer.active_joints
+    ]
+    if not calf_joints:
+        print("ERROR: --calf-range-check found no active calf joints.")
+        return False
+
+    expected_bus_motor_ids = active_feedback_bus_motor_ids(
+        estimator,
+        motor_layer,
+        active_joints=calf_joints,
+    )
+    q_samples = {joint_name: [] for joint_name in calf_joints}
+
+    print("\n################################################################################")
+    print("CALF RANGE CHECK: READ ONLY")
+    print("################################################################################")
+    print("No motor enable frames, MIT commands, pose commands, or policy commands are sent.")
+    print("This validates the current converted calf feedback and four-bar range.")
+
+    for _ in range(max(1, int(samples))):
+        try:
+            motor_layer.send_raw_commands(buses, motor_layer.build_feedback_poll_commands())
+            refresh_estimator_feedback(
+                estimator,
+                timeout=float(feedback_timeout),
+                expected_bus_motor_ids=expected_bus_motor_ids,
+            )
+        except Exception as exc:
+            print("\nERROR: calf feedback decode failed:", exc)
+            print(
+                "If this is a four-bar range error, expand or recalibrate the measured "
+                "calf lookup before walking. For raw capture, use check_motor_connections "
+                "with four-bar disabled."
+            )
+            return False
+
+        feedback_by_joint = getattr(estimator, "last_feedback_by_joint", {}) or {}
+        for joint_name in calf_joints:
+            feedback = feedback_by_joint.get(joint_name)
+            if isinstance(feedback, dict):
+                q_samples[joint_name].append(float(feedback.get("position", 0.0)))
+        time.sleep(max(0.0, float(sample_period_s)))
+
+    feedback_by_joint = getattr(estimator, "last_feedback_by_joint", {}) or {}
+    now = time.monotonic()
+    print()
+    print(
+        "Joint                |   Bus | Motor | State     | Age ms | "
+        "Joint rad | Raw rad | Offset | Dir | Motor th | J=dq/dth | "
+        "Torque | Hard margin | Policy margin | 4bar | Fault"
+    )
+    print("-" * 174)
+
+    ok = True
+    for joint_name in calf_joints:
+        index = runner.policy_order.index(joint_name)
+        motor_id = int(motor_layer.motor_ids[joint_name])
+        bus_name = motor_layer.joint_can_bus.get(joint_name, "can0")
+        feedback = feedback_by_joint.get(joint_name)
+        if not isinstance(feedback, dict):
+            ok = False
+            print(
+                f"{joint_name:20s} | {bus_name:>5s} | 0x{motor_id:02X}  | "
+                "MISSING   |     na |       na |      na |     na |  na |"
+                "       na |       na |     na |          na |           na |   na | na"
+            )
+            continue
+
+        age_ms = 1000.0 * max(0.0, now - float(feedback.get("timestamp", now)))
+        joint_q = float(feedback.get("position", feedback.get("joint_position", 0.0)))
+        raw_q = float(feedback.get("position_raw", feedback.get("position", 0.0)))
+        offset = float(motor_layer.joint_offsets.get(joint_name, 0.0))
+        direction = float(motor_layer.joint_directions.get(joint_name, 1.0))
+        motor_q = float(feedback.get("motor_position", joint_q))
+        jacobian = float(feedback.get("transmission_jacobian", 1.0))
+        torque = float(feedback.get("torque", feedback.get("joint_torque", 0.0)))
+        fault = int(feedback.get("fault", feedback.get("fault_bits", 0)) or 0)
+        fourbar = bool(feedback.get("transmission_enabled", False))
+
+        hard_margin = min(
+            float(joint_q - safety.q_min[index]),
+            float(safety.q_max[index] - joint_q),
+        )
+        policy_margin = min(
+            float(joint_q - safety.policy_q_min[index]),
+            float(safety.policy_q_max[index] - joint_q),
+        )
+        if hard_margin < 0.0 or policy_margin < 0.0:
+            ok = False
+        repeatability = 0.0
+        if len(q_samples[joint_name]) >= 2:
+            repeatability = max(q_samples[joint_name]) - min(q_samples[joint_name])
+        if repeatability > 0.02:
+            ok = False
+
+        print(
+            f"{joint_name:20s} | {bus_name:>5s} | 0x{motor_id:02X}  | "
+            f"CONNECTED | {age_ms:6.1f} | {joint_q:+9.4f} | {raw_q:+7.4f} | "
+            f"{offset:+6.3f} | {direction:+3.0f} | {motor_q:+8.4f} | "
+            f"{jacobian:+8.4f} | {torque:+6.2f} | {hard_margin:+11.4f} | "
+            f"{policy_margin:+13.4f} | "
+            f"{'yes' if fourbar else ' no':>4s} | 0x{fault:02X}"
+        )
+        if repeatability > 0.0:
+            print(f"  repeatability window for {joint_name}: {repeatability:.5f} rad")
+
+    print("-" * 174)
+    print(
+        "Calf range check:",
+        "PASS" if ok else "CHECK REQUIRED",
+        "- all values above are converted joint radians used by policy/control.",
+    )
+    return ok
 
 
 def fresh_feedback_by_joint(estimator, active_joints, max_age_s):
@@ -2969,6 +3588,8 @@ def run_policy_loop(
     deadline_tolerance_s,
     deadline_resync_s,
     timing_fault_consecutive,
+    torque_ramp=None,
+    measured_torque_soft_limits=None,
     telemetry=None,
     csv_logger=None,
 ):
@@ -2982,6 +3603,19 @@ def run_policy_loop(
         )
     )
     action_dim = len(runner.policy_order)
+    measured_torque_soft_limits = dict(
+        measured_torque_soft_limits
+        or {"hip": 35.0, "thigh": 40.0, "calf": 40.0, "default": 40.0}
+    )
+    torque_ramp_state_for_log = torque_ramp.telemetry() if torque_ramp is not None else {}
+    measured_soft_limit_active_by_joint_for_log = {}
+    measured_torque_average_by_joint_for_log = {}
+    measured_torque_window_max_by_joint_for_log = {}
+    measured_torque_supervisor = MeasuredTorqueSupervisor(
+        runner.policy_order,
+        measured_torque_soft_limits,
+        window=12,
+    )
     # Preserve the trained observation contract: slots 36:48 contain the
     # previous raw actor output. Hardware clipping, smoothing, and target slew
     # limiting are applied downstream without changing this policy input.
@@ -3219,6 +3853,10 @@ def run_policy_loop(
         imu_correction_abs_max = 0.0
         target_joint_limited_mask = np.zeros(action_dim, dtype=bool)
         target_rate_limited_mask = np.zeros(action_dim, dtype=bool)
+        measured_soft_limit_active_by_joint_for_log = {}
+        measured_torque_average_by_joint_for_log = {}
+        measured_torque_window_max_by_joint_for_log = {}
+        torque_ramp_state_for_log = torque_ramp.telemetry() if torque_ramp is not None else {}
         policy_inference_s = 0.0
         command_input_s = 0.0
         observation_build_s = 0.0
@@ -4073,6 +4711,80 @@ def run_policy_loop(
             target_rate_limited_mask = target_diag["target_rate_limited"]
             q_joint_limit_filtered_target_for_log = target_diag["joint_limit_filtered_q_target"]
             q_rate_limited_target_for_log = target_diag["rate_limited_q_target"]
+            if torque_ramp is not None:
+                measured_supervision = measured_torque_supervisor.update(estimator)
+                measured_soft_limit_active_by_joint_for_log = measured_supervision[
+                    "soft_limit_active_by_joint"
+                ]
+                measured_torque_average_by_joint_for_log = measured_supervision[
+                    "average_by_joint"
+                ]
+                measured_torque_window_max_by_joint_for_log = measured_supervision[
+                    "window_max_by_joint"
+                ]
+                measured_torque_max_for_ramp = max(
+                    float(measured_supervision["max_abs"]),
+                    max(measured_torque_window_max_by_joint_for_log.values(), default=0.0),
+                )
+                pre_fresh_count, pre_feedback_age_max_s = feedback_age_summary(
+                    estimator,
+                    motor_layer.active_joints,
+                    live_feedback_max_age_s,
+                )
+                pre_fresh_count = 0 if pre_fresh_count is None else int(pre_fresh_count)
+                pre_feedback_age_max_s = (
+                    float("inf")
+                    if pre_feedback_age_max_s is None
+                    else float(pre_feedback_age_max_s)
+                )
+                encoder_margin_rad, encoder_margin_joint = encoder_margin_to_policy_limits(
+                    safety,
+                    q_current,
+                    runner.policy_order,
+                )
+                tracking_error_for_ramp = float(
+                    np.max(np.abs(np.asarray(q_safe_target, dtype=np.float32) - q_current))
+                )
+                feedback_by_joint = getattr(estimator, "last_feedback_by_joint", {}) or {}
+                faulted = [
+                    joint_name
+                    for joint_name in motor_layer.active_joints
+                    if int((feedback_by_joint.get(joint_name, {}) or {}).get("fault_bits", 0)) != 0
+                ]
+                motor_fault_reason = (
+                    "motor fault: " + ", ".join(faulted[:4])
+                    if faulted
+                    else None
+                )
+                imu_fault_for_ramp = validate_required_policy_imu(
+                    estimator,
+                    max_roll_pitch_deg=imu_active_max_roll_pitch_deg,
+                )
+                effective_torque_limits = torque_ramp.update(
+                    steady_policy_elapsed_s=float(policy_steady_cycles) * float(dt),
+                    entry_complete=float(policy_entry_scale) >= 0.999,
+                    imu_fault=imu_fault_for_ramp,
+                    feedback_fresh_count=pre_fresh_count,
+                    feedback_count_expected=len(motor_layer.active_joints),
+                    feedback_age_max_s=pre_feedback_age_max_s,
+                    encoder_margin_rad=encoder_margin_rad,
+                    encoder_margin_joint=encoder_margin_joint,
+                    tracking_error_max=tracking_error_for_ramp,
+                    measured_torque_max=measured_torque_max_for_ramp,
+                    measured_soft_limit_active=any(
+                        measured_soft_limit_active_by_joint_for_log.values()
+                    ),
+                    cycle_work_s=scheduler.last_snapshot.cycle_work_s,
+                    motor_fault=motor_fault_reason,
+                    timing_fault=bool(scheduler.last_snapshot.work_overrun),
+                    print_fn=print,
+                )
+                motor_layer.set_policy_pd_torque_limits(
+                    effective_torque_limits,
+                    start_limits_by_joint=torque_ramp.start_by_joint,
+                    final_limits_by_joint=torque_ramp.final_by_joint,
+                )
+                torque_ramp_state_for_log = torque_ramp.telemetry()
             commands = build_loop_mit_commands(
                 q_safe_target,
                 phase="policy",
@@ -4440,6 +5152,10 @@ def run_policy_loop(
                 feedback_previous_cycle_count=feedback_recency["fresh_previous_cycle"],
                 feedback_missing_count=feedback_recency["missing"],
                 feedback_stale_count=feedback_recency["stale"],
+                torque_ramp_state=torque_ramp_state_for_log,
+                measured_soft_limit_active_by_joint=measured_soft_limit_active_by_joint_for_log,
+                measured_torque_average_by_joint=measured_torque_average_by_joint_for_log,
+                measured_torque_window_max_by_joint=measured_torque_window_max_by_joint_for_log,
                 missed_deadlines=timing.total_missed_deadlines,
                 consecutive_overruns=timing.consecutive_work_overruns,
                 max_overrun_s=timing.maximum_lateness_s,
@@ -4835,6 +5551,14 @@ def main():
     parser.add_argument("--standup-seconds", type=float, default=None)
     parser.add_argument("--log-every", type=int, default=25)
     parser.add_argument(
+        "--async-csv",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="write CSV rows from a bounded background queue instead of blocking the control loop",
+    )
+    parser.add_argument("--csv-queue-size", type=int, default=500)
+    parser.add_argument("--csv-flush-seconds", type=float, default=1.0)
+    parser.add_argument(
         "--print-every",
         type=int,
         default=0,
@@ -5143,6 +5867,41 @@ def main():
             "config/control_limits.yaml, including per-joint limits"
         ),
     )
+    parser.add_argument("--policy-pd-torque-limit-start", type=float, default=14.0)
+    parser.add_argument("--policy-pd-torque-limit-final", type=float, default=14.0)
+    parser.add_argument("--policy-torque-ramp-delay-seconds", type=float, default=2.0)
+    parser.add_argument("--policy-torque-ramp-seconds", type=float, default=8.0)
+    parser.add_argument(
+        "--policy-torque-ramp-require-clean",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
+    parser.add_argument("--policy-torque-ramp-max-tracking-error-rad", type=float, default=0.25)
+    parser.add_argument("--policy-torque-ramp-max-measured-torque", type=float, default=30.0)
+    parser.add_argument("--policy-torque-ramp-min-encoder-margin-rad", type=float, default=0.08)
+    parser.add_argument("--policy-torque-ramp-max-feedback-age", type=float, default=0.04)
+    parser.add_argument("--policy-torque-ramp-max-cycle-work-ms", type=float, default=20.0)
+    parser.add_argument("--policy-pd-torque-profile", default=None)
+    parser.add_argument("--policy-pd-torque-scale", type=float, default=1.0)
+    parser.add_argument("--policy-absolute-torque-ceiling", type=float, default=40.0)
+    parser.add_argument(
+        "--torque-profile-stage",
+        choices=sorted(TORQUE_PROFILE_STAGES),
+        default="stage14",
+    )
+    parser.add_argument(
+        "--acknowledge-40nm-suspension-test",
+        action="store_true",
+        help="required to run torque-profile-stage stage40",
+    )
+    parser.add_argument("--measured-torque-soft-hip", type=float, default=35.0)
+    parser.add_argument("--measured-torque-soft-thigh", type=float, default=40.0)
+    parser.add_argument("--measured-torque-soft-calf", type=float, default=40.0)
+    parser.add_argument(
+        "--calf-range-check",
+        action="store_true",
+        help="read-only calf range report; no policy actor or walking commands",
+    )
     parser.add_argument(
         "--pose-pd-torque-limit",
         type=float,
@@ -5268,6 +6027,35 @@ def main():
         args.policy_entry_ramp_seconds = 1.5
     if not np.isfinite(args.policy_pd_torque_limit) or args.policy_pd_torque_limit < 0.0:
         parser.error("--policy-pd-torque-limit must be finite and >= 0")
+    if int(args.csv_queue_size) <= 0:
+        parser.error("--csv-queue-size must be > 0")
+    if not np.isfinite(args.csv_flush_seconds) or args.csv_flush_seconds <= 0.0:
+        parser.error("--csv-flush-seconds must be finite and > 0")
+    torque_numeric_args = (
+        ("--policy-pd-torque-limit-start", args.policy_pd_torque_limit_start),
+        ("--policy-pd-torque-limit-final", args.policy_pd_torque_limit_final),
+        ("--policy-torque-ramp-delay-seconds", args.policy_torque_ramp_delay_seconds),
+        ("--policy-torque-ramp-seconds", args.policy_torque_ramp_seconds),
+        ("--policy-torque-ramp-max-tracking-error-rad", args.policy_torque_ramp_max_tracking_error_rad),
+        ("--policy-torque-ramp-max-measured-torque", args.policy_torque_ramp_max_measured_torque),
+        ("--policy-torque-ramp-min-encoder-margin-rad", args.policy_torque_ramp_min_encoder_margin_rad),
+        ("--policy-torque-ramp-max-feedback-age", args.policy_torque_ramp_max_feedback_age),
+        ("--policy-torque-ramp-max-cycle-work-ms", args.policy_torque_ramp_max_cycle_work_ms),
+        ("--policy-pd-torque-scale", args.policy_pd_torque_scale),
+        ("--policy-absolute-torque-ceiling", args.policy_absolute_torque_ceiling),
+        ("--measured-torque-soft-hip", args.measured_torque_soft_hip),
+        ("--measured-torque-soft-thigh", args.measured_torque_soft_thigh),
+        ("--measured-torque-soft-calf", args.measured_torque_soft_calf),
+    )
+    for name, value in torque_numeric_args:
+        if not np.isfinite(value) or value < 0.0:
+            parser.error(f"{name} must be finite and >= 0")
+    if args.policy_torque_ramp_seconds <= 0.0:
+        parser.error("--policy-torque-ramp-seconds must be > 0")
+    if args.policy_absolute_torque_ceiling <= 0.0:
+        parser.error("--policy-absolute-torque-ceiling must be > 0")
+    if args.torque_profile_stage == "stage40" and not args.acknowledge_40nm_suspension_test:
+        parser.error("stage40 requires --acknowledge-40nm-suspension-test")
     if not np.isfinite(args.pose_pd_torque_limit) or args.pose_pd_torque_limit < 0.0:
         parser.error("--pose-pd-torque-limit must be finite and >= 0")
     if (
@@ -5402,8 +6190,68 @@ def main():
         active_joints=active_joints,
         joint_can_bus=joint_can_bus,
     )
-    if args.policy_pd_torque_limit > 0.0:
-        motor_layer.set_policy_pd_torque_limit(args.policy_pd_torque_limit)
+    supplied_options = set()
+    for token in sys.argv[1:]:
+        if token.startswith("--"):
+            supplied_options.add(token.split("=", 1)[0])
+    legacy_torque_supplied = "--policy-pd-torque-limit" in supplied_options
+    profile_controls_supplied = bool(
+        {
+            "--policy-pd-torque-limit-start",
+            "--policy-pd-torque-limit-final",
+            "--policy-pd-torque-profile",
+            "--torque-profile-stage",
+        }
+        & supplied_options
+    )
+    if legacy_torque_supplied and args.policy_pd_torque_limit > 0.0 and not profile_controls_supplied:
+        torque_start_by_joint = constant_joint_map(runner.policy_order, args.policy_pd_torque_limit)
+        torque_final_by_joint = constant_joint_map(runner.policy_order, args.policy_pd_torque_limit)
+    else:
+        stage_start, stage_final = TORQUE_PROFILE_STAGES[str(args.torque_profile_stage)]
+        torque_start_value = (
+            float(args.policy_pd_torque_limit_start)
+            if "--policy-pd-torque-limit-start" in supplied_options
+            else stage_start
+        )
+        torque_final_value = (
+            float(args.policy_pd_torque_limit_final)
+            if "--policy-pd-torque-limit-final" in supplied_options
+            else stage_final
+        )
+        torque_start_by_joint = constant_joint_map(runner.policy_order, torque_start_value)
+        torque_final_by_joint = constant_joint_map(runner.policy_order, torque_final_value)
+        if args.policy_pd_torque_profile:
+            torque_start_by_joint, torque_final_by_joint = load_policy_torque_profile(
+                args.policy_pd_torque_profile,
+                runner.policy_order,
+                torque_start_by_joint,
+                torque_final_by_joint,
+            )
+        if float(args.policy_pd_torque_scale) != 1.0:
+            torque_start_by_joint = {
+                joint_name: float(value) * float(args.policy_pd_torque_scale)
+                for joint_name, value in torque_start_by_joint.items()
+            }
+            torque_final_by_joint = {
+                joint_name: float(value) * float(args.policy_pd_torque_scale)
+                for joint_name, value in torque_final_by_joint.items()
+            }
+    try:
+        validate_torque_profile(
+            torque_start_by_joint,
+            torque_final_by_joint,
+            runner.policy_order,
+            args.policy_absolute_torque_ceiling,
+        )
+    except (KeyError, ValueError) as exc:
+        print("ERROR:", exc)
+        return 1
+    motor_layer.set_policy_pd_torque_limits(
+        torque_start_by_joint,
+        start_limits_by_joint=torque_start_by_joint,
+        final_limits_by_joint=torque_final_by_joint,
+    )
     if args.pose_pd_torque_limit > 0.0:
         motor_layer.set_pose_pd_torque_limit(args.pose_pd_torque_limit)
     active_port_by_bus = ports_for_active_joints(
@@ -5532,22 +6380,24 @@ def main():
     print("Policy action smoothing:", f"{args.policy_action_smoothing:.2f}")
     print("Policy action delta limit:", f"{args.policy_action_delta_limit:.3f}")
     print("Policy entry ramp:", f"{args.policy_entry_ramp_seconds:.2f} s")
+    print("TORQUE QUALIFICATION STAGE:", args.torque_profile_stage)
+    print("Robot must be fully suspended. Previous lower stage must have passed.")
+    if args.torque_profile_stage == "stage40":
+        print("40 Nm suspended stage explicitly acknowledged.")
     print(
         "Exact policy after entry:",
         "enabled" if args.exact_policy_after_entry else "disabled",
     )
-    if args.policy_pd_torque_limit > 0.0:
-        print("Policy PD torque limit:", f"{args.policy_pd_torque_limit:.1f} Nm")
-    else:
-        torque_limits = [
-            motor_layer.policy_pd_torque_limit_for_joint(joint_name)
-            for joint_name in runner.policy_order
-        ]
-        print(
-            "Policy PD torque limits:",
-            f"config per-joint min={min(torque_limits):.2f} "
-            f"max={max(torque_limits):.2f} Nm",
-        )
+    torque_start_values = list(torque_start_by_joint.values())
+    torque_final_values = list(torque_final_by_joint.values())
+    print(
+        "Policy PD torque ramp:",
+        f"start min={min(torque_start_values):.2f} max={max(torque_start_values):.2f} Nm",
+        f"final min={min(torque_final_values):.2f} max={max(torque_final_values):.2f} Nm",
+        f"delay={float(args.policy_torque_ramp_delay_seconds):.2f}s",
+        f"ramp={float(args.policy_torque_ramp_seconds):.2f}s",
+        f"require_clean={bool(args.policy_torque_ramp_require_clean)}",
+    )
     pose_torque_limits = motor_layer.pose_pd_torque_limits()
     if args.pose_pd_torque_limit > 0.0:
         print("Pose PD torque limit:", f"{args.pose_pd_torque_limit:.2f} Nm override")
@@ -5562,6 +6412,31 @@ def main():
         "Measured torque emergency limit:",
         f"{float(safety.max_abs_feedback_torque):.2f} Nm",
         f"samples={int(safety.max_abs_feedback_torque_fault_samples)}",
+    )
+    measured_torque_soft_limits = {
+        "hip": float(args.measured_torque_soft_hip),
+        "thigh": float(args.measured_torque_soft_thigh),
+        "calf": float(args.measured_torque_soft_calf),
+        "default": float(args.measured_torque_soft_calf),
+    }
+    print(
+        "Measured torque soft limits:",
+        f"hip={measured_torque_soft_limits['hip']:.1f} Nm",
+        f"thigh={measured_torque_soft_limits['thigh']:.1f} Nm",
+        f"calf={measured_torque_soft_limits['calf']:.1f} Nm",
+    )
+    torque_ramp = PolicyTorqueRamp(
+        policy_order=runner.policy_order,
+        start_by_joint=torque_start_by_joint,
+        final_by_joint=torque_final_by_joint,
+        delay_s=float(args.policy_torque_ramp_delay_seconds),
+        ramp_s=float(args.policy_torque_ramp_seconds),
+        require_clean=bool(args.policy_torque_ramp_require_clean),
+        max_tracking_error_rad=float(args.policy_torque_ramp_max_tracking_error_rad),
+        max_measured_torque=float(args.policy_torque_ramp_max_measured_torque),
+        min_encoder_margin_rad=float(args.policy_torque_ramp_min_encoder_margin_rad),
+        max_feedback_age_s=float(args.policy_torque_ramp_max_feedback_age),
+        max_cycle_work_s=0.001 * float(args.policy_torque_ramp_max_cycle_work_ms),
     )
     print("Encoder limit tolerance:", f"{float(args.encoder_limit_tolerance_rad):.3f} rad")
     print("Walk command grace:", f"{args.walk_command_grace_seconds:.2f} s")
@@ -5628,6 +6503,9 @@ def main():
             log_file=args.log_file,
             policy_order=runner.policy_order,
             flush_every=args.csv_flush_every,
+            async_enabled=bool(args.async_csv),
+            queue_size=int(args.csv_queue_size),
+            flush_seconds=float(args.csv_flush_seconds),
             run_metadata={
                 "command_line": " ".join(sys.argv),
                 "runtime_control_hz": f"{runtime_control_hz:.6f}",
@@ -5635,6 +6513,11 @@ def main():
                 "exact_policy_after_entry": str(bool(args.exact_policy_after_entry)),
                 "can_topology": "; ".join(topology_lines(args.can_count, port_by_bus)),
                 "can_backend": str(args.can_backend),
+                "torque_profile_stage": str(args.torque_profile_stage),
+                "policy_torque_start_max_nm": f"{max(torque_start_by_joint.values()):.6f}",
+                "policy_torque_final_max_nm": f"{max(torque_final_by_joint.values()):.6f}",
+                "policy_torque_ramp_delay_s": f"{float(args.policy_torque_ramp_delay_seconds):.6f}",
+                "policy_torque_ramp_seconds": f"{float(args.policy_torque_ramp_seconds):.6f}",
             },
         )
         if csv_logger.enabled:
@@ -5642,6 +6525,12 @@ def main():
             print(
                 "CSV automatic Git push:",
                 "enabled" if args.auto_push_log else "disabled",
+            )
+            print(
+                "CSV writer:",
+                "async" if args.async_csv else "sync",
+                f"queue={int(args.csv_queue_size)}",
+                f"flush={float(args.csv_flush_seconds):.2f}s",
             )
             print(
                 "CSV policy I/O: input=obs_000..047, "
@@ -5733,7 +6622,14 @@ def main():
             )
             print("Polling initial motor encoder feedback...")
             motor_layer.send_raw_commands(buses, motor_layer.build_feedback_poll_commands())
-            initial_feedback = estimator.refresh_from_bus(timeout=0.10)
+            try:
+                initial_feedback = estimator.refresh_from_bus(timeout=0.10)
+            except Exception as exc:
+                if args.calf_range_check:
+                    print("Initial decoded feedback failed during calf range check:", exc)
+                    initial_feedback = 0
+                else:
+                    raise
             if initial_feedback <= 0:
                 print(
                     "\nMIT feedback: no initial frames yet. "
@@ -5745,6 +6641,18 @@ def main():
                 imu_sensor=imu_sensor,
                 imu_filter_cfg=imu_policy_filter_cfg,
             )
+
+        if args.calf_range_check:
+            ok = run_calf_range_check(
+                runner=runner,
+                safety=safety,
+                motor_layer=motor_layer,
+                estimator=estimator,
+                buses=buses,
+                mode=args.mode,
+                feedback_timeout=args.feedback_timeout,
+            )
+            return 0 if ok else 1
 
         if hasattr(estimator, "imu_required") and estimator.imu_required():
             imu_ok = wait_for_live_policy_imu(
@@ -5944,6 +6852,8 @@ def main():
             deadline_tolerance_s=0.001 * float(args.deadline_tolerance_ms),
             deadline_resync_s=0.001 * float(args.deadline_resync_ms),
             timing_fault_consecutive=int(args.timing_fault_consecutive),
+            torque_ramp=torque_ramp,
+            measured_torque_soft_limits=measured_torque_soft_limits,
             telemetry=telemetry,
             csv_logger=csv_logger,
         )

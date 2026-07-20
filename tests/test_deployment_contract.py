@@ -1,6 +1,7 @@
 import argparse
 import contextlib
 import io
+import queue
 import py_compile
 import time
 from pathlib import Path
@@ -20,10 +21,15 @@ from can_topology import (
 from imu_interface import ImuReading, XsensBackgroundReader, imu_reading_quality
 from joystick_interface import CommandSource
 from main_controller import (
+    CsvRunLogger,
+    MeasuredTorqueSupervisor,
+    PolicyTorqueRamp,
     action_equivalent_for_q_target,
     compact_telemetry_record,
+    constant_joint_map,
     shifted_safety_filter_with_diagnostics,
     validate_required_policy_imu,
+    validate_torque_profile,
     smoothstep,
 )
 from motor_command_layer import (
@@ -387,6 +393,235 @@ def test_policy_and_pose_pd_torque_limits_are_separate():
     assert pose_limits["hold"] == pytest.approx(12.0)
     assert configured_policy_limit != pytest.approx(12.0)
     assert layer.policy_pd_torque_limit_for_joint(runner.policy_order[0]) == pytest.approx(21.0)
+
+
+def test_per_joint_policy_torque_limits_are_preserved_in_commands():
+    runner = PolicyRunner()
+    motor_ids = load_yaml(ROOT / "config" / "motor_ids.yaml")["motor_ids"]
+    layer = MotorCommandLayer(
+        runner.policy_order,
+        motor_ids,
+        active_joints=[],
+        joint_can_bus=resolve_joint_can_bus(runner.policy_order, 1),
+    )
+    effective = {name: 14.0 + index for index, name in enumerate(runner.policy_order)}
+    start = constant_joint_map(runner.policy_order, 14.0)
+    final = constant_joint_map(runner.policy_order, 24.0)
+    layer.set_policy_pd_torque_limits(
+        effective,
+        start_limits_by_joint=start,
+        final_limits_by_joint=final,
+    )
+    for index, joint_name in enumerate(runner.policy_order):
+        assert layer.policy_pd_torque_limit_for_joint(joint_name) == pytest.approx(14.0 + index)
+        assert layer.policy_pd_torque_limit_start[joint_name] == pytest.approx(14.0)
+        assert layer.policy_pd_torque_limit_final[joint_name] == pytest.approx(24.0)
+
+    with pytest.raises(KeyError):
+        layer.set_policy_pd_torque_limits({"not_a_joint": 1.0})
+
+
+def test_motor_command_build_does_not_reload_limits_per_joint():
+    runner = PolicyRunner()
+    motor_ids = load_yaml(ROOT / "config" / "motor_ids.yaml")["motor_ids"]
+    layer = MotorCommandLayer(
+        runner.policy_order,
+        motor_ids,
+        active_joints=[],
+        joint_can_bus=resolve_joint_can_bus(runner.policy_order, 1),
+    )
+    layer.control_limit_reload_interval_s = 999.0
+    layer.joint_limit_reload_interval_s = 999.0
+    calls = {"control": 0, "joint": 0}
+
+    def count_control_reload(force=False):
+        calls["control"] += 1
+        return False
+
+    def count_joint_reload(force=False):
+        calls["joint"] += 1
+        return False
+
+    layer.reload_control_limits = count_control_reload
+    layer.reload_joint_limits = count_joint_reload
+    commands = layer.build_mit_commands(np.zeros(12, dtype=np.float32), phase="policy")
+    assert len(commands) == 12
+    assert calls["control"] <= 1
+    assert calls["joint"] <= 1
+
+
+def test_policy_torque_profile_validation_rejects_unsafe_values():
+    runner = PolicyRunner()
+    start = constant_joint_map(runner.policy_order, 14.0)
+    final = constant_joint_map(runner.policy_order, 24.0)
+    validate_torque_profile(start, final, runner.policy_order, ceiling=40.0)
+
+    bad_final = dict(final)
+    bad_final[runner.policy_order[0]] = 41.0
+    with pytest.raises(ValueError, match="ceiling"):
+        validate_torque_profile(start, bad_final, runner.policy_order, ceiling=40.0)
+
+    bad_start = dict(start)
+    bad_start[runner.policy_order[0]] = 25.0
+    with pytest.raises(ValueError, match="exceeds final"):
+        validate_torque_profile(bad_start, final, runner.policy_order, ceiling=40.0)
+
+
+def test_policy_torque_ramp_waits_for_clean_entry_and_resets_after_violations():
+    runner = PolicyRunner()
+    start = constant_joint_map(runner.policy_order, 14.0)
+    final = constant_joint_map(runner.policy_order, 24.0)
+    ramp = PolicyTorqueRamp(
+        runner.policy_order,
+        start,
+        final,
+        delay_s=2.0,
+        ramp_s=8.0,
+        require_clean=True,
+        print_interval_s=999.0,
+    )
+
+    effective = ramp.update(
+        steady_policy_elapsed_s=10.0,
+        entry_complete=False,
+        feedback_fresh_count=12,
+        feedback_count_expected=12,
+        feedback_age_max_s=0.01,
+        encoder_margin_rad=0.5,
+        tracking_error_max=0.0,
+        measured_torque_max=0.0,
+        cycle_work_s=0.005,
+        now=1.0,
+    )
+    assert ramp.paused
+    assert ramp.progress == pytest.approx(0.0)
+    assert max(effective.values()) == pytest.approx(14.0)
+
+    effective = ramp.update(
+        steady_policy_elapsed_s=6.0,
+        entry_complete=True,
+        feedback_fresh_count=12,
+        feedback_count_expected=12,
+        feedback_age_max_s=0.01,
+        encoder_margin_rad=0.5,
+        tracking_error_max=0.0,
+        measured_torque_max=0.0,
+        cycle_work_s=0.005,
+        now=2.0,
+    )
+    assert not ramp.paused
+    assert ramp.progress == pytest.approx(smoothstep(0.5))
+    assert max(effective.values()) == pytest.approx(19.0)
+
+    for step in range(5):
+        effective = ramp.update(
+            steady_policy_elapsed_s=8.0,
+            entry_complete=True,
+            feedback_fresh_count=12,
+            feedback_count_expected=12,
+            feedback_age_max_s=0.01,
+            encoder_margin_rad=0.5,
+            tracking_error_max=0.35,
+            measured_torque_max=0.0,
+            cycle_work_s=0.005,
+            now=3.0 + step,
+        )
+    assert ramp.paused
+    assert ramp.violation_count == 5
+    assert ramp.progress == pytest.approx(0.0)
+    assert max(effective.values()) == pytest.approx(14.0)
+
+
+def test_measured_torque_supervisor_uses_rolling_window_soft_limit():
+    runner = PolicyRunner()
+
+    class Estimator:
+        last_feedback_by_joint = {
+            joint_name: {"joint_torque": 0.0}
+            for joint_name in runner.policy_order
+        }
+
+    supervisor = MeasuredTorqueSupervisor(
+        runner.policy_order,
+        {"hip": 35.0, "thigh": 40.0, "calf": 40.0, "default": 40.0},
+        window=3,
+    )
+    joint_name = "FR_calf_joint"
+    for torque in (10.0, 20.0, 45.0):
+        Estimator.last_feedback_by_joint[joint_name] = {"joint_torque": torque}
+        stats = supervisor.update(Estimator())
+    assert stats["average_by_joint"][joint_name] == pytest.approx(25.0)
+    assert stats["window_max_by_joint"][joint_name] == pytest.approx(45.0)
+    assert stats["soft_limit_active_by_joint"][joint_name] is True
+
+
+def test_async_csv_logger_writes_without_blocking(tmp_path):
+    log_path = tmp_path / "async_log.csv"
+    logger = CsvRunLogger(
+        enabled=True,
+        log_file=str(log_path),
+        policy_order=PolicyRunner().policy_order,
+        async_enabled=True,
+        queue_size=4,
+        flush_seconds=0.05,
+    )
+    record = {
+        "phase": "policy",
+        "step": 1,
+        "mode": "policy",
+        "vx": 0.0,
+        "vy": 0.0,
+        "vxy": 0.0,
+        "yaw": 0.0,
+        "policy_vx": 0.0,
+        "policy_vy": 0.0,
+        "policy_yaw": 0.0,
+        "speed": 0.1,
+        "imu": "fake",
+        "act_max": 0.0,
+        "tau_cmd": 0.0,
+        "tau_cmd_max": 0.0,
+        "cmds": 0,
+        "bus_counts": "none",
+        "tau_fb": None,
+        "tau_fb_max": None,
+    }
+    started = time.monotonic()
+    for index in range(12):
+        row = dict(record)
+        row["step"] = index
+        logger.log(row)
+    submit_elapsed = time.monotonic() - started
+    logger.close()
+
+    assert submit_elapsed < 0.10
+    assert log_path.exists()
+    assert "compact_line" in log_path.read_text(encoding="utf-8").splitlines()[0]
+
+
+def test_async_csv_full_queue_increments_dropped_record_count():
+    logger = CsvRunLogger(enabled=False)
+
+    class FullQueue:
+        def qsize(self):
+            return 1
+
+        def put_nowait(self, _record):
+            raise queue.Full()
+
+    logger.enabled = True
+    logger.async_enabled = True
+    logger._writer = object()
+    logger._queue = FullQueue()
+    logger.submit({"step": 1})
+    assert logger.dropped_records == 1
+
+
+def test_stage40_guard_is_present_in_main_controller_source():
+    source = (ROOT / "src" / "main_controller.py").read_text(encoding="utf-8")
+    assert "--acknowledge-40nm-suspension-test" in source
+    assert 'args.torque_profile_stage == "stage40"' in source
+    assert "stage40 requires --acknowledge-40nm-suspension-test" in source
 
 
 def test_four_bar_transmission_is_inactive():

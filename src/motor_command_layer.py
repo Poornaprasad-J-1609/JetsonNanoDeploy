@@ -195,11 +195,18 @@ class MotorCommandLayer:
         self.joint_limit_path = ROOT / "config" / "joint_limits.yaml"
         self.control_limit_mtime_ns = None
         self.joint_limit_mtime_ns = None
+        self.control_limit_reload_interval_s = 1.0
+        self.joint_limit_reload_interval_s = 1.0
+        self._last_control_limit_reload_check_s = 0.0
+        self._last_joint_limit_reload_check_s = 0.0
         self.mit_parameter_limits_enabled = True
         self.mit_parameter_limits = {}
         self.policy_pd_torque_limit = 0.0
         self.policy_pd_torque_limits = {}
+        self.policy_pd_torque_limit_start = {}
+        self.policy_pd_torque_limit_final = {}
         self.policy_pd_torque_limit_override = None
+        self.policy_pd_torque_limits_override = None
         self.pose_pd_torque_limit_override = None
         self.startup_pd_torque_limit = 0.0
         self.hold_pd_torque_limit = 0.0
@@ -421,7 +428,12 @@ class MotorCommandLayer:
                 )
             configured_joint_torque_limits[joint_name] = joint_limit
 
-        if self.policy_pd_torque_limit_override is None:
+        if self.policy_pd_torque_limits_override is not None:
+            configured_joint_torque_limits = dict(self.policy_pd_torque_limits_override)
+            configured_policy_torque_limit = max(configured_joint_torque_limits.values(), default=0.0)
+            self.policy_pd_torque_limit = configured_policy_torque_limit
+            self.policy_pd_torque_limits = configured_joint_torque_limits
+        elif self.policy_pd_torque_limit_override is None:
             self.policy_pd_torque_limit = configured_policy_torque_limit
             self.policy_pd_torque_limits = configured_joint_torque_limits
         else:
@@ -430,6 +442,8 @@ class MotorCommandLayer:
             self.policy_pd_torque_limits = {
                 joint_name: override for joint_name in self.policy_order
             }
+        self.policy_pd_torque_limit_start = dict(self.policy_pd_torque_limits)
+        self.policy_pd_torque_limit_final = dict(self.policy_pd_torque_limits)
         mit_cfg = cfg.get("mit_parameters", {})
         configured_startup_torque_limit = float(
             mit_cfg.get("startup_pd_torque_limit", 0.0)
@@ -481,15 +495,61 @@ class MotorCommandLayer:
         self.control_limit_mtime_ns = mtime_ns
         return True
 
+    def maybe_reload_control_limits(self):
+        now = time.monotonic()
+        if now - self._last_control_limit_reload_check_s < self.control_limit_reload_interval_s:
+            return False
+        self._last_control_limit_reload_check_s = now
+        return self.reload_control_limits(force=False)
+
     def set_policy_pd_torque_limit(self, value):
         value = float(value)
         if not np.isfinite(value) or value < 0.0:
             raise ValueError("policy PD torque limit override must be finite and >= 0")
         self.policy_pd_torque_limit_override = value
+        self.policy_pd_torque_limits_override = None
         self.policy_pd_torque_limit = value
         self.policy_pd_torque_limits = {
             joint_name: value for joint_name in self.policy_order
         }
+        self.policy_pd_torque_limit_start = dict(self.policy_pd_torque_limits)
+        self.policy_pd_torque_limit_final = dict(self.policy_pd_torque_limits)
+
+    def set_policy_pd_torque_limits(self, limits_by_joint, start_limits_by_joint=None, final_limits_by_joint=None):
+        def resolve_map(values, label):
+            if not isinstance(values, dict):
+                raise ValueError(f"{label} must be a mapping")
+            unknown = sorted(set(values) - set(self.policy_order))
+            missing = sorted(set(self.policy_order) - set(values))
+            if unknown:
+                raise KeyError(f"Unknown {label} joint(s): " + ", ".join(unknown))
+            if missing:
+                raise KeyError(f"Missing {label} joint(s): " + ", ".join(missing))
+            resolved_map = {}
+            for joint_name in self.policy_order:
+                value = float(values[joint_name])
+                if not np.isfinite(value) or value < 0.0:
+                    raise ValueError(f"{joint_name}: {label} must be finite and >= 0")
+                resolved_map[joint_name] = value
+            return resolved_map
+
+        resolved = resolve_map(limits_by_joint, "policy PD torque limit")
+        resolved_start = (
+            dict(resolved)
+            if start_limits_by_joint is None
+            else resolve_map(start_limits_by_joint, "policy PD torque start limit")
+        )
+        resolved_final = (
+            dict(resolved)
+            if final_limits_by_joint is None
+            else resolve_map(final_limits_by_joint, "policy PD torque final limit")
+        )
+        self.policy_pd_torque_limit_override = None
+        self.policy_pd_torque_limits_override = dict(resolved)
+        self.policy_pd_torque_limit = max(resolved.values(), default=0.0)
+        self.policy_pd_torque_limits = dict(resolved)
+        self.policy_pd_torque_limit_start = resolved_start
+        self.policy_pd_torque_limit_final = resolved_final
 
     def set_pose_pd_torque_limit(self, value):
         value = float(value)
@@ -500,13 +560,11 @@ class MotorCommandLayer:
         self.hold_pd_torque_limit = value
 
     def policy_pd_torque_limit_for_joint(self, joint_name):
-        self.reload_control_limits()
         return float(
             self.policy_pd_torque_limits.get(joint_name, self.policy_pd_torque_limit)
         )
 
     def pose_pd_torque_limits(self):
-        self.reload_control_limits()
         return {
             "startup": float(self.startup_pd_torque_limit),
             "hold": float(self.hold_pd_torque_limit),
@@ -559,8 +617,15 @@ class MotorCommandLayer:
         self.joint_limit_mtime_ns = mtime_ns
         return True
 
+    def maybe_reload_joint_limits(self):
+        now = time.monotonic()
+        if now - self._last_joint_limit_reload_check_s < self.joint_limit_reload_interval_s:
+            return False
+        self._last_joint_limit_reload_check_s = now
+        return self.reload_joint_limits(force=False)
+
     def apply_hard_joint_limit(self, joint_name, q_des, phase=None):
-        self.reload_joint_limits()
+        self.maybe_reload_joint_limits()
         if not np.isfinite(q_des):
             raise ValueError(f"{joint_name}: requested joint target is NaN or Inf")
         if phase == "policy":
@@ -644,7 +709,7 @@ class MotorCommandLayer:
         return updated, missing
 
     def apply_mit_parameter_limits(self, p_des, v_des, kp, kd, tau_ff):
-        self.reload_control_limits()
+        self.maybe_reload_control_limits()
         values = np.asarray([p_des, v_des, kp, kd, tau_ff], dtype=np.float64)
         if not np.all(np.isfinite(values)):
             raise ValueError("MIT command parameters contain NaN or Inf")
@@ -667,7 +732,8 @@ class MotorCommandLayer:
         feedback_by_joint=None,
         joint_velocity_target=None,
     ):
-        self.reload_control_limits()
+        self.maybe_reload_control_limits()
+        self.maybe_reload_joint_limits()
         q_target = np.asarray(q_target, dtype=np.float32)
         if q_target.shape != (len(self.policy_order),):
             raise ValueError(
@@ -748,7 +814,7 @@ class MotorCommandLayer:
             feedback_joint_position = feedback.get("joint_position") if isinstance(feedback, dict) else None
             feedback_joint_velocity = feedback.get("joint_velocity") if isinstance(feedback, dict) else None
             phase_torque_limit = (
-                float(self.policy_pd_torque_limits.get(joint_name, self.policy_pd_torque_limit))
+                self.policy_pd_torque_limit_for_joint(joint_name)
                 if phase == "policy"
                 else base_phase_torque_limit
             )
@@ -867,6 +933,13 @@ class MotorCommandLayer:
                 "q_requested": q_requested,
                 "q_before_torque_limit": q_before_torque_limit,
                 "torque_limited": torque_limited,
+                "torque_limit_effective": phase_torque_limit,
+                "torque_limit_start": float(
+                    self.policy_pd_torque_limit_start.get(joint_name, phase_torque_limit)
+                ),
+                "torque_limit_final": float(
+                    self.policy_pd_torque_limit_final.get(joint_name, phase_torque_limit)
+                ),
                 "tau_pd_est": tau_pd_est,
                 "offset": offset,
                 "direction": direction,
