@@ -38,13 +38,13 @@ policy_deployment:
   command_vx_abs_max: 0.0
   command_vy_abs_max: 0.0
   command_yaw_abs_max: 0.0
-  # Sim-matching defaults: the actor output is used directly with action_scale
-  # from config/joint_map.yaml. Add CLI filtering only for intentionally
-  # softened hardware tests.
-  action_clip_abs: 0.0
-  action_smoothing: 0.0
-  action_delta_limit_abs: 0.0
-  policy_entry_ramp_seconds: 0.0
+  # Ground-safe defaults: preserve the trained action_scale from joint_map.yaml,
+  # but do not let the first walking key press jump straight from stand to a
+  # full actor output. Use --policy-sim-match only for controlled comparisons.
+  action_clip_abs: 2.8
+  action_smoothing: 0.20
+  action_delta_limit_abs: 0.15
+  policy_entry_ramp_seconds: 2.0
   # Before packing a walking MIT command, constrain its estimated joint-space
   # PD torque around fresh encoder feedback. The independent measured-feedback
   # emergency stop remains in config/safety_limits.yaml.

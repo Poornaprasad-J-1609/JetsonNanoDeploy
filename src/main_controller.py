@@ -2096,8 +2096,9 @@ def run_policy_loop(
     if policy_sim_match:
         print(
             "WARNING: policy_sim_match bypasses deployment action clipping, "
-            "action slew limiting, smoothing, and policy target rate limiting. "
-            "Per-joint software PD torque clipping remains active."
+            "action slew limiting, and smoothing. Policy target rate limiting "
+            "still protects the entry ramp. Per-joint software PD torque "
+            "clipping remains active."
         )
     print("stand_policy_stabilization:", bool(stand_policy_stabilization))
     print("walking_armed:", bool(walking_armed))
@@ -2834,12 +2835,15 @@ def run_policy_loop(
                 cfg=motion_assist_cfg,
                 use_gait=True,
             )
+            policy_entry_rate_limit_active = bool(
+                (not policy_sim_match) or float(policy_entry_scale) < 0.999
+            )
             q_safe_target = shifted_safety_filter(
                 safety,
                 q_policy_target,
                 q_previous_target,
                 q_coordinate_shift,
-                apply_rate_limit=not policy_sim_match,
+                apply_rate_limit=policy_entry_rate_limit_active,
                 use_policy_limits=True,
             )
             commands = motor_layer.build_mit_commands(
@@ -3441,7 +3445,7 @@ def main():
     parser.add_argument(
         "--walk-command-grace-seconds",
         type=float,
-        default=0.0,
+        default=0.25,
         help=(
             "seconds to keep the last nonzero walking command alive after a "
             "terminal key-repeat gap; 0 disables the grace window"
@@ -3675,6 +3679,16 @@ def main():
     args.policy_action_delta_limit = max(0.0, float(args.policy_action_delta_limit))
     if not np.isfinite(args.policy_entry_ramp_seconds) or args.policy_entry_ramp_seconds < 0.0:
         parser.error("--policy-entry-ramp-seconds must be finite and >= 0")
+    if (
+        args.mode == "mit-signal"
+        and bool(args.policy_sim_match)
+        and float(args.policy_entry_ramp_seconds) <= 0.0
+    ):
+        print(
+            "WARNING: --policy-sim-match with --mode mit-signal needs a walking "
+            "entry ramp on hardware; forcing --policy-entry-ramp-seconds 1.5"
+        )
+        args.policy_entry_ramp_seconds = 1.5
     if not np.isfinite(args.policy_pd_torque_limit) or args.policy_pd_torque_limit < 0.0:
         parser.error("--policy-pd-torque-limit must be finite and >= 0")
     if not np.isfinite(args.fresh_feedback_max_age) or args.fresh_feedback_max_age < 0.0:
