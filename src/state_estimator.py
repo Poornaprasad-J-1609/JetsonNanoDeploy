@@ -125,6 +125,17 @@ class FakeStateEstimator:
             self.projected_gravity_b.copy(),
         )
 
+    def read_cached(self, refresh_imu=True):
+        if refresh_imu:
+            self.refresh_imu()
+        return (
+            self.q_current.copy(),
+            self.qd_current.copy(),
+            self.base_lin_vel_b.copy(),
+            self.base_ang_vel_b.copy(),
+            self.projected_gravity_b.copy(),
+        )
+
     def dry_update_as_if_robot_followed(self, q_target, dt):
         q_target = np.asarray(q_target, dtype=np.float32)
         self.qd_current = (q_target - self.q_current) / float(dt)
@@ -174,6 +185,11 @@ class MitFeedbackStateEstimator(FakeStateEstimator):
 
         self.last_feedback_by_joint = {}
         self.last_feedback_count = 0
+        self.last_command_send_timestamp = None
+        self.last_refresh_received_bus_motor_ids = set()
+        self.last_refresh_current_bus_motor_ids = set()
+        self.last_refresh_frame_count = 0
+        self.last_refresh_current_feedback_count = 0
 
     def _pose_reference_iterable(self, pose_references):
         if pose_references is None:
@@ -215,7 +231,11 @@ class MitFeedbackStateEstimator(FakeStateEstimator):
         # A command cycle can produce more than one response from a motor. Keep
         # only the newest response per routed joint so diagnostics and safety
         # counts can never report more joints than physically exist.
+        frames = list(frames)
         feedback_by_joint = {}
+        received_bus_motor_ids = set()
+        current_bus_motor_ids = set()
+        command_send_timestamp = self.last_command_send_timestamp
 
         for frame in frames:
             feedback = decode_mit_feedback_frame(
@@ -235,11 +255,19 @@ class MitFeedbackStateEstimator(FakeStateEstimator):
                 continue
 
             index = self.joint_index_by_name[joint_name]
+            timestamp = float(getattr(frame, "timestamp", time.monotonic()))
+            bus_motor_id = (bus_name, motor_id)
+            received_bus_motor_ids.add(bus_motor_id)
+            if (
+                command_send_timestamp is not None
+                and timestamp >= float(command_send_timestamp)
+            ):
+                current_bus_motor_ids.add(bus_motor_id)
             feedback_by_joint[joint_name] = (
                 joint_name,
                 index,
                 feedback,
-                float(getattr(frame, "timestamp", time.monotonic())),
+                timestamp,
                 bus_name,
             )
 
@@ -293,6 +321,10 @@ class MitFeedbackStateEstimator(FakeStateEstimator):
             feedback = dict(feedback)
             feedback["timestamp"] = timestamp
             feedback["bus_name"] = bus_name
+            feedback["received_after_command"] = bool(
+                command_send_timestamp is not None
+                and timestamp >= float(command_send_timestamp)
+            )
             feedback["position_raw"] = position_raw
             feedback["velocity_raw"] = velocity_raw
             feedback["torque_raw"] = torque_raw
@@ -313,15 +345,46 @@ class MitFeedbackStateEstimator(FakeStateEstimator):
             count += 1
 
         self.last_feedback_count = count
+        self.last_refresh_received_bus_motor_ids = received_bus_motor_ids
+        self.last_refresh_current_bus_motor_ids = current_bus_motor_ids
+        self.last_refresh_frame_count = len(frames)
+        self.last_refresh_current_feedback_count = len(current_bus_motor_ids)
         return count
 
-    def refresh_from_bus(self, timeout=0.0):
-        frames = MotorCommandLayer.read_all_frames(self.bus, timeout=timeout)
+    def expected_feedback_bus_motor_ids(self, active_joints=None):
+        joint_names = list(active_joints or self.motor_layer.active_joints)
+        expected = set()
+        for joint_name in joint_names:
+            motor_id = int(self.motor_layer.motor_ids[joint_name])
+            bus_name = self.motor_layer.joint_can_bus.get(joint_name, "front")
+            expected.add((bus_name, motor_id))
+        return expected
+
+    def mark_command_sent(self, timestamp=None):
+        self.last_command_send_timestamp = (
+            time.monotonic() if timestamp is None else float(timestamp)
+        )
+
+    def refresh_from_bus(self, timeout=0.0, expected_bus_motor_ids=None):
+        expected_bus_motor_ids = (
+            self.expected_feedback_bus_motor_ids()
+            if expected_bus_motor_ids is None
+            else expected_bus_motor_ids
+        )
+        frames = MotorCommandLayer.read_all_frames(
+            self.bus,
+            timeout=timeout,
+            expected_bus_motor_ids=expected_bus_motor_ids,
+            proto=self.motor_layer.proto,
+        )
         return self.update_from_frames(frames)
 
     def read(self):
         self.refresh_from_bus(timeout=0.0)
-        return super().read()
+        return self.read_cached(refresh_imu=True)
+
+    def read_cached(self, refresh_imu=True):
+        return super().read_cached(refresh_imu=refresh_imu)
 
     def dry_update_as_if_robot_followed(self, q_target, dt):
         # Live feedback owns q_current/qd_current. Keep the method for the

@@ -319,3 +319,47 @@ Timing validation:
 
 `pytest` still could not run in this workstation environment because the active
 Python does not have the `pytest` package installed.
+
+## SocketCAN Feedback Pipeline Addendum
+
+Commit message: `fix: pipeline socketcan feedback within policy deadline`
+
+Fix:
+
+- The runtime loop now drains queued CAN feedback nonblocking at the beginning
+  of each cycle, uses that fresh cached state for the current policy
+  observation, sends one 12-motor command set, then performs only a short
+  ordinary post-command drain.
+- Added `--steady-feedback-budget-ms` with default `1.5` and validation range
+  `0.0..5.0`. This does not replace `--feedback-timeout`; the longer timeout
+  remains for startup, calibration, hold capture, and stale/missing feedback
+  recovery.
+- SocketCAN and serial-AT frame readers can now return early once feedback from
+  all expected active motor IDs has arrived.
+- MIT feedback state now tracks command send timestamps, feedback timestamps,
+  current-cycle feedback, previous-cycle fresh feedback, stale feedback, and
+  missing feedback.
+- Added timing log fields for `imu_read_ms`, `policy_inference_ms`,
+  `command_build_ms`, `can_tx_ms`, `pre_feedback_read_ms`,
+  `steady_feedback_read_ms`, `safety_check_ms`, `logging_ms`, and
+  `cycle_work_ms`.
+- Timing-fault console output now includes the final overloaded cycle
+  breakdown.
+
+Preserved:
+
+- Policy file/hash, 48-observation layout, action scale, joint order, motor
+  IDs, directions, offsets, Kp/Kd, torque limits, joint limits, four-bar
+  disabled state, exact-policy-after-entry behavior, one-CAN SocketCAN
+  topology, and the 50 Hz trained control rate.
+
+Validation:
+
+- `python3 -m compileall -q src tests` passed.
+- Direct feedback-pipeline and timing test harness passed.
+- No-hardware controller dry run passed at 50 Hz.
+- `python3 scripts/validate_policy_gait.py --vx 0.35 --duration 8
+  --entry-seconds 2` passed with raw/sent action error after entry equal to 0.
+- `git diff --check` passed.
+- `pytest -q` could not run in this workstation environment because `pytest`
+  is not installed.

@@ -142,7 +142,22 @@ class ATUsbCan:
 
         return frames
 
-    def read_available_frames(self, timeout=0.0, max_frames=256):
+    @staticmethod
+    def _feedback_motor_id(can_id, feedback_comm_types):
+        if not feedback_comm_types:
+            return None
+        comm_type = (int(can_id) >> 24) & 0x1F
+        if comm_type not in feedback_comm_types:
+            return None
+        return ((int(can_id) >> 8) & 0xFFFF) & 0xFF
+
+    def read_available_frames(
+        self,
+        timeout=0.0,
+        max_frames=256,
+        expected_motor_ids=None,
+        feedback_comm_types=None,
+    ):
         """
         Read AT-encoded CAN frames currently available from the adapter.
 
@@ -153,6 +168,15 @@ class ATUsbCan:
             raise RuntimeError("Serial port is not open")
 
         frames = []
+        expected_motor_ids = {
+            int(motor_id) & 0xFF
+            for motor_id in (expected_motor_ids or [])
+        }
+        feedback_comm_types = {
+            int(comm_type) & 0x1F
+            for comm_type in (feedback_comm_types or [])
+        }
+        received_expected = set()
         deadline = time.monotonic() + float(timeout)
 
         while len(frames) < max_frames:
@@ -166,7 +190,18 @@ class ATUsbCan:
             chunk = self.ser.read(read_size)
             if chunk:
                 self.rx_buffer.extend(chunk)
-                frames.extend(self._pop_frames_from_rx_buffer())
+                new_frames = self._pop_frames_from_rx_buffer()
+                frames.extend(new_frames)
+                if expected_motor_ids:
+                    for frame in new_frames:
+                        motor_id = self._feedback_motor_id(
+                            frame.can_id,
+                            feedback_comm_types,
+                        )
+                        if motor_id in expected_motor_ids:
+                            received_expected.add(motor_id)
+                    if expected_motor_ids.issubset(received_expected):
+                        break
             elif not should_wait:
                 break
 
@@ -323,11 +358,35 @@ class SocketCan:
             )
         return sent
 
-    def read_available_frames(self, timeout=0.0, max_frames=256):
+    @staticmethod
+    def _feedback_motor_id(can_id, feedback_comm_types):
+        if not feedback_comm_types:
+            return None
+        comm_type = (int(can_id) >> 24) & 0x1F
+        if comm_type not in feedback_comm_types:
+            return None
+        return ((int(can_id) >> 8) & 0xFFFF) & 0xFF
+
+    def read_available_frames(
+        self,
+        timeout=0.0,
+        max_frames=256,
+        expected_motor_ids=None,
+        feedback_comm_types=None,
+    ):
         if self.bus is None:
             raise RuntimeError("SocketCAN channel is not open")
 
         frames = []
+        expected_motor_ids = {
+            int(motor_id) & 0xFF
+            for motor_id in (expected_motor_ids or [])
+        }
+        feedback_comm_types = {
+            int(comm_type) & 0x1F
+            for comm_type in (feedback_comm_types or [])
+        }
+        received_expected = set()
         deadline = time.monotonic() + max(0.0, float(timeout))
         while len(frames) < int(max_frames):
             remaining = max(0.0, deadline - time.monotonic())
@@ -342,6 +401,15 @@ class SocketCan:
                 data=bytes(message.data),
                 timestamp=time.monotonic(),
             ))
+            if expected_motor_ids:
+                motor_id = self._feedback_motor_id(
+                    message.arbitration_id,
+                    feedback_comm_types,
+                )
+                if motor_id in expected_motor_ids:
+                    received_expected.add(motor_id)
+                if expected_motor_ids.issubset(received_expected):
+                    break
             if timeout > 0.0 and time.monotonic() >= deadline:
                 break
         return frames

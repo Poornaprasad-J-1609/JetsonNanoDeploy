@@ -899,10 +899,44 @@ class MotorCommandLayer:
         return buses[bus_name]
 
     @staticmethod
-    def read_all_frames(buses, timeout=0.0):
+    def _feedback_comm_types(proto):
+        if proto is None:
+            return None
+        return {
+            int(proto.get("comm_type_feedback", 2)),
+            int(proto.get("comm_type_active_feedback", 24)),
+        }
+
+    @staticmethod
+    def read_all_frames(
+        buses,
+        timeout=0.0,
+        expected_bus_motor_ids=None,
+        proto=None,
+        max_frames=256,
+    ):
         """Read available frames from all buses and return them as a single combined list."""
+        expected_by_bus = {}
+        if expected_bus_motor_ids:
+            for bus_name, motor_id in expected_bus_motor_ids:
+                expected_by_bus.setdefault(str(bus_name), set()).add(int(motor_id) & 0xFF)
+        feedback_comm_types = MotorCommandLayer._feedback_comm_types(proto)
+
         if not isinstance(buses, dict):
-            return buses.read_available_frames(timeout=timeout)
+            expected_motor_ids = {
+                motor_id
+                for motor_ids in expected_by_bus.values()
+                for motor_id in motor_ids
+            }
+            try:
+                return buses.read_available_frames(
+                    timeout=timeout,
+                    max_frames=max_frames,
+                    expected_motor_ids=expected_motor_ids or None,
+                    feedback_comm_types=feedback_comm_types,
+                )
+            except TypeError:
+                return buses.read_available_frames(timeout=timeout, max_frames=max_frames)
 
         frames = []
         unique_buses = []
@@ -918,7 +952,18 @@ class MotorCommandLayer:
             per_bus_timeout /= float(len(unique_buses))
 
         for bus_name, bus in unique_buses:
-            bus_frames = bus.read_available_frames(timeout=per_bus_timeout)
+            try:
+                bus_frames = bus.read_available_frames(
+                    timeout=per_bus_timeout,
+                    max_frames=max_frames,
+                    expected_motor_ids=expected_by_bus.get(str(bus_name)) or None,
+                    feedback_comm_types=feedback_comm_types,
+                )
+            except TypeError:
+                bus_frames = bus.read_available_frames(
+                    timeout=per_bus_timeout,
+                    max_frames=max_frames,
+                )
             for frame in bus_frames:
                 frame.bus_name = bus_name
             frames.extend(bus_frames)

@@ -210,10 +210,35 @@ def fake_start_pose_array(runner, name):
     raise ValueError(f"Unknown fake start pose: {name}")
 
 
-def refresh_estimator_feedback(estimator, timeout=0.0):
+def active_feedback_bus_motor_ids(estimator, motor_layer, active_joints=None):
+    active_joints = list(active_joints or motor_layer.active_joints)
+    if hasattr(estimator, "expected_feedback_bus_motor_ids"):
+        return estimator.expected_feedback_bus_motor_ids(active_joints)
+    return {
+        (
+            motor_layer.joint_can_bus.get(joint_name, "front"),
+            int(motor_layer.motor_ids[joint_name]),
+        )
+        for joint_name in active_joints
+    }
+
+
+def refresh_estimator_feedback(estimator, timeout=0.0, expected_bus_motor_ids=None):
     if hasattr(estimator, "refresh_from_bus"):
-        return estimator.refresh_from_bus(timeout=timeout)
+        try:
+            return estimator.refresh_from_bus(
+                timeout=timeout,
+                expected_bus_motor_ids=expected_bus_motor_ids,
+            )
+        except TypeError:
+            return estimator.refresh_from_bus(timeout=timeout)
     return 0
+
+
+def read_estimator_state(estimator, refresh_imu=True):
+    if hasattr(estimator, "read_cached"):
+        return estimator.read_cached(refresh_imu=refresh_imu)
+    return estimator.read()
 
 
 def joystick_walk_requested(command, threshold):
@@ -606,11 +631,20 @@ def compact_telemetry_record(
     cycle_work_s=0.0,
     deadline_lateness_s=0.0,
     policy_inference_s=None,
+    command_build_s=None,
     can_tx_s=None,
     feedback_read_s=None,
+    pre_feedback_read_s=None,
+    steady_feedback_read_s=None,
+    safety_check_s=None,
+    logging_s=None,
     imu_read_s=None,
     feedback_age_max_s=None,
     feedback_fresh_count=None,
+    feedback_current_cycle_count=None,
+    feedback_previous_cycle_count=None,
+    feedback_missing_count=None,
+    feedback_stale_count=None,
     missed_deadlines=0,
     consecutive_overruns=0,
     max_overrun_s=0.0,
@@ -678,15 +712,36 @@ def compact_telemetry_record(
         "policy_inference_ms": (
             None if policy_inference_s is None else 1000.0 * float(policy_inference_s)
         ),
+        "command_build_ms": (
+            None if command_build_s is None else 1000.0 * float(command_build_s)
+        ),
         "can_tx_ms": None if can_tx_s is None else 1000.0 * float(can_tx_s),
         "feedback_read_ms": (
             None if feedback_read_s is None else 1000.0 * float(feedback_read_s)
         ),
+        "pre_feedback_read_ms": (
+            None if pre_feedback_read_s is None else 1000.0 * float(pre_feedback_read_s)
+        ),
+        "steady_feedback_read_ms": (
+            None if steady_feedback_read_s is None else 1000.0 * float(steady_feedback_read_s)
+        ),
+        "safety_check_ms": (
+            None if safety_check_s is None else 1000.0 * float(safety_check_s)
+        ),
+        "logging_ms": None if logging_s is None else 1000.0 * float(logging_s),
         "imu_read_ms": None if imu_read_s is None else 1000.0 * float(imu_read_s),
         "feedback_age_max_ms": (
             None if feedback_age_max_s is None else 1000.0 * float(feedback_age_max_s)
         ),
         "feedback_fresh": "" if feedback_fresh_count is None else int(feedback_fresh_count),
+        "feedback_current_cycle": (
+            "" if feedback_current_cycle_count is None else int(feedback_current_cycle_count)
+        ),
+        "feedback_previous_cycle": (
+            "" if feedback_previous_cycle_count is None else int(feedback_previous_cycle_count)
+        ),
+        "feedback_missing": "" if feedback_missing_count is None else int(feedback_missing_count),
+        "feedback_stale": "" if feedback_stale_count is None else int(feedback_stale_count),
         "missed_deadlines": int(missed_deadlines),
         "consecutive_overruns": int(consecutive_overruns),
         "max_overrun_ms": 1000.0 * float(max_overrun_s),
@@ -990,6 +1045,13 @@ def compact_telemetry_line(record):
         line += f" late={float(record['deadline_lateness_ms']):.1f}ms"
     if int(record.get("consecutive_work_overruns") or 0) > 0:
         line += f" work_ovr={int(record['consecutive_work_overruns'])}"
+        line += (
+            f" infer={float(record.get('policy_inference_ms') or 0.0):.1f}ms"
+            f" build={float(record.get('command_build_ms') or 0.0):.1f}ms"
+            f" feedback={float(record.get('steady_feedback_read_ms') or 0.0):.1f}ms"
+            f" safety={float(record.get('safety_check_ms') or 0.0):.1f}ms"
+            f" logging={float(record.get('logging_ms') or 0.0):.1f}ms"
+        )
     if record.get("can_tx_ms") not in (None, ""):
         line += f" tx={float(record['can_tx_ms']):.1f}ms"
     if record.get("feedback_age_max_ms") not in (None, ""):
@@ -1017,6 +1079,29 @@ def compact_telemetry_line(record):
             f"tau_fb_max={float(record['tau_fb_max']): .3f}"
         )
     return line
+
+
+def timing_breakdown_line(
+    cycle_work_s,
+    imu_read_s=0.0,
+    policy_inference_s=0.0,
+    command_build_s=0.0,
+    can_tx_s=0.0,
+    steady_feedback_read_s=0.0,
+    safety_check_s=0.0,
+    logging_s=0.0,
+):
+    return (
+        "[TIMING] "
+        f"work={1000.0 * float(cycle_work_s):.1f}ms "
+        f"imu={1000.0 * float(imu_read_s):.1f}ms "
+        f"infer={1000.0 * float(policy_inference_s):.1f}ms "
+        f"build={1000.0 * float(command_build_s):.1f}ms "
+        f"tx={1000.0 * float(can_tx_s):.1f}ms "
+        f"feedback={1000.0 * float(steady_feedback_read_s):.1f}ms "
+        f"safety={1000.0 * float(safety_check_s):.1f}ms "
+        f"logging={1000.0 * float(logging_s):.1f}ms"
+    )
 
 
 def print_compact_telemetry(step, mode, command, command_source, commands, estimator, action=None):
@@ -1067,11 +1152,20 @@ class CsvRunLogger:
         "cycle_work_ms",
         "deadline_lateness_ms",
         "policy_inference_ms",
+        "command_build_ms",
         "can_tx_ms",
         "feedback_read_ms",
+        "pre_feedback_read_ms",
+        "steady_feedback_read_ms",
+        "safety_check_ms",
+        "logging_ms",
         "imu_read_ms",
         "feedback_age_max_ms",
         "feedback_fresh",
+        "feedback_current_cycle",
+        "feedback_previous_cycle",
+        "feedback_missing",
+        "feedback_stale",
         "missed_deadlines",
         "consecutive_overruns",
         "max_overrun_ms",
@@ -1425,6 +1519,41 @@ def fresh_feedback_by_joint(estimator, active_joints, max_age_s):
     return fresh, missing
 
 
+def feedback_recency_summary(estimator, active_joints, max_age_s):
+    feedback = getattr(estimator, "last_feedback_by_joint", {}) or {}
+    now = time.monotonic()
+    command_timestamp = getattr(estimator, "last_command_send_timestamp", None)
+    current_cycle = 0
+    previous_cycle = 0
+    stale = 0
+    missing = 0
+    for joint_name in active_joints:
+        item = feedback.get(joint_name)
+        if not isinstance(item, dict):
+            missing += 1
+            continue
+        timestamp = item.get("timestamp")
+        try:
+            timestamp = float(timestamp)
+            age = now - timestamp
+        except (TypeError, ValueError):
+            missing += 1
+            continue
+        if not np.isfinite(age) or age > float(max_age_s):
+            stale += 1
+            continue
+        if command_timestamp is not None and timestamp >= float(command_timestamp):
+            current_cycle += 1
+        else:
+            previous_cycle += 1
+    return {
+        "fresh_current_cycle": int(current_cycle),
+        "fresh_previous_cycle": int(previous_cycle),
+        "stale": int(stale),
+        "missing": int(missing),
+    }
+
+
 def fresh_active_feedback_names(estimator, active_joints, max_age_s):
     feedback = getattr(estimator, "last_feedback_by_joint", {}) or {}
     now = time.monotonic()
@@ -1475,6 +1604,11 @@ def refresh_active_feedback_before_fault(
 
     active_joints = list(motor_layer.active_joints)
     n_active = len(active_joints)
+    expected_feedback_ids = active_feedback_bus_motor_ids(
+        estimator,
+        motor_layer,
+        active_joints,
+    )
     max_age_s = (
         getattr(safety, "max_feedback_age_s", 0.25)
         if max_age_s is None
@@ -1482,7 +1616,11 @@ def refresh_active_feedback_before_fault(
     )
     deadline = time.monotonic() + max(float(max_wait_s), float(feedback_timeout), 0.02)
 
-    refresh_estimator_feedback(estimator, timeout=0.0)
+    refresh_estimator_feedback(
+        estimator,
+        timeout=0.0,
+        expected_bus_motor_ids=expected_feedback_ids,
+    )
     fresh = count_fresh_active_feedback(estimator, active_joints, max_age_s)
     while fresh < n_active and time.monotonic() < deadline:
         if mode == "mit-signal" and buses is not None:
@@ -1505,6 +1643,7 @@ def refresh_active_feedback_before_fault(
         refresh_estimator_feedback(
             estimator,
             timeout=min(float(feedback_timeout), remaining),
+            expected_bus_motor_ids=expected_feedback_ids,
         )
         fresh = count_fresh_active_feedback(estimator, active_joints, max_age_s)
         if fresh >= n_active:
@@ -2073,6 +2212,7 @@ def run_policy_loop(
     pose_transition_speed_rad_s,
     pose_transition_min_seconds,
     fresh_feedback_max_age_s,
+    steady_feedback_budget_s,
     deadline_tolerance_s,
     deadline_resync_s,
     timing_fault_consecutive,
@@ -2257,6 +2397,7 @@ def run_policy_loop(
     print("hold_capture_seconds:", float(hold_capture_seconds))
     print("hold_command_repeats:", int(hold_command_repeats))
     print("fresh_feedback_max_age_s:", float(live_feedback_max_age_s))
+    print("steady_feedback_budget_ms:", 1000.0 * float(steady_feedback_budget_s))
     print("pose_transition_speed_rad_s:", float(pose_transition_speed_rad_s))
     print("pose_transition_min_seconds:", float(pose_transition_min_seconds))
     print("crouch_calibration_value:", float(crouch_calibration_value))
@@ -2287,6 +2428,19 @@ def run_policy_loop(
     policy_steady_cycles = 0
     policy_target_clip_counts = np.zeros(action_dim, dtype=np.int64)
     policy_torque_clip_counts = np.zeros(action_dim, dtype=np.int64)
+    command_build_s = 0.0
+
+    def build_loop_mit_commands(q_target, phase, feedback_by_joint=None):
+        nonlocal command_build_s
+        started = time.monotonic()
+        commands_out = motor_layer.build_mit_commands(
+            q_target,
+            phase=phase,
+            feedback_by_joint=feedback_by_joint,
+        )
+        command_build_s += time.monotonic() - started
+        return commands_out
+
     while steps is None or step < steps:
         cycle_start = time.monotonic()
         loop_dt_s = (
@@ -2300,7 +2454,25 @@ def run_policy_loop(
         q_actor_target_for_log = None
         imu_correction_abs_max = 0.0
         policy_inference_s = 0.0
+        command_build_s = 0.0
         feedback_read_s = 0.0
+        pre_feedback_read_s = 0.0
+        steady_feedback_read_s = 0.0
+        safety_check_s = 0.0
+        logging_s = 0.0
+        expected_feedback_ids = active_feedback_bus_motor_ids(
+            estimator,
+            motor_layer,
+            motor_layer.active_joints,
+        )
+        pre_feedback_start = time.monotonic()
+        refresh_estimator_feedback(
+            estimator,
+            timeout=0.0,
+            expected_bus_motor_ids=expected_feedback_ids,
+        )
+        pre_feedback_read_s = time.monotonic() - pre_feedback_start
+        feedback_read_s += pre_feedback_read_s
         imu_read_start = time.monotonic()
         (
             q_current,
@@ -2308,7 +2480,7 @@ def run_policy_loop(
             base_lin_vel_b,
             base_ang_vel_b,
             projected_gravity_b,
-        ) = estimator.read()
+        ) = read_estimator_state(estimator, refresh_imu=True)
         imu_read_s = time.monotonic() - imu_read_start
         q_coordinate_shift = motor_layer.coordinate_shift_array()
 
@@ -2427,6 +2599,7 @@ def run_policy_loop(
                     base_ang_vel_b,
                     projected_gravity_b,
                 ) = estimator.read()
+            safety_check_start = time.monotonic()
             reason = encoder_safety_stop_reason(
                 safety=safety,
                 estimator=estimator,
@@ -2435,6 +2608,7 @@ def run_policy_loop(
                 require_feedback=True,
                 q_shift=q_coordinate_shift,
             )
+            safety_check_s += time.monotonic() - safety_check_start
             if reason is not None:
                 print("\nEMERGENCY STOP:", reason)
                 command = command_source.read()
@@ -2453,10 +2627,12 @@ def run_policy_loop(
                 )
                 break
 
+        safety_check_start = time.monotonic()
         stop, reason = safety.emergency_stop_check(
             projected_gravity_b=projected_gravity_b,
             base_ang_vel_b=base_ang_vel_b,
         )
+        safety_check_s += time.monotonic() - safety_check_start
         if stop:
             print("\nEMERGENCY STOP:", reason)
             command = command_source.read()
@@ -2611,6 +2787,7 @@ def run_policy_loop(
                                 f"[FEEDBACK] pose transition still has only "
                                 f"{fresh}/{n_active} fresh motor feedback frame(s)."
                             )
+                safety_check_start = time.monotonic()
                 reason = encoder_safety_stop_reason(
                     safety=safety,
                     estimator=estimator,
@@ -2618,6 +2795,7 @@ def run_policy_loop(
                     mode=mode,
                     q_shift=q_coordinate_shift,
                 )
+                safety_check_s += time.monotonic() - safety_check_start
                 if reason is not None:
                     print("\nEMERGENCY STOP:", reason)
                     command = command_source.read()
@@ -2886,7 +3064,7 @@ def run_policy_loop(
         elif active_control_mode == "hold":
             q_safe_target = q_previous_target.copy()
             commands = (
-                motor_layer.build_mit_commands(
+                build_loop_mit_commands(
                     q_safe_target,
                     phase="hold",
                     feedback_by_joint=fresh_feedback_for_commands,
@@ -2959,7 +3137,7 @@ def run_policy_loop(
                 q_previous_target,
                 q_coordinate_shift,
             )
-            commands = motor_layer.build_mit_commands(
+            commands = build_loop_mit_commands(
                 q_safe_target,
                 phase=stand_command_phase,
                 feedback_by_joint=fresh_feedback_for_commands,
@@ -2973,7 +3151,7 @@ def run_policy_loop(
                 q_previous_target,
                 q_coordinate_shift,
             )
-            commands = motor_layer.build_mit_commands(
+            commands = build_loop_mit_commands(
                 q_safe_target,
                 phase="startup",
                 feedback_by_joint=fresh_feedback_for_commands,
@@ -3048,7 +3226,7 @@ def run_policy_loop(
                 apply_rate_limit=policy_entry_rate_limit_active,
                 use_policy_limits=True,
             )
-            commands = motor_layer.build_mit_commands(
+            commands = build_loop_mit_commands(
                 q_safe_target,
                 phase="policy",
                 feedback_by_joint=fresh_feedback_for_commands,
@@ -3074,6 +3252,12 @@ def run_policy_loop(
             if active_control_mode == "hold"
             else 1
         )
+        command_send_timestamp = time.monotonic() if commands else None
+        if (
+            command_send_timestamp is not None
+            and hasattr(estimator, "mark_command_sent")
+        ):
+            estimator.mark_command_sent(command_send_timestamp)
         for _ in range(send_repeats):
             if mode == "signal":
                 motor_layer.send_harmless_frames(buses, commands)
@@ -3081,14 +3265,25 @@ def run_policy_loop(
                 motor_layer.send_signal_commands(buses, commands)
         can_tx_s = max_can_tx_duration_s(buses)
 
-        active_feedback_timeout = min(
-            float(feedback_timeout),
-            max(0.002, 0.35 * float(dt)),
+        steady_read_timeout_s = (
+            float(steady_feedback_budget_s)
+            if commands and encoder_feedback_required(mode, estimator)
+            else 0.0
         )
         feedback_read_start = time.monotonic()
-        refresh_estimator_feedback(estimator, timeout=active_feedback_timeout)
-        feedback_read_s += time.monotonic() - feedback_read_start
+        refresh_estimator_feedback(
+            estimator,
+            timeout=steady_read_timeout_s,
+            expected_bus_motor_ids=expected_feedback_ids,
+        )
+        steady_feedback_read_s = time.monotonic() - feedback_read_start
+        feedback_read_s += steady_feedback_read_s
         post_send_fresh_feedback, post_send_missing_feedback = fresh_feedback_by_joint(
+            estimator,
+            motor_layer.active_joints,
+            live_feedback_max_age_s,
+        )
+        feedback_recency = feedback_recency_summary(
             estimator,
             motor_layer.active_joints,
             live_feedback_max_age_s,
@@ -3128,6 +3323,7 @@ def run_policy_loop(
             active_control_mode == "policy"
             or (policy_has_started and pose_transition_mode in ("stand", "sit"))
         )
+        safety_check_start = time.monotonic()
         reason = encoder_safety_stop_reason(
             safety=safety,
             estimator=estimator,
@@ -3138,6 +3334,7 @@ def run_policy_loop(
             feedback_by_joint=safety_feedback_by_joint,
             use_policy_limits=encoder_policy_limit_window,
         )
+        safety_check_s += time.monotonic() - safety_check_start
         if reason is not None:
             print("\nEMERGENCY STOP:", reason)
             publish_safety_fault(
@@ -3232,7 +3429,7 @@ def run_policy_loop(
                     zero_calibrated = True
                     previous_raw_action = np.zeros(action_dim, dtype=np.float32)
                     previous_sent_action = np.zeros(action_dim, dtype=np.float32)
-                    commands = motor_layer.build_mit_commands(
+                    commands = build_loop_mit_commands(
                         q_safe_target,
                         phase="startup",
                         feedback_by_joint=fresh_feedback_for_commands,
@@ -3316,7 +3513,7 @@ def run_policy_loop(
                     zero_calibrated = True
                     previous_raw_action = np.zeros(action_dim, dtype=np.float32)
                     previous_sent_action = np.zeros(action_dim, dtype=np.float32)
-                    commands = motor_layer.build_mit_commands(
+                    commands = build_loop_mit_commands(
                         q_safe_target,
                         phase="startup",
                         feedback_by_joint=fresh_feedback_for_commands,
@@ -3333,6 +3530,7 @@ def run_policy_loop(
         should_log_csv = step % max(1, log_every) == 0
         should_print = step % max(1, print_every) == 0
         if should_log_csv or should_print:
+            logging_start = time.monotonic()
             timing = scheduler.last_snapshot
             telemetry_record = compact_telemetry_record(
                 step=step,
@@ -3366,11 +3564,20 @@ def run_policy_loop(
                 cycle_work_s=timing.cycle_work_s,
                 deadline_lateness_s=timing.deadline_lateness_s,
                 policy_inference_s=policy_inference_s,
+                command_build_s=command_build_s,
                 can_tx_s=can_tx_s,
                 feedback_read_s=feedback_read_s,
+                pre_feedback_read_s=pre_feedback_read_s,
+                steady_feedback_read_s=steady_feedback_read_s,
+                safety_check_s=safety_check_s,
+                logging_s=logging_s,
                 imu_read_s=imu_read_s,
                 feedback_age_max_s=feedback_age_max_s,
                 feedback_fresh_count=feedback_fresh_count,
+                feedback_current_cycle_count=feedback_recency["fresh_current_cycle"],
+                feedback_previous_cycle_count=feedback_recency["fresh_previous_cycle"],
+                feedback_missing_count=feedback_recency["missing"],
+                feedback_stale_count=feedback_recency["stale"],
                 missed_deadlines=timing.total_missed_deadlines,
                 consecutive_overruns=timing.consecutive_work_overruns,
                 max_overrun_s=timing.maximum_lateness_s,
@@ -3384,6 +3591,8 @@ def run_policy_loop(
                 policy_target_clip_counts=policy_target_clip_counts,
                 policy_torque_clip_counts=policy_torque_clip_counts,
             )
+            logging_s = time.monotonic() - logging_start
+            telemetry_record["logging_ms"] = 1000.0 * float(logging_s)
             if should_print:
                 print(compact_telemetry_line(telemetry_record))
             if csv_logger is not None and should_log_csv:
@@ -3442,13 +3651,37 @@ def run_policy_loop(
 
         step += 1
         timing = scheduler.finish_cycle(cycle_start)
+        if timing.work_overrun and not timing.timing_fault:
+            print(
+                timing_breakdown_line(
+                    cycle_work_s=timing.cycle_work_s,
+                    imu_read_s=imu_read_s,
+                    policy_inference_s=policy_inference_s,
+                    command_build_s=command_build_s,
+                    can_tx_s=can_tx_s,
+                    steady_feedback_read_s=steady_feedback_read_s,
+                    safety_check_s=safety_check_s,
+                    logging_s=logging_s,
+                )
+            )
         if timing.timing_fault:
+            breakdown = timing_breakdown_line(
+                cycle_work_s=timing.cycle_work_s,
+                imu_read_s=imu_read_s,
+                policy_inference_s=policy_inference_s,
+                command_build_s=command_build_s,
+                can_tx_s=can_tx_s,
+                steady_feedback_read_s=steady_feedback_read_s,
+                safety_check_s=safety_check_s,
+                logging_s=logging_s,
+            )
             print(
                 "\nTIMING FAULT: controller exceeded the control-period "
                 f"work budget for {timing.consecutive_work_overruns} "
                 "consecutive cycles; stopping instead of continuing with "
                 "irregular gait timing."
             )
+            print(breakdown)
             publish_safety_fault(
                 telemetry=telemetry,
                 csv_logger=csv_logger,
@@ -3462,7 +3695,8 @@ def run_policy_loop(
                     "controller sustained work overrun: "
                     f"cycle_work={1000.0 * timing.cycle_work_s:.1f}ms "
                     f"dt={1000.0 * float(dt):.1f}ms "
-                    f"tolerance={1000.0 * scheduler.deadline_tolerance_s:.1f}ms"
+                    f"tolerance={1000.0 * scheduler.deadline_tolerance_s:.1f}ms "
+                    + breakdown
                 ),
                 action=action,
                 phase="runtime",
@@ -3773,6 +4007,16 @@ def main():
         help="seconds to wait for MIT feedback after sending commands",
     )
     parser.add_argument(
+        "--steady-feedback-budget-ms",
+        type=float,
+        default=1.5,
+        help=(
+            "ordinary post-command feedback drain budget in milliseconds; "
+            "startup, calibration, hold capture, and recovery still use "
+            "--feedback-timeout"
+        ),
+    )
+    parser.add_argument(
         "--fresh-feedback-max-age",
         type=float,
         default=0.0,
@@ -4024,6 +4268,12 @@ def main():
         parser.error("--timing-fault-consecutive must be > 0")
     if not np.isfinite(args.fresh_feedback_max_age) or args.fresh_feedback_max_age < 0.0:
         parser.error("--fresh-feedback-max-age must be finite and >= 0")
+    if (
+        not np.isfinite(args.steady_feedback_budget_ms)
+        or args.steady_feedback_budget_ms < 0.0
+        or args.steady_feedback_budget_ms > 5.0
+    ):
+        parser.error("--steady-feedback-budget-ms must be finite and within 0.0..5.0")
     if not np.isfinite(args.control_hz) or args.control_hz < 0.0:
         parser.error("--control-hz must be finite and >= 0")
     if 0.0 < args.control_hz < 10.0 or args.control_hz > 100.0:
@@ -4580,6 +4830,7 @@ def main():
             pose_transition_speed_rad_s=float(args.pose_transition_speed_rad_s),
             pose_transition_min_seconds=float(args.pose_transition_min_seconds),
             fresh_feedback_max_age_s=float(args.fresh_feedback_max_age),
+            steady_feedback_budget_s=0.001 * float(args.steady_feedback_budget_ms),
             deadline_tolerance_s=0.001 * float(args.deadline_tolerance_ms),
             deadline_resync_s=0.001 * float(args.deadline_resync_ms),
             timing_fault_consecutive=int(args.timing_fault_consecutive),
