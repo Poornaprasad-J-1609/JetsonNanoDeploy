@@ -236,6 +236,9 @@ class KeyboardCommandSource:
         self.latched_combo_window_s = float(max(0.02, latched_combo_window_s))
         self.latched_keys = set()
         self.last_latched_movement_time = -1.0e9
+        self.latched_command_heartbeat_s = 2.0
+        self._last_latched_command_print_time = -1.0e9
+        self._last_latched_command_print_value = None
         self.command = np.zeros(3, dtype=np.float32)
         self.command_limits = load_command_limits()
         self.key_queue = deque()
@@ -333,6 +336,9 @@ class KeyboardCommandSource:
                 "effective_command_max="
                 f"[{effective[0]:.3f}, {effective[1]:.3f}, {effective[2]:.3f}]"
             )
+            if self.control_mode == "latched" and self.latched_keys:
+                self._update_command_from_latched_keys()
+                self._maybe_print_latched_command(force=True)
 
     def _movement_command_from_keys(self, active):
         vx = 0.0
@@ -355,8 +361,19 @@ class KeyboardCommandSource:
 
         return np.array([vx, vy, yaw], dtype=np.float32)
 
-    def _print_latched_command(self):
+    def _maybe_print_latched_command(self, force=False, now=None):
+        now = time.monotonic() if now is None else float(now)
         cmd = clip_command(self.command * self.speed_scale, self.command_limits)
+        command_key = tuple(round(float(value), 4) for value in cmd)
+        changed = command_key != self._last_latched_command_print_value
+        heartbeat = (
+            now - self._last_latched_command_print_time
+            >= self.latched_command_heartbeat_s
+        )
+        if not (force or changed or heartbeat):
+            return
+        self._last_latched_command_print_time = now
+        self._last_latched_command_print_value = command_key
         print(
             "[KEYBOARD] latched command: "
             f"vx={float(cmd[0]):+.3f} "
@@ -379,7 +396,7 @@ class KeyboardCommandSource:
         self.latched_keys.add(key)
         self.last_latched_movement_time = now
         self._update_command_from_latched_keys()
-        self._print_latched_command()
+        self._maybe_print_latched_command(now=now)
 
     def _process_movement_keys(self):
         self._poll_keys()
@@ -406,6 +423,8 @@ class KeyboardCommandSource:
         self.key_queue = kept
         if self.control_mode == "latched":
             self._update_command_from_latched_keys()
+            if self.latched_keys:
+                self._maybe_print_latched_command(now=now)
         else:
             self._update_command_from_active_keys(now)
 
@@ -426,6 +445,7 @@ class KeyboardCommandSource:
             self.movement_key_deadlines[key] = -1.0
         self.latched_keys.clear()
         self.last_latched_movement_time = -1.0e9
+        self._last_latched_command_print_value = None
 
     def _pop_matching_key(self, mapping):
         self._poll_keys()

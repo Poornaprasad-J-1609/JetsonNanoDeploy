@@ -2,6 +2,7 @@
 """Display Xsens raw and policy-frame IMU values for mounting validation."""
 
 import argparse
+import csv
 import sys
 import time
 from pathlib import Path
@@ -46,9 +47,27 @@ def main():
     parser.add_argument("--hz", "--rate", type=float, default=20.0)
     parser.add_argument("--seconds", type=float, default=0.0)
     parser.add_argument("--max-roll-pitch-deg", type=float, default=75.0)
+    parser.add_argument("--imu-stale-timeout", type=float, default=0.20)
+    parser.add_argument(
+        "--async-imu",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="use the background cache reader; direct mode keeps raw Xsens fields visible",
+    )
+    parser.add_argument(
+        "--record-csv",
+        default=None,
+        help="optional path to record raw and policy-frame IMU sign-test samples",
+    )
     args = parser.parse_args()
 
-    sensor = create_imu_sensor(source="xsens", port=args.port, baud=args.baud)
+    sensor = create_imu_sensor(
+        source="xsens",
+        port=args.port,
+        baud=args.baud,
+        background=bool(args.async_imu),
+        stale_timeout=float(args.imu_stale_timeout),
+    )
     dt = 1.0 / max(1.0e-6, float(args.hz))
     deadline = (
         time.monotonic() + float(args.seconds)
@@ -62,6 +81,40 @@ def main():
     print_expected_signs()
     print("source=xsens port=", getattr(sensor, "port", args.port), sep="")
     print("Press Ctrl+C to stop.")
+    csv_file = None
+    writer = None
+    if args.record_csv:
+        csv_path = Path(args.record_csv).expanduser()
+        csv_path.parent.mkdir(parents=True, exist_ok=True)
+        csv_file = csv_path.open("w", newline="", encoding="utf-8")
+        fieldnames = [
+            "wall_time",
+            "sample_time",
+            "age_ms",
+            "sample_rate_hz",
+            "valid",
+            "reason",
+            "raw_quat_w",
+            "raw_quat_x",
+            "raw_quat_y",
+            "raw_quat_z",
+            "raw_gyro_x",
+            "raw_gyro_y",
+            "raw_gyro_z",
+            "policy_gyro_x",
+            "policy_gyro_y",
+            "policy_gyro_z",
+            "projected_gravity_x",
+            "projected_gravity_y",
+            "projected_gravity_z",
+            "roll_deg",
+            "pitch_deg",
+            "yaw_deg",
+        ]
+        writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
+        writer.writeheader()
+        csv_file.flush()
+        print("Recording CSV:", csv_path)
 
     try:
         while deadline is None or time.monotonic() < deadline:
@@ -94,6 +147,8 @@ def main():
                 max_roll_pitch_deg=float(args.max_roll_pitch_deg),
             )
             raw_quat = getattr(sensor, "latest_quaternion_wxyz", None)
+            if raw_quat is None:
+                raw_quat = getattr(reading, "quaternion_wxyz", None)
             raw_gyro = getattr(sensor, "latest_gyro_sensor", None)
             age_ms = 1000.0 * (now - timestamp)
             print(
@@ -113,11 +168,53 @@ def main():
                 f"valid={ok} "
                 f"reason={reason}"
             )
+            if writer is not None:
+                raw_quat_arr = (
+                    np.full(4, np.nan, dtype=np.float32)
+                    if raw_quat is None
+                    else np.asarray(raw_quat, dtype=np.float32).reshape(4)
+                )
+                raw_gyro_arr = (
+                    np.full(3, np.nan, dtype=np.float32)
+                    if raw_gyro is None
+                    else np.asarray(raw_gyro, dtype=np.float32).reshape(3)
+                )
+                policy_gyro = np.asarray(reading.base_ang_vel_b, dtype=np.float32).reshape(3)
+                gravity = np.asarray(reading.projected_gravity_b, dtype=np.float32).reshape(3)
+                writer.writerow(
+                    {
+                        "wall_time": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                        "sample_time": f"{timestamp:.6f}",
+                        "age_ms": f"{age_ms:.3f}",
+                        "sample_rate_hz": f"{sample_rate:.3f}",
+                        "valid": int(bool(ok)),
+                        "reason": reason,
+                        "raw_quat_w": float(raw_quat_arr[0]),
+                        "raw_quat_x": float(raw_quat_arr[1]),
+                        "raw_quat_y": float(raw_quat_arr[2]),
+                        "raw_quat_z": float(raw_quat_arr[3]),
+                        "raw_gyro_x": float(raw_gyro_arr[0]),
+                        "raw_gyro_y": float(raw_gyro_arr[1]),
+                        "raw_gyro_z": float(raw_gyro_arr[2]),
+                        "policy_gyro_x": float(policy_gyro[0]),
+                        "policy_gyro_y": float(policy_gyro[1]),
+                        "policy_gyro_z": float(policy_gyro[2]),
+                        "projected_gravity_x": float(gravity[0]),
+                        "projected_gravity_y": float(gravity[1]),
+                        "projected_gravity_z": float(gravity[2]),
+                        "roll_deg": float(np.degrees(roll)),
+                        "pitch_deg": float(np.degrees(pitch)),
+                        "yaw_deg": yaw,
+                    }
+                )
+                csv_file.flush()
             time.sleep(dt)
     except KeyboardInterrupt:
         print("\nStopped.")
     finally:
         sensor.close()
+        if csv_file is not None:
+            csv_file.close()
 
     return 0
 

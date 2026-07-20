@@ -17,6 +17,7 @@ torch>=2.0
 Pillow>=9.5
 python-can>=4.3
 tqdm>=4.65
+matplotlib>=3.7
 robstride-dynamics==0.0.1
 
 # pygame 2.6.x imports pkg_resources; this keeps that compatibility stable.

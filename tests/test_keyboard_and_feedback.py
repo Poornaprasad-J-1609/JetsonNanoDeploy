@@ -139,6 +139,21 @@ class KeyboardAndFeedbackTests(unittest.TestCase):
         np.testing.assert_allclose(source.read(), [1.62, 0.0, 0.0])
         source.close()
 
+    def test_latched_keyboard_prints_on_change_not_every_read(self):
+        source = self.make_latched_keyboard()
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            source.key_queue.append("w")
+            source.read()
+            source.read()
+            source.read()
+        lines = [
+            line for line in output.getvalue().splitlines()
+            if "[KEYBOARD] latched command" in line
+        ]
+        self.assertEqual(len(lines), 1)
+        source.close()
+
     def test_encoder_safety_skips_fake_dry_mode(self):
         runner = PolicyRunner()
         safety = SafetyMonitor(runner.policy_order)

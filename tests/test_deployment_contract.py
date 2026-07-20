@@ -17,10 +17,12 @@ from can_topology import (
     resolve_port_by_bus,
     validate_unique_motor_ids_per_physical_bus,
 )
-from imu_interface import ImuReading, imu_reading_quality
+from imu_interface import ImuReading, XsensBackgroundReader, imu_reading_quality
 from joystick_interface import CommandSource
 from main_controller import (
     action_equivalent_for_q_target,
+    compact_telemetry_record,
+    shifted_safety_filter_with_diagnostics,
     validate_required_policy_imu,
     smoothstep,
 )
@@ -35,6 +37,7 @@ from policy_runner import (
     EXPECTED_POLICY_JOINT_ORDER,
     PolicyRunner,
 )
+from safety_monitor import SafetyMonitor
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -184,6 +187,105 @@ def test_required_stale_imu_blocks_active_motion_guard():
     reason = validate_required_policy_imu(Estimator())
     assert reason is not None
     assert "required IMU" in reason
+
+
+def test_async_xsens_cache_returns_immediately_and_reuses_latest_sample():
+    reader = XsensBackgroundReader(
+        {"port": "/dev/null", "baud": 115200, "require_live": True},
+        stale_timeout=0.20,
+    )
+    sample = ImuReading(
+        base_ang_vel_b=np.array([0.1, 0.2, 0.3], dtype=np.float32),
+        projected_gravity_b=np.array([0.0, 0.0, -1.0], dtype=np.float32),
+        base_lin_vel_b=np.zeros(3, dtype=np.float32),
+        timestamp=time.monotonic(),
+        quaternion_wxyz=np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32),
+    )
+    with reader._lock:
+        reader._latest = sample
+        reader._latest_host_time = time.monotonic()
+        reader._latest_sensor_timestamp = sample.timestamp
+    started = time.monotonic()
+    cached = reader.latest_sample()
+    elapsed = time.monotonic() - started
+    assert elapsed < 0.002
+    assert cached is not sample
+    np.testing.assert_allclose(cached.base_ang_vel_b, sample.base_ang_vel_b)
+
+    with reader._lock:
+        reader._latest_host_time = time.monotonic() - 1.0
+    assert reader.latest_sample() is None
+    reader.stop()
+
+
+def test_target_stage_logging_keeps_actor_entry_limits_and_transmitted_separate():
+    runner = PolicyRunner()
+
+    class Estimator:
+        projected_gravity_b = np.array([0.0, 0.0, -1.0], dtype=np.float32)
+        base_lin_vel_b = np.zeros(3, dtype=np.float32)
+        base_ang_vel_b = np.zeros(3, dtype=np.float32)
+        last_feedback_by_joint = {}
+        imu_sensor = None
+
+    q = np.zeros(12, dtype=np.float32)
+    actor = np.linspace(-0.3, 0.3, 12, dtype=np.float32)
+    entry = actor * 0.5
+    joint_limit = np.clip(entry, -0.1, 0.1)
+    rate_limit = joint_limit * 0.8
+    transmitted = rate_limit * 0.6
+    command = [{"joint_name": runner.policy_order[0], "q_des": float(transmitted[0])}]
+    source = CommandSource(source="fixed", vx=0.0, vy=0.0, yaw=0.0)
+    record = compact_telemetry_record(
+        step=1,
+        mode="policy",
+        command=np.zeros(3, dtype=np.float32),
+        command_source=source,
+        commands=command,
+        estimator=Estimator(),
+        q_current=q,
+        qd_current=q,
+        q_actor_target=actor,
+        q_entry_blended_target=entry,
+        q_joint_limit_filtered_target=joint_limit,
+        q_rate_limited_target=rate_limit,
+        q_safety_target=rate_limit,
+        q_target=rate_limit,
+        entry_blend_active=True,
+        target_joint_limited=np.ones(12, dtype=bool),
+        target_rate_limited=np.zeros(12, dtype=bool),
+        policy_order=runner.policy_order,
+    )
+    source.close()
+    joint = runner.policy_order[0]
+    assert record[f"{joint}_actor_q_target"] == pytest.approx(actor[0])
+    assert record[f"{joint}_entry_blended_q_target"] == pytest.approx(entry[0])
+    assert record[f"{joint}_joint_limit_filtered_q_target"] == pytest.approx(joint_limit[0])
+    assert record[f"{joint}_rate_limited_q_target"] == pytest.approx(rate_limit[0])
+    assert record[f"{joint}_q_des_transmitted"] == pytest.approx(transmitted[0])
+    assert record[f"{joint}_joint_limit_active"] == 1
+    assert record[f"{joint}_entry_blend_active"] == 1
+
+
+def test_safety_filter_reports_intermediate_limit_and_rate_targets():
+    runner = PolicyRunner()
+    safety = SafetyMonitor(runner.policy_order)
+    q_previous = np.zeros(12, dtype=np.float32)
+    q_shift = np.zeros(12, dtype=np.float32)
+    q_target = np.full(12, 99.0, dtype=np.float32)
+    filtered, diag = shifted_safety_filter_with_diagnostics(
+        safety,
+        q_target,
+        q_previous,
+        q_shift,
+        apply_rate_limit=True,
+        use_policy_limits=True,
+    )
+    assert filtered.shape == (12,)
+    assert diag["joint_limit_filtered_q_target"].shape == (12,)
+    assert diag["rate_limited_q_target"].shape == (12,)
+    assert np.any(diag["target_joint_limited"])
+    assert np.any(diag["target_rate_limited"])
 
 
 def test_exact_policy_entry_blend_preserves_raw_action_after_entry():

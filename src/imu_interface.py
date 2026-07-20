@@ -5,6 +5,7 @@ import json
 import math
 import os
 import struct
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -384,6 +385,26 @@ def send_xsens_measurement_mode(serial_port):
     time.sleep(0.3)
 
 
+def copy_imu_reading(reading):
+    if reading is None:
+        return None
+
+    def copy_array(value):
+        return None if value is None else np.asarray(value, dtype=np.float32).copy()
+
+    return ImuReading(
+        base_ang_vel_b=copy_array(reading.base_ang_vel_b),
+        projected_gravity_b=copy_array(reading.projected_gravity_b),
+        base_lin_vel_b=copy_array(reading.base_lin_vel_b),
+        timestamp=float(reading.timestamp),
+        quaternion_wxyz=copy_array(reading.quaternion_wxyz),
+        rpy_abs_deg=copy_array(reading.rpy_abs_deg),
+        axes_world=copy_array(reading.axes_world),
+        det_r=None if reading.det_r is None else float(reading.det_r),
+        cross_err=None if reading.cross_err is None else float(reading.cross_err),
+    )
+
+
 class FakeImuSensor:
     source_name = "fake"
     required = False
@@ -464,7 +485,10 @@ class XsensBinaryImuSensor:
     def _read_packets(self):
         waiting = int(getattr(self.ser, "in_waiting", 0))
         if waiting > 0:
-            data = self.ser.read(max(512, waiting))
+            # Read exactly the bytes reported as available. Reading a larger
+            # amount waits for the serial timeout and is the wrong behavior for
+            # either the direct diagnostic path or the background thread.
+            data = self.ser.read(waiting)
             if data:
                 self.buffer.extend(data)
 
@@ -537,6 +561,172 @@ class XsensBinaryImuSensor:
             det_r=float(self.latest_abs["det_r"]),
             cross_err=float(self.latest_abs["cross_err"]),
         )
+
+
+class XsensBackgroundReader:
+    """Threaded Xsens reader whose read/latest_sample calls never touch serial."""
+
+    source_name = "xsens"
+
+    def __init__(
+        self,
+        cfg,
+        startup_samples=5,
+        stale_timeout=None,
+        poll_sleep_s=0.001,
+    ):
+        self.cfg = dict(cfg)
+        self.port = self.cfg.get("port", "/dev/ttyUSB0")
+        self.baud = int(self.cfg.get("baud", 115200))
+        self.required = bool(self.cfg.get("require_live", True))
+        self.stale_timeout = float(
+            self.cfg.get("stale_timeout", 0.20)
+            if stale_timeout is None
+            else stale_timeout
+        )
+        self.startup_samples = max(1, int(startup_samples))
+        self.poll_sleep_s = max(0.0, float(poll_sleep_s))
+        self._sensor = XsensBinaryImuSensor(self.cfg)
+        self._sensor.stale_timeout = self.stale_timeout
+        self._lock = threading.Lock()
+        self._thread = None
+        self._stop_event = threading.Event()
+        self._latest = None
+        self._latest_host_time = None
+        self._latest_sensor_timestamp = None
+        self._packet_count = 0
+        self._valid_count = 0
+        self._invalid_count = 0
+        self._parse_errors = 0
+        self._last_error = ""
+        self._last_quality_reason = "no sample"
+        self._last_serial_read_s = 0.0
+        self._sample_rate_hz = 0.0
+        self._running = False
+
+    def start(self):
+        if self._thread is not None and self._thread.is_alive():
+            return self
+        self._sensor.open()
+        self._stop_event.clear()
+        self._running = True
+        self._thread = threading.Thread(
+            target=self._run,
+            name="XsensBackgroundReader",
+            daemon=True,
+        )
+        self._thread.start()
+        return self
+
+    def open(self):
+        return self.start()
+
+    def _run(self):
+        last_seen_timestamp = None
+        last_valid_host_time = None
+        while not self._stop_event.is_set():
+            started = time.monotonic()
+            try:
+                reading = self._sensor.read()
+                serial_read_s = time.monotonic() - started
+                if reading is None:
+                    with self._lock:
+                        self._last_serial_read_s = serial_read_s
+                    time.sleep(self.poll_sleep_s)
+                    continue
+
+                timestamp = float(reading.timestamp)
+                if last_seen_timestamp is not None and timestamp <= last_seen_timestamp:
+                    with self._lock:
+                        self._last_serial_read_s = serial_read_s
+                    time.sleep(self.poll_sleep_s)
+                    continue
+                last_seen_timestamp = timestamp
+                host_time = time.monotonic()
+                ok, reason = imu_reading_quality(
+                    reading,
+                    previous_timestamp=self._latest_sensor_timestamp,
+                    require_timestamp_advance=self._latest_sensor_timestamp is not None,
+                    stale_timeout=self.stale_timeout,
+                    now=host_time,
+                )
+                with self._lock:
+                    self._packet_count += 1
+                    self._last_serial_read_s = serial_read_s
+                    self._last_quality_reason = reason
+                    if ok:
+                        if last_valid_host_time is not None:
+                            dt = host_time - last_valid_host_time
+                            if dt > 1.0e-6:
+                                instant_rate = 1.0 / dt
+                                self._sample_rate_hz = (
+                                    instant_rate
+                                    if self._sample_rate_hz <= 0.0
+                                    else 0.85 * self._sample_rate_hz + 0.15 * instant_rate
+                                )
+                        last_valid_host_time = host_time
+                        self._latest = copy_imu_reading(reading)
+                        self._latest_host_time = host_time
+                        self._latest_sensor_timestamp = timestamp
+                        self._valid_count += 1
+                    else:
+                        self._invalid_count += 1
+                time.sleep(self.poll_sleep_s)
+            except Exception as exc:
+                with self._lock:
+                    self._parse_errors += 1
+                    self._last_error = str(exc)
+                    self._last_serial_read_s = time.monotonic() - started
+                time.sleep(0.01)
+
+    def latest_sample(self):
+        with self._lock:
+            if self._latest is None or self._latest_host_time is None:
+                return None
+            age = time.monotonic() - float(self._latest_host_time)
+            if not np.isfinite(age) or age > self.stale_timeout:
+                return None
+            return copy_imu_reading(self._latest)
+
+    def read(self):
+        return self.latest_sample()
+
+    def status(self):
+        with self._lock:
+            latest_host_time = self._latest_host_time
+            age = (
+                None
+                if latest_host_time is None
+                else time.monotonic() - float(latest_host_time)
+            )
+            stale = age is None or age > self.stale_timeout
+            return {
+                "source": self.source_name,
+                "running": bool(self._running),
+                "live": bool(not stale and self._latest is not None),
+                "stale": bool(stale),
+                "age_s": age,
+                "packet_count": int(self._packet_count),
+                "valid_count": int(self._valid_count),
+                "invalid_count": int(self._invalid_count),
+                "parse_errors": int(self._parse_errors),
+                "sample_rate_hz": float(self._sample_rate_hz),
+                "last_error": str(self._last_error),
+                "last_quality_reason": str(self._last_quality_reason),
+                "last_serial_read_ms": 1000.0 * float(self._last_serial_read_s),
+            }
+
+    def stop(self):
+        self._running = False
+        self._stop_event.set()
+        thread = self._thread
+        if thread is not None:
+            thread.join(timeout=1.0)
+            self._thread = None
+        self._sensor.close()
+
+    def close(self):
+        self.stop()
 
 
 class SerialImuSensor:
@@ -691,7 +881,14 @@ class SerialImuSensor:
         return latest
 
 
-def create_imu_sensor(source="auto", port=None, baud=None):
+def create_imu_sensor(
+    source="auto",
+    port=None,
+    baud=None,
+    background=False,
+    startup_samples=5,
+    stale_timeout=None,
+):
     cfg = load_imu_config()
     if source == "auto":
         source = cfg.get("source", "fake")
@@ -701,12 +898,20 @@ def create_imu_sensor(source="auto", port=None, baud=None):
         cfg["port"] = port
     if baud is not None:
         cfg["baud"] = int(baud)
+    if stale_timeout is not None:
+        cfg["stale_timeout"] = float(stale_timeout)
 
     if source in ("none", "off"):
         return None
     if source == "fake":
         return FakeImuSensor(cfg).open()
     if source in ("xsens", "xsens_binary", "mtdata2"):
+        if background:
+            return XsensBackgroundReader(
+                cfg,
+                startup_samples=startup_samples,
+                stale_timeout=stale_timeout,
+            ).start()
         return XsensBinaryImuSensor(cfg).open()
     if source in ("serial_json", "serial_csv"):
         return SerialImuSensor(cfg, source_name=source).open()

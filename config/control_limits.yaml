@@ -48,24 +48,25 @@ policy_deployment:
   # Before packing a walking MIT command, constrain its estimated joint-space
   # PD torque around fresh encoder feedback. The independent measured-feedback
   # emergency stop remains in config/safety_limits.yaml.
-  # Fallback limit when a joint is not listed below.
-  estimated_pd_torque_limit: 95.0
-  # Per-joint effort limits copied from the MuJoCo sim2real metadata, capped at
-  # the RS04 practical command range where needed. This avoids flattening all
-  # joints through one global 60 Nm limiter.
+  # Safe suspension default. Do not raise this automatically; use
+  # --policy-pd-torque-limit 18 only for the controlled comparison after routing
+  # and IMU sign tests pass.
+  estimated_pd_torque_limit: 14.0
+  # Keep every joint at the same safe default unless an explicit hardware test
+  # justifies a per-joint override.
   estimated_pd_torque_limits:
-    BL_hip_joint: 75.0
-    BR_hip_joint: 75.0
-    FL_hip_joint: 60.0
-    FR_hip_joint: 60.0
-    BL_thigh_joint: 120.0
-    BR_thigh_joint: 120.0
-    FL_thigh_joint: 90.0
-    FR_thigh_joint: 90.0
-    BL_calf_joint: 120.0
-    BR_calf_joint: 120.0
-    FL_calf_joint: 95.0
-    FR_calf_joint: 95.0
+    BL_hip_joint: 14.0
+    BR_hip_joint: 14.0
+    FL_hip_joint: 14.0
+    FR_hip_joint: 14.0
+    BL_thigh_joint: 14.0
+    BR_thigh_joint: 14.0
+    FL_thigh_joint: 14.0
+    FR_thigh_joint: 14.0
+    BL_calf_joint: 14.0
+    BR_calf_joint: 14.0
+    FL_calf_joint: 14.0
+    FR_calf_joint: 14.0
 
 joint_position:
   enabled: true

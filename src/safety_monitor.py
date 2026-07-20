@@ -55,6 +55,7 @@ class SafetyMonitor:
         self.max_abs_encoder_position_rad = 3.5
         self.max_feedback_age_s = 0.25
         self.encoder_joint_limit_margin_rad = 0.75
+        self.encoder_limit_tolerance_rad = 0.0
         self.max_abs_feedback_torque = 6.0
         self.max_abs_feedback_torque_fault_samples = 1
         self._feedback_torque_fault_counts = {}
@@ -64,6 +65,12 @@ class SafetyMonitor:
         self.reload_joint_limits(force=True)
         self.reload_control_limits(force=True)
         self.reload_safety_limits(force=True)
+
+    def set_encoder_limit_tolerance(self, tolerance_rad):
+        tolerance_rad = float(tolerance_rad)
+        if not np.isfinite(tolerance_rad) or tolerance_rad < 0.0:
+            raise ValueError("encoder limit tolerance must be finite and >= 0")
+        self.encoder_limit_tolerance_rad = tolerance_rad
 
     def _dict_to_array(self, d):
         return np.array([d[name] for name in self.policy_order], dtype=np.float32)
@@ -398,7 +405,7 @@ class SafetyMonitor:
                 )
 
         violations = []
-        margin = self.encoder_joint_limit_margin_rad
+        margin = self.encoder_joint_limit_margin_rad + self.encoder_limit_tolerance_rad
         for joint_name, index in active_indices:
             if feedback_by_joint is not None and joint_name not in feedback_names:
                 continue
