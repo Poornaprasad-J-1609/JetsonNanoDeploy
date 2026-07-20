@@ -2,6 +2,8 @@
 """CAN topology helpers for one, two, or four RobStride CAN networks."""
 
 import os
+import subprocess
+from pathlib import Path
 
 from robstride_can_interface import ATUsbCan, SocketCan
 
@@ -13,7 +15,12 @@ CAN_TOPOLOGY_BUS_NAMES = {
 }
 
 
-def add_can_topology_args(parser, default_port="/dev/ttyUSB0", default_can_count=2):
+def add_can_topology_args(
+    parser,
+    default_port="slcan0",
+    default_can_count=1,
+    default_backend="socketcan",
+):
     parser.add_argument(
         "--can-count",
         type=int,
@@ -36,7 +43,7 @@ def add_can_topology_args(parser, default_port="/dev/ttyUSB0", default_can_count
     parser.add_argument(
         "--can-backend",
         choices=("auto", "socketcan", "serial-at"),
-        default="auto",
+        default=str(default_backend),
         help=(
             "CAN transport: auto selects serial-at for /dev/tty* and "
             "SocketCAN otherwise"
@@ -196,6 +203,105 @@ def physical_port_identity(port):
     return os.path.realpath(str(port))
 
 
+def backend_for_port(port, backend):
+    """Resolve auto/socketcan/serial-at for a single configured port."""
+    selected_backend = str(backend)
+    if selected_backend == "auto":
+        selected_backend = "serial-at" if str(port).startswith("/dev/tty") else "socketcan"
+    if selected_backend not in ("socketcan", "serial-at"):
+        raise ValueError(f"Unsupported CAN backend: {selected_backend}")
+    return selected_backend
+
+
+def socketcan_preflight(channel, require_exists=True):
+    """Validate an already-created Linux SocketCAN interface without configuring it."""
+    channel = str(channel)
+    sysfs = Path("/sys/class/net") / channel
+    if not sysfs.exists():
+        message = (
+            f"SocketCAN interface {channel!r} does not exist. Attach the SLCAN "
+            "adapter before running, for example with slcand/slcan_attach, then "
+            f"verify it using: ip -details -statistics link show {channel}"
+        )
+        if require_exists:
+            raise RuntimeError(message)
+        print("WARNING:", message)
+        return {
+            "interface": channel,
+            "exists": False,
+            "operstate": None,
+            "mtu": None,
+            "tx_queue_len": None,
+            "bus_off": None,
+        }
+
+    def read_text(name, default=None):
+        try:
+            return (sysfs / name).read_text(encoding="utf-8").strip()
+        except OSError:
+            return default
+
+    operstate = read_text("operstate", "unknown").lower()
+    mtu_text = read_text("mtu", None)
+    txq_text = read_text("tx_queue_len", None)
+    mtu = int(mtu_text) if mtu_text and mtu_text.isdigit() else None
+    tx_queue_len = int(txq_text) if txq_text and txq_text.isdigit() else None
+
+    if operstate not in ("up", "unknown"):
+        raise RuntimeError(
+            f"SocketCAN interface {channel} is not usable: operstate={operstate!r}. "
+            f"Bring it up before running the controller."
+        )
+
+    details = ""
+    bus_off = False
+    try:
+        result = subprocess.run(
+            ["ip", "-details", "-statistics", "link", "show", channel],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=1.0,
+        )
+        details = (result.stdout or "") + "\n" + (result.stderr or "")
+        bus_off = "BUS-OFF" in details.upper() or "BUS_OFF" in details.upper()
+    except (OSError, subprocess.SubprocessError):
+        details = ""
+        bus_off = False
+
+    if bus_off:
+        raise RuntimeError(
+            f"SocketCAN interface {channel} appears BUS-OFF. Reset the CAN "
+            "adapter/link before enabling motors."
+        )
+
+    print(
+        "SocketCAN preflight:",
+        f"interface={channel}",
+        f"mtu={mtu if mtu is not None else 'unknown'}",
+        f"state={operstate}",
+        f"tx_queue_len={tx_queue_len if tx_queue_len is not None else 'unknown'}",
+    )
+    if tx_queue_len is not None and tx_queue_len < 16:
+        print(
+            f"WARNING: {channel} txqueuelen={tx_queue_len} is below 16 and can "
+            "reject a complete 12-motor command set. Recommended command: "
+            f"sudo ip link set {channel} txqueuelen 32"
+        )
+    else:
+        print(f"SocketCAN txqueuelen recommendation: sudo ip link set {channel} txqueuelen 32")
+
+    return {
+        "interface": channel,
+        "exists": True,
+        "operstate": operstate,
+        "mtu": mtu,
+        "tx_queue_len": tx_queue_len,
+        "bus_off": bus_off,
+        "details": details,
+    }
+
+
 def validate_unique_motor_ids_per_physical_bus(
     motor_ids,
     joint_can_bus,
@@ -255,9 +361,7 @@ def open_can_buses(
                 buses[bus_name] = opened_by_port[port]
                 continue
 
-            selected_backend = str(backend)
-            if selected_backend == "auto":
-                selected_backend = "serial-at" if str(port).startswith("/dev/tty") else "socketcan"
+            selected_backend = backend_for_port(port, backend)
 
             if selected_backend == "socketcan":
                 kwargs = {

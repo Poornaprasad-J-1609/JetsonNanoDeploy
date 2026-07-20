@@ -16,6 +16,11 @@ except ImportError as exc:
 
 
 ROOT = Path(__file__).resolve().parents[1]
+_COMMAND_LIMIT_CACHE = {
+    "control_mtime_ns": None,
+    "joint_map_mtime_ns": None,
+    "limits": None,
+}
 
 
 def load_yaml(path):
@@ -43,12 +48,23 @@ def expo_curve(x, expo):
 
 
 def load_command_limits():
-    control_cfg = load_control_limits()
+    control_path = ROOT / "config" / "control_limits.yaml"
+    joint_map_path = ROOT / "config" / "joint_map.yaml"
+    control_mtime_ns = control_path.stat().st_mtime_ns
+    joint_map_mtime_ns = joint_map_path.stat().st_mtime_ns
+    if (
+        _COMMAND_LIMIT_CACHE["limits"] is not None
+        and _COMMAND_LIMIT_CACHE["control_mtime_ns"] == control_mtime_ns
+        and _COMMAND_LIMIT_CACHE["joint_map_mtime_ns"] == joint_map_mtime_ns
+    ):
+        return _COMMAND_LIMIT_CACHE["limits"]
+
+    control_cfg = load_yaml(control_path)
     velocity_cfg = control_cfg.get("velocity_command", {})
     if bool(velocity_cfg.get("enabled", True)):
         lim = velocity_cfg
     else:
-        cfg = load_yaml(ROOT / "config" / "joint_map.yaml")
+        cfg = load_yaml(joint_map_path)
         lim = cfg["command_limits"]
 
     limits = (
@@ -61,6 +77,13 @@ def load_command_limits():
     )
     if limits[0] > limits[1] or limits[2] > limits[3] or limits[4] > limits[5]:
         raise ValueError("Invalid velocity command limits: min value is greater than max")
+    _COMMAND_LIMIT_CACHE.update(
+        {
+            "control_mtime_ns": control_mtime_ns,
+            "joint_map_mtime_ns": joint_map_mtime_ns,
+            "limits": limits,
+        }
+    )
     return limits
 
 
@@ -131,6 +154,7 @@ def clip_command(command, limits):
 
 class FixedCommandSource:
     def __init__(self, vx=0.0, vy=0.0, yaw=0.0):
+        self.source_name = "fixed"
         self.command_limits = load_command_limits()
         self.command = clip_command([vx, vy, yaw], self.command_limits)
 
@@ -185,6 +209,7 @@ class KeyboardCommandSource:
         speed_scale_step=0.1,
         command_timeout_s=0.35,
     ):
+        self.source_name = "keyboard"
         self.max_vx = float(max_vx)
         self.max_vy = float(max_vy)
         self.max_yaw = float(max_yaw)
@@ -278,7 +303,21 @@ class KeyboardCommandSource:
             )
         )
         if abs(self.speed_scale - old_scale) > 1.0e-9:
-            print(f"[KEYBOARD] speed_scale={self.speed_scale:.2f}")
+            limits = load_command_limits()
+            effective = clip_command(
+                [
+                    self.max_vx * self.speed_scale,
+                    self.max_vy * self.speed_scale,
+                    self.max_yaw * self.speed_scale,
+                ],
+                limits,
+            )
+            print(
+                "[KEYBOARD] "
+                f"speed_scale={self.speed_scale:.2f} "
+                "effective_command_max="
+                f"[{effective[0]:.3f}, {effective[1]:.3f}, {effective[2]:.3f}]"
+            )
 
     def _process_movement_keys(self):
         self._poll_keys()
@@ -442,6 +481,7 @@ class JoystickCommandSource:
         speed_scale_max=1.0,
         speed_scale_step=0.1,
     ):
+        self.source_name = "joystick"
         self.max_vx = float(max_vx)
         self.max_vy = float(max_vy)
         self.max_yaw = float(max_yaw)
@@ -760,6 +800,7 @@ class JoystickCommandSource:
 
 class CommandSource:
     def __init__(self, source="fixed", **kwargs):
+        self.source_name = str(source)
         if source == "fixed":
             self.impl = FixedCommandSource(
                 vx=kwargs.get("vx", 0.0),
@@ -858,6 +899,7 @@ class CommandSource:
             )
         else:
             raise ValueError(f"Unknown command source: {source}")
+        self.source_name = getattr(self.impl, "source_name", self.source_name)
 
     def read(self):
         return self.impl.read()
