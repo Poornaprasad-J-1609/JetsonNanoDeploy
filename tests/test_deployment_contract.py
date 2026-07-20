@@ -20,6 +20,7 @@ from can_topology import (
 from joystick_interface import CommandSource
 from main_controller import action_equivalent_for_q_target, smoothstep
 from motor_command_layer import (
+    MotorCommandLayer,
     decode_mit_feedback_frame,
     mit_can_id,
     pack_mit_command,
@@ -183,6 +184,30 @@ def test_main_controller_safe_defaults_are_pinned():
     assert "--exact-policy-after-entry" in source
     assert "default=True" in source[source.index("--exact-policy-after-entry"):source.index("--fake-start")]
     assert "if not bool(exact_policy_after_entry):" in source
+
+
+def test_policy_and_pose_pd_torque_limits_are_separate():
+    runner = PolicyRunner()
+    motor_ids = load_yaml(ROOT / "config" / "motor_ids.yaml")["motor_ids"]
+    layer = MotorCommandLayer(
+        runner.policy_order,
+        motor_ids,
+        active_joints=[],
+        joint_can_bus=resolve_joint_can_bus(runner.policy_order, 1),
+    )
+    configured_pose_limits = layer.pose_pd_torque_limits()
+    configured_policy_limit = layer.policy_pd_torque_limit_for_joint(runner.policy_order[0])
+
+    layer.set_policy_pd_torque_limit(21.0)
+    assert layer.policy_pd_torque_limit_for_joint(runner.policy_order[0]) == pytest.approx(21.0)
+    assert layer.pose_pd_torque_limits() == configured_pose_limits
+
+    layer.set_pose_pd_torque_limit(12.0)
+    pose_limits = layer.pose_pd_torque_limits()
+    assert pose_limits["startup"] == pytest.approx(12.0)
+    assert pose_limits["hold"] == pytest.approx(12.0)
+    assert configured_policy_limit != pytest.approx(12.0)
+    assert layer.policy_pd_torque_limit_for_joint(runner.policy_order[0]) == pytest.approx(21.0)
 
 
 def test_four_bar_transmission_is_inactive():

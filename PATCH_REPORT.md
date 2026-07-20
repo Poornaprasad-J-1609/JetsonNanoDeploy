@@ -265,3 +265,57 @@ git show --format=fuller --patch HEAD
 
 Do not claim real gait is proven until the suspended hardware test and then
 ground walking validation have both been completed.
+
+## Timing Scheduler Repair Addendum
+
+Commit message: `fix: distinguish timing backlog from sustained control overruns`
+
+Additional files changed:
+
+- `src/timing_scheduler.py`
+- `tests/test_timing_scheduler.py`
+- `src/motor_command_layer.py`
+
+Fix:
+
+- Replaced the old lateness-based consecutive watchdog with a deadline
+  scheduler that separates current-cycle workload from accumulated deadline
+  backlog.
+- New timing metrics:
+  - `loop_period_ms`
+  - `cycle_work_ms`
+  - `deadline_lateness_ms`
+  - `missed_deadlines_total`
+  - `consecutive_work_overruns`
+  - `scheduler_resync_count`
+  - `max_cycle_work_ms`
+  - `max_lateness_ms`
+- A one-time slow transition cycle can now resynchronize the scheduler without
+  creating a false 25-cycle timing fault.
+- Sustained workload overruns still trip the timing fault after the configured
+  consecutive count.
+- Added CLI options:
+  - `--deadline-tolerance-ms`
+  - `--deadline-resync-ms`
+  - `--timing-fault-consecutive`
+- Added separate pose torque override:
+  - `--pose-pd-torque-limit`
+- `--policy-pd-torque-limit` remains policy walking only.
+- `--pose-pd-torque-limit` covers the pose command phases used by sit, stand,
+  and hold without changing the YAML defaults unless explicitly supplied.
+
+Timing validation:
+
+- Direct deterministic scheduler tests passed for:
+  - one-time 80 ms transition delay followed by 100 normal 5 ms cycles
+  - sustained 25 ms workload overload
+  - minor wakeup lateness below the work budget
+  - explicit mode-transition resync
+  - true repeated workload overrun
+- 30-second fake-device controller timing run passed at 50 Hz with no false
+  timing fault.
+- Forward policy gait replay still passes with raw/sent action error after
+  entry equal to 0.
+
+`pytest` still could not run in this workstation environment because the active
+Python does not have the `pytest` package installed.

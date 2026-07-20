@@ -22,6 +22,7 @@ from state_estimator import FakeStateEstimator, MitFeedbackStateEstimator
 from joystick_interface import CommandSource, load_joystick_defaults, load_speed_scale_defaults
 from imu_interface import create_imu_sensor, load_imu_config
 from motor_command_layer import MotorCommandLayer, print_mit_commands
+from timing_scheduler import DeadlineScheduler
 from can_topology import (
     add_can_topology_args,
     backend_for_port,
@@ -601,6 +602,9 @@ def compact_telemetry_record(
     policy_sha256=None,
     imu_correction_abs_max=0.0,
     loop_dt_s=None,
+    loop_period_s=None,
+    cycle_work_s=0.0,
+    deadline_lateness_s=0.0,
     policy_inference_s=None,
     can_tx_s=None,
     feedback_read_s=None,
@@ -610,6 +614,12 @@ def compact_telemetry_record(
     missed_deadlines=0,
     consecutive_overruns=0,
     max_overrun_s=0.0,
+    missed_deadlines_total=None,
+    missed_deadlines_this_cycle=0,
+    consecutive_work_overruns=None,
+    scheduler_resync_count=0,
+    max_cycle_work_s=0.0,
+    max_lateness_s=0.0,
     policy_steady_cycles=0,
     policy_target_clip_counts=None,
     policy_torque_clip_counts=None,
@@ -625,6 +635,13 @@ def compact_telemetry_record(
         dtype=np.float32,
     )
     imu_roll, imu_pitch = projected_gravity_to_roll_pitch(gravity)
+
+    if loop_period_s is None:
+        loop_period_s = loop_dt_s
+    if missed_deadlines_total is None:
+        missed_deadlines_total = missed_deadlines
+    if consecutive_work_overruns is None:
+        consecutive_work_overruns = consecutive_overruns
 
     record = {
         "phase": str(phase),
@@ -653,6 +670,11 @@ def compact_telemetry_record(
         "bus_counts": format_bus_counts(bus_counts),
         "loop_dt_ms": None if loop_dt_s is None else 1000.0 * float(loop_dt_s),
         "loop_hz": None if not loop_dt_s else 1.0 / float(loop_dt_s),
+        "loop_period_ms": (
+            None if loop_period_s is None else 1000.0 * float(loop_period_s)
+        ),
+        "cycle_work_ms": 1000.0 * float(cycle_work_s),
+        "deadline_lateness_ms": 1000.0 * float(deadline_lateness_s),
         "policy_inference_ms": (
             None if policy_inference_s is None else 1000.0 * float(policy_inference_s)
         ),
@@ -668,6 +690,12 @@ def compact_telemetry_record(
         "missed_deadlines": int(missed_deadlines),
         "consecutive_overruns": int(consecutive_overruns),
         "max_overrun_ms": 1000.0 * float(max_overrun_s),
+        "missed_deadlines_total": int(missed_deadlines_total),
+        "missed_deadlines_this_cycle": int(missed_deadlines_this_cycle),
+        "consecutive_work_overruns": int(consecutive_work_overruns),
+        "scheduler_resync_count": int(scheduler_resync_count),
+        "max_cycle_work_ms": 1000.0 * float(max_cycle_work_s),
+        "max_lateness_ms": 1000.0 * float(max_lateness_s),
         "policy_steady_cycles": int(policy_steady_cycles),
         "tau_fb": None,
         "tau_fb_max": None,
@@ -956,6 +984,12 @@ def compact_telemetry_line(record):
     )
     if record.get("loop_hz") not in (None, ""):
         line += f" hz={float(record['loop_hz']):.1f}"
+    if record.get("cycle_work_ms") not in (None, ""):
+        line += f" work={float(record['cycle_work_ms']):.1f}ms"
+    if float(record.get("deadline_lateness_ms") or 0.0) > 0.0:
+        line += f" late={float(record['deadline_lateness_ms']):.1f}ms"
+    if int(record.get("consecutive_work_overruns") or 0) > 0:
+        line += f" work_ovr={int(record['consecutive_work_overruns'])}"
     if record.get("can_tx_ms") not in (None, ""):
         line += f" tx={float(record['can_tx_ms']):.1f}ms"
     if record.get("feedback_age_max_ms") not in (None, ""):
@@ -1029,6 +1063,9 @@ class CsvRunLogger:
         "bus_counts",
         "loop_dt_ms",
         "loop_hz",
+        "loop_period_ms",
+        "cycle_work_ms",
+        "deadline_lateness_ms",
         "policy_inference_ms",
         "can_tx_ms",
         "feedback_read_ms",
@@ -1038,6 +1075,12 @@ class CsvRunLogger:
         "missed_deadlines",
         "consecutive_overruns",
         "max_overrun_ms",
+        "missed_deadlines_total",
+        "missed_deadlines_this_cycle",
+        "consecutive_work_overruns",
+        "scheduler_resync_count",
+        "max_cycle_work_ms",
+        "max_lateness_ms",
         "policy_steady_cycles",
         "tau_fb",
         "tau_fb_max",
@@ -2030,6 +2073,9 @@ def run_policy_loop(
     pose_transition_speed_rad_s,
     pose_transition_min_seconds,
     fresh_feedback_max_age_s,
+    deadline_tolerance_s,
+    deadline_resync_s,
+    timing_fault_consecutive,
     telemetry=None,
     csv_logger=None,
 ):
@@ -2130,6 +2176,7 @@ def run_policy_loop(
             f"distance={active_distance:.3f} rad duration={duration:.2f}s "
             f"speed_limit={speed:.3f} rad/s"
         )
+        scheduler.request_resync(f"{mode_name} transition initialized")
 
     def current_pose_transition_target(mode_name, current_step):
         nonlocal pose_transition_mode
@@ -2224,13 +2271,19 @@ def run_policy_loop(
         print("policy_steps: unlimited, running until emergency stop or Ctrl+C")
     else:
         print("policy_steps:", steps)
+    scheduler = DeadlineScheduler(
+        dt_s=dt,
+        deadline_tolerance_s=deadline_tolerance_s,
+        deadline_resync_s=deadline_resync_s,
+        timing_fault_consecutive=timing_fault_consecutive,
+        warning_callback=print,
+    )
+    print("deadline_tolerance_ms:", 1000.0 * float(scheduler.deadline_tolerance_s))
+    print("deadline_resync_ms:", 1000.0 * float(scheduler.deadline_resync_s))
+    print("timing_fault_consecutive:", int(scheduler.timing_fault_consecutive))
 
     step = 0
     previous_cycle_start = None
-    next_deadline = time.monotonic()
-    missed_deadlines = 0
-    consecutive_overruns = 0
-    max_overrun_s = 0.0
     policy_steady_cycles = 0
     policy_target_clip_counts = np.zeros(action_dim, dtype=np.int64)
     policy_torque_clip_counts = np.zeros(action_dim, dtype=np.int64)
@@ -2326,6 +2379,7 @@ def run_policy_loop(
                         target_value=crouch_calibration_value,
                     )
                 if q_zeroed is not False:
+                    scheduler.request_resync("software-zero calibration")
                     q_previous_target = q_zeroed.copy()
                     q_current = q_zeroed.copy()
                     qd_current = np.zeros_like(q_current, dtype=np.float32)
@@ -2480,6 +2534,7 @@ def run_policy_loop(
                     )
                     mode_request = None
                 else:
+                    scheduler.request_resync("pose command feedback capture")
                     q_previous_target = q_zeroed.copy()
                     q_current = q_zeroed.copy()
                     qd_current = np.zeros_like(q_current, dtype=np.float32)
@@ -2616,6 +2671,7 @@ def run_policy_loop(
                         "[FEEDBACK] hold kept previous target for stale/missing joint(s): "
                         + shown
                     )
+                scheduler.request_resync("hold feedback capture")
 
             if mode_request is not None:
                 control_mode = mode_request
@@ -2661,6 +2717,7 @@ def run_policy_loop(
                     begin_pose_transition(control_mode, q_current, step)
                 else:
                     pose_transition_mode = None
+                    scheduler.request_resync(f"{control_mode} mode initialized")
                 print(f"\n[MODE CHANGE] control_mode -> {control_mode}")
 
         command = command_source.read()
@@ -2801,6 +2858,7 @@ def run_policy_loop(
             if not previous_walk_requested:
                 policy_entry_elapsed_s = 0.0
                 policy_entry_q_start = np.asarray(q_previous_target, dtype=np.float32).copy()
+                scheduler.request_resync("policy entry initialized")
             policy_entry_elapsed_s += float(dt)
             if float(policy_entry_ramp_seconds) > 0.0:
                 policy_entry_scale = smoothstep(
@@ -3161,6 +3219,7 @@ def run_policy_loop(
                     target_value=stand_calibration_value,
                 )
                 if q_zeroed is not False:
+                    scheduler.request_resync("stand software-zero calibration")
                     zero_frame = "stand"
                     stand_zero_pending = False
                     stand_zero_settle_count = 0
@@ -3247,6 +3306,7 @@ def run_policy_loop(
                     target_value=crouch_calibration_value,
                 )
                 if q_zeroed is not False:
+                    scheduler.request_resync("sit software-zero calibration")
                     zero_frame = "crouch"
                     sit_zero_pending = False
                     sit_zero_settle_count = 0
@@ -3273,6 +3333,7 @@ def run_policy_loop(
         should_log_csv = step % max(1, log_every) == 0
         should_print = step % max(1, print_every) == 0
         if should_log_csv or should_print:
+            timing = scheduler.last_snapshot
             telemetry_record = compact_telemetry_record(
                 step=step,
                 mode=active_control_mode,
@@ -3301,15 +3362,24 @@ def run_policy_loop(
                 policy_sha256=runner.policy_sha256,
                 imu_correction_abs_max=imu_correction_abs_max,
                 loop_dt_s=loop_dt_s,
+                loop_period_s=loop_dt_s,
+                cycle_work_s=timing.cycle_work_s,
+                deadline_lateness_s=timing.deadline_lateness_s,
                 policy_inference_s=policy_inference_s,
                 can_tx_s=can_tx_s,
                 feedback_read_s=feedback_read_s,
                 imu_read_s=imu_read_s,
                 feedback_age_max_s=feedback_age_max_s,
                 feedback_fresh_count=feedback_fresh_count,
-                missed_deadlines=missed_deadlines,
-                consecutive_overruns=consecutive_overruns,
-                max_overrun_s=max_overrun_s,
+                missed_deadlines=timing.total_missed_deadlines,
+                consecutive_overruns=timing.consecutive_work_overruns,
+                max_overrun_s=timing.maximum_lateness_s,
+                missed_deadlines_total=timing.total_missed_deadlines,
+                missed_deadlines_this_cycle=timing.missed_deadlines_this_cycle,
+                consecutive_work_overruns=timing.consecutive_work_overruns,
+                scheduler_resync_count=timing.scheduler_resync_count,
+                max_cycle_work_s=timing.maximum_work_s,
+                max_lateness_s=timing.maximum_lateness_s,
                 policy_steady_cycles=policy_steady_cycles,
                 policy_target_clip_counts=policy_target_clip_counts,
                 policy_torque_clip_counts=policy_torque_clip_counts,
@@ -3371,37 +3441,33 @@ def run_policy_loop(
         )
 
         step += 1
-        next_deadline += float(dt)
-        sleep_s = next_deadline - time.monotonic()
-        if sleep_s > 0.0:
-            time.sleep(sleep_s)
-            consecutive_overruns = 0
-        else:
-            overrun_s = -float(sleep_s)
-            missed_deadlines += 1
-            consecutive_overruns += 1
-            max_overrun_s = max(max_overrun_s, overrun_s)
-            if overrun_s > max(0.25, 5.0 * float(dt)):
-                next_deadline = time.monotonic()
-            if consecutive_overruns >= 25:
-                print(
-                    "\nTIMING FAULT: controller missed 25 consecutive "
-                    "deadlines; stopping instead of continuing with irregular gait timing."
-                )
-                publish_safety_fault(
-                    telemetry=telemetry,
-                    csv_logger=csv_logger,
-                    step=step,
-                    mode="timing_fault",
-                    command=command,
-                    command_source=command_source,
-                    commands=commands,
-                    estimator=estimator,
-                    reason="controller timing overrun",
-                    action=action,
-                    phase="runtime",
-                )
-                break
+        timing = scheduler.finish_cycle(cycle_start)
+        if timing.timing_fault:
+            print(
+                "\nTIMING FAULT: controller exceeded the control-period "
+                f"work budget for {timing.consecutive_work_overruns} "
+                "consecutive cycles; stopping instead of continuing with "
+                "irregular gait timing."
+            )
+            publish_safety_fault(
+                telemetry=telemetry,
+                csv_logger=csv_logger,
+                step=step,
+                mode="timing_fault",
+                command=command,
+                command_source=command_source,
+                commands=commands,
+                estimator=estimator,
+                reason=(
+                    "controller sustained work overrun: "
+                    f"cycle_work={1000.0 * timing.cycle_work_s:.1f}ms "
+                    f"dt={1000.0 * float(dt):.1f}ms "
+                    f"tolerance={1000.0 * scheduler.deadline_tolerance_s:.1f}ms"
+                ),
+                action=action,
+                phase="runtime",
+            )
+            break
 
     print("\nRuntime control phase completed.")
 
@@ -3649,6 +3715,27 @@ def main():
         help="minimum duration for a synchronized sit/stand transition",
     )
     parser.add_argument(
+        "--deadline-tolerance-ms",
+        type=float,
+        default=1.0,
+        help=(
+            "current-cycle work-budget tolerance before counting a consecutive "
+            "timing overrun"
+        ),
+    )
+    parser.add_argument(
+        "--deadline-resync-ms",
+        type=float,
+        default=50.0,
+        help="lateness threshold for resynchronizing the absolute-deadline scheduler",
+    )
+    parser.add_argument(
+        "--timing-fault-consecutive",
+        type=int,
+        default=25,
+        help="stop after this many consecutive current-cycle work overruns",
+    )
+    parser.add_argument(
         "--walk-command-threshold",
         type=float,
         default=0.02,
@@ -3814,6 +3901,15 @@ def main():
         ),
     )
     parser.add_argument(
+        "--pose-pd-torque-limit",
+        type=float,
+        default=0.0,
+        help=(
+            "override sit/stand/hold estimated PD torque limits in Nm; "
+            "0 preserves config/control_limits.yaml startup/hold limits"
+        ),
+    )
+    parser.add_argument(
         "--policy-sim-match",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -3912,6 +4008,20 @@ def main():
         args.policy_entry_ramp_seconds = 1.5
     if not np.isfinite(args.policy_pd_torque_limit) or args.policy_pd_torque_limit < 0.0:
         parser.error("--policy-pd-torque-limit must be finite and >= 0")
+    if not np.isfinite(args.pose_pd_torque_limit) or args.pose_pd_torque_limit < 0.0:
+        parser.error("--pose-pd-torque-limit must be finite and >= 0")
+    if (
+        not np.isfinite(args.deadline_tolerance_ms)
+        or args.deadline_tolerance_ms < 0.0
+    ):
+        parser.error("--deadline-tolerance-ms must be finite and >= 0")
+    if (
+        not np.isfinite(args.deadline_resync_ms)
+        or args.deadline_resync_ms <= 0.0
+    ):
+        parser.error("--deadline-resync-ms must be finite and > 0")
+    if int(args.timing_fault_consecutive) <= 0:
+        parser.error("--timing-fault-consecutive must be > 0")
     if not np.isfinite(args.fresh_feedback_max_age) or args.fresh_feedback_max_age < 0.0:
         parser.error("--fresh-feedback-max-age must be finite and >= 0")
     if not np.isfinite(args.control_hz) or args.control_hz < 0.0:
@@ -3978,6 +4088,8 @@ def main():
     )
     if args.policy_pd_torque_limit > 0.0:
         motor_layer.set_policy_pd_torque_limit(args.policy_pd_torque_limit)
+    if args.pose_pd_torque_limit > 0.0:
+        motor_layer.set_pose_pd_torque_limit(args.pose_pd_torque_limit)
     active_port_by_bus = ports_for_active_joints(
         port_by_bus,
         joint_can_bus,
@@ -4118,6 +4230,21 @@ def main():
             f"config per-joint min={min(torque_limits):.2f} "
             f"max={max(torque_limits):.2f} Nm",
         )
+    pose_torque_limits = motor_layer.pose_pd_torque_limits()
+    if args.pose_pd_torque_limit > 0.0:
+        print("Pose PD torque limit:", f"{args.pose_pd_torque_limit:.2f} Nm override")
+    else:
+        print(
+            "Pose PD torque limit:",
+            "config",
+            f"startup={pose_torque_limits['startup']:.2f} Nm",
+            f"hold={pose_torque_limits['hold']:.2f} Nm",
+        )
+    print(
+        "Measured torque emergency limit:",
+        f"{float(safety.max_abs_feedback_torque):.2f} Nm",
+        f"samples={int(safety.max_abs_feedback_torque_fault_samples)}",
+    )
     print("Walk command grace:", f"{args.walk_command_grace_seconds:.2f} s")
     print("Start control mode:", args.start_control_mode)
     print("Startup action:", args.startup_action)
@@ -4453,6 +4580,9 @@ def main():
             pose_transition_speed_rad_s=float(args.pose_transition_speed_rad_s),
             pose_transition_min_seconds=float(args.pose_transition_min_seconds),
             fresh_feedback_max_age_s=float(args.fresh_feedback_max_age),
+            deadline_tolerance_s=0.001 * float(args.deadline_tolerance_ms),
+            deadline_resync_s=0.001 * float(args.deadline_resync_ms),
+            timing_fault_consecutive=int(args.timing_fault_consecutive),
             telemetry=telemetry,
             csv_logger=csv_logger,
         )

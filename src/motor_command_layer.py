@@ -200,6 +200,7 @@ class MotorCommandLayer:
         self.policy_pd_torque_limit = 0.0
         self.policy_pd_torque_limits = {}
         self.policy_pd_torque_limit_override = None
+        self.pose_pd_torque_limit_override = None
         self.startup_pd_torque_limit = 0.0
         self.hold_pd_torque_limit = 0.0
         self.leveling_pd_torque_limit = 0.0
@@ -430,16 +431,29 @@ class MotorCommandLayer:
                 joint_name: override for joint_name in self.policy_order
             }
         mit_cfg = cfg.get("mit_parameters", {})
-        self.startup_pd_torque_limit = float(
+        configured_startup_torque_limit = float(
             mit_cfg.get("startup_pd_torque_limit", 0.0)
         )
-        if not np.isfinite(self.startup_pd_torque_limit) or self.startup_pd_torque_limit < 0.0:
+        if (
+            not np.isfinite(configured_startup_torque_limit)
+            or configured_startup_torque_limit < 0.0
+        ):
             raise ValueError("mit_parameters.startup_pd_torque_limit must be finite and >= 0")
-        self.hold_pd_torque_limit = float(
+        configured_hold_torque_limit = float(
             mit_cfg.get("hold_pd_torque_limit", 0.0)
         )
-        if not np.isfinite(self.hold_pd_torque_limit) or self.hold_pd_torque_limit < 0.0:
+        if (
+            not np.isfinite(configured_hold_torque_limit)
+            or configured_hold_torque_limit < 0.0
+        ):
             raise ValueError("mit_parameters.hold_pd_torque_limit must be finite and >= 0")
+        if self.pose_pd_torque_limit_override is None:
+            self.startup_pd_torque_limit = configured_startup_torque_limit
+            self.hold_pd_torque_limit = configured_hold_torque_limit
+        else:
+            override = float(self.pose_pd_torque_limit_override)
+            self.startup_pd_torque_limit = override
+            self.hold_pd_torque_limit = override
         self.leveling_pd_torque_limit = float(
             mit_cfg.get("leveling_pd_torque_limit", 0.0)
         )
@@ -477,11 +491,26 @@ class MotorCommandLayer:
             joint_name: value for joint_name in self.policy_order
         }
 
+    def set_pose_pd_torque_limit(self, value):
+        value = float(value)
+        if not np.isfinite(value) or value < 0.0:
+            raise ValueError("pose PD torque limit override must be finite and >= 0")
+        self.pose_pd_torque_limit_override = value
+        self.startup_pd_torque_limit = value
+        self.hold_pd_torque_limit = value
+
     def policy_pd_torque_limit_for_joint(self, joint_name):
         self.reload_control_limits()
         return float(
             self.policy_pd_torque_limits.get(joint_name, self.policy_pd_torque_limit)
         )
+
+    def pose_pd_torque_limits(self):
+        self.reload_control_limits()
+        return {
+            "startup": float(self.startup_pd_torque_limit),
+            "hold": float(self.hold_pd_torque_limit),
+        }
 
     def reload_joint_limits(self, force=False):
         mtime_ns = self.joint_limit_path.stat().st_mtime_ns
