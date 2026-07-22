@@ -937,6 +937,11 @@ def main():
         action="store_true",
         help="print only newly received sensor packets, then report actual packet rate",
     )
+    parser.add_argument(
+        "--summary-only",
+        action="store_true",
+        help="suppress per-sample output for an accurate packet-rate measurement",
+    )
     args = parser.parse_args()
 
     sensor = create_imu_sensor(source=args.source, port=args.port, baud=args.baud)
@@ -960,7 +965,10 @@ def main():
         for step in range(steps):
             reading = sensor.read()
             if reading is None:
-                if not args.fresh_only or step % max(1, int(args.hz)) == 0:
+                if (
+                    not args.summary_only
+                    and (not args.fresh_only or step % max(1, int(args.hz)) == 0)
+                ):
                     print(f"step={step:04d} imu=no_new_data")
             else:
                 timestamp = float(reading.timestamp)
@@ -970,7 +978,7 @@ def main():
                     previous_timestamp = timestamp
                 else:
                     duplicate_polls += 1
-                if args.fresh_only and not is_fresh:
+                if (args.fresh_only or args.summary_only) and not is_fresh:
                     time.sleep(dt)
                     continue
                 quat = reading.quaternion_wxyz
@@ -992,14 +1000,15 @@ def main():
                     if det_r is not None and cross_err is not None
                     else ""
                 )
-                print(
-                    f"step={step:04d} "
-                    f"fresh={'yes' if is_fresh else 'no'} "
-                    f"gyro={reading.base_ang_vel_b} "
-                    f"gravity={reading.projected_gravity_b} "
-                    f"lin_vel={reading.base_lin_vel_b}"
-                    f"{quat_text}{rpy_text}{quality_text}"
-                )
+                if not args.summary_only:
+                    print(
+                        f"step={step:04d} "
+                        f"fresh={'yes' if is_fresh else 'no'} "
+                        f"gyro={reading.base_ang_vel_b} "
+                        f"gravity={reading.projected_gravity_b} "
+                        f"lin_vel={reading.base_lin_vel_b}"
+                        f"{quat_text}{rpy_text}{quality_text}"
+                    )
             time.sleep(dt)
     except KeyboardInterrupt:
         interrupted = True
