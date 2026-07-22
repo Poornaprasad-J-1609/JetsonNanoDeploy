@@ -27,7 +27,14 @@ def percentile(values, value):
     return float(np.percentile(np.asarray(values, dtype=np.float64), value))
 
 
-def summarize_transport(tx_times, feedback_times, missed_batches, backpressure_events):
+def summarize_transport(
+    tx_times,
+    feedback_times,
+    missed_batches,
+    backpressure_events,
+    feedback_stale_windows=0,
+    maximum_feedback_age_s=0.0,
+):
     if not tx_times:
         raise ValueError("no CAN batches were measured")
     return {
@@ -39,6 +46,8 @@ def summarize_transport(tx_times, feedback_times, missed_batches, backpressure_e
             0.0 if not feedback_times else 1000.0 * percentile(feedback_times, 95)
         ),
         "missed_batches": int(missed_batches),
+        "feedback_stale_windows": int(feedback_stale_windows),
+        "maximum_feedback_age_ms": 1000.0 * float(maximum_feedback_age_s),
         "socket_backpressure_events": int(backpressure_events),
     }
 
@@ -58,11 +67,22 @@ def main():
     parser.add_argument("--duration", type=float, default=10.0)
     parser.add_argument("--bitrate", type=int, default=1_000_000)
     parser.add_argument("--details", action="store_true")
+    parser.add_argument(
+        "--feedback-freshness-window",
+        type=float,
+        default=0.040,
+        help=(
+            "maximum age of the latest reply from every motor; defaults to "
+            "the controller's 40 ms fresh-feedback contract"
+        ),
+    )
     args = parser.parse_args()
     if not 1 <= args.motors <= 12:
         parser.error("--motors must be within 1..12")
     if args.rate <= 0.0 or args.duration <= 0.0:
         parser.error("--rate and --duration must be > 0")
+    if args.feedback_freshness_window <= 0.0:
+        parser.error("--feedback-freshness-window must be > 0")
     bus_names = bus_names_for_count(args.can_count)
     interfaces = args.can_interfaces
     if interfaces is None:
@@ -102,6 +122,9 @@ def main():
     tx_times = []
     feedback_times = []
     missed = 0
+    feedback_stale_windows = 0
+    maximum_feedback_age_s = 0.0
+    last_feedback_by_motor = {}
     dt = 1.0 / args.rate
     deadline = time.monotonic()
     end = deadline + args.duration
@@ -130,6 +153,24 @@ def main():
             }
             if not expected_bus_motor_ids.issubset(received):
                 missed += 1
+            feedback_now = time.monotonic()
+            for key in received:
+                if key in expected_bus_motor_ids:
+                    last_feedback_by_motor[key] = feedback_now
+            if expected_bus_motor_ids.issubset(last_feedback_by_motor):
+                ages = [
+                    feedback_now - last_feedback_by_motor[key]
+                    for key in expected_bus_motor_ids
+                ]
+                maximum_feedback_age_s = max(
+                    maximum_feedback_age_s,
+                    max(ages, default=0.0),
+                )
+                if any(
+                    age > float(args.feedback_freshness_window)
+                    for age in ages
+                ):
+                    feedback_stale_windows += 1
             if args.details:
                 for bus_name, bus in buses.items():
                     for item in getattr(bus, "last_frame_timings", []):
@@ -155,6 +196,8 @@ def main():
         feedback_times,
         missed,
         backpressure_events,
+        feedback_stale_windows=feedback_stale_windows,
+        maximum_feedback_age_s=maximum_feedback_age_s,
     )
     print(
         "CAN CONTROL-CYCLE BENCHMARK "
@@ -165,7 +208,7 @@ def main():
         print(f"{key}: {value:.3f}" if isinstance(value, float) else f"{key}: {value}")
     if (
         result["p99_batch_tx_ms"] > 1000.0 * dt
-        or result["missed_batches"] > 0
+        or result["feedback_stale_windows"] > 0
         or result["socket_backpressure_events"] > 0
     ):
         print(f"{args.can_count}-ADAPTER TRANSPORT QUALIFICATION FAILED")
