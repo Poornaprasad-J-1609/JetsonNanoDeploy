@@ -18,6 +18,7 @@ class CanCommandStreamer:
         self,
         send_callback,
         receive_callback=None,
+        clear_callback=None,
         command_dt_s=0.005,
         stale_timeout_s=0.080,
         fault_consecutive_overruns=3,
@@ -27,6 +28,7 @@ class CanCommandStreamer:
     ):
         self.send_callback = send_callback
         self.receive_callback = receive_callback
+        self.clear_callback = clear_callback
         self.command_dt_s = float(command_dt_s)
         self.stale_timeout_s = float(stale_timeout_s)
         self.fault_consecutive_overruns = int(fault_consecutive_overruns)
@@ -94,6 +96,8 @@ class CanCommandStreamer:
 
     def clear(self):
         generation = self.submit(())
+        if self.clear_callback is not None:
+            self.clear_callback()
         self._io_idle.wait(timeout=max(0.020, 2.0 * self.command_dt_s))
         return generation
 
@@ -134,6 +138,8 @@ class CanCommandStreamer:
                 self._fault_reason = str(reason)
             self._commands = ()
             self._published_at = None
+        if self.clear_callback is not None:
+            self.clear_callback()
 
     def _snapshot(self):
         with self._lock:

@@ -261,6 +261,9 @@ class SocketCan:
         self.transport_qualification_failed = False
         self._last_tx_stall_warning_s = -float("inf")
         self._send_lock = threading.Lock()
+        self._periodic_tasks = {}
+        self._periodic_frames = {}
+        self._periodic_period_s = None
 
     def open(self):
         from robstride_dynamics import RobstrideBus
@@ -295,12 +298,67 @@ class SocketCan:
         return self
 
     def close(self):
+        self.stop_periodic_sequence()
         if self.driver is not None:
             self.driver.disconnect(disable_torque=False)
         elif self.bus is not None:
             self.bus.shutdown()
         self.driver = None
         self.bus = None
+
+    def update_periodic_sequence(self, frames, period_s):
+        """Install or update kernel-scheduled SocketCAN BCM frames."""
+        if self.bus is None:
+            raise RuntimeError("SocketCAN channel is not open")
+        import can
+
+        period_s = float(period_s)
+        frozen = {int(can_id): bytes(data) for can_id, data in frames}
+        with self._send_lock:
+            same_layout = (
+                set(frozen) == set(self._periodic_tasks)
+                and self._periodic_period_s == period_s
+            )
+            if not same_layout:
+                self._stop_periodic_sequence_locked()
+                for can_id, data in frozen.items():
+                    message = can.Message(
+                        arbitration_id=can_id,
+                        data=data,
+                        is_extended_id=True,
+                    )
+                    self._periodic_tasks[can_id] = self.bus.send_periodic(
+                        message,
+                        period_s,
+                        store_task=False,
+                    )
+                self._periodic_period_s = period_s
+            else:
+                for can_id, data in frozen.items():
+                    if self._periodic_frames.get(can_id) == data:
+                        continue
+                    message = can.Message(
+                        arbitration_id=can_id,
+                        data=data,
+                        is_extended_id=True,
+                    )
+                    self._periodic_tasks[can_id].modify_data(message)
+            self._periodic_frames = frozen
+        return len(frozen)
+
+    def _stop_periodic_sequence_locked(self):
+        for task in self._periodic_tasks.values():
+            try:
+                task.stop()
+            except Exception:
+                pass
+        self._periodic_tasks = {}
+        self._periodic_frames = {}
+        self._periodic_period_s = None
+
+    def stop_periodic_sequence(self):
+        with self._send_lock:
+            self._stop_periodic_sequence_locked()
 
     @staticmethod
     def _is_tx_queue_full(exc):

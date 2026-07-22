@@ -7279,7 +7279,14 @@ def main():
                 if args.mode == "signal":
                     motor_layer.send_harmless_frames(buses, command_snapshot)
                 else:
-                    motor_layer.send_signal_commands(buses, command_snapshot)
+                    motor_layer.update_periodic_commands(
+                        buses,
+                        command_snapshot,
+                        period_s=1.0 / float(args.can_command_hz),
+                    )
+
+            def clear_latest_can_snapshot():
+                motor_layer.stop_periodic_commands(buses)
 
             def receive_latest_can_feedback():
                 return MotorCommandLayer.read_all_frames(
@@ -7291,6 +7298,9 @@ def main():
             can_streamer = CanCommandStreamer(
                 send_callback=send_latest_can_snapshot,
                 receive_callback=receive_latest_can_feedback,
+                clear_callback=(
+                    clear_latest_can_snapshot if args.mode == "mit-signal" else None
+                ),
                 command_dt_s=1.0 / float(args.can_command_hz),
                 stale_timeout_s=float(args.can_command_stale_timeout),
                 fault_consecutive_overruns=int(args.can_command_fault_consecutive),

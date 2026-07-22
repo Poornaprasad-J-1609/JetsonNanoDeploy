@@ -1191,6 +1191,34 @@ class MotorCommandLayer:
     def send_raw_commands(self, buses, commands):
         return self._send_raw_like_commands(buses, commands)
 
+    def update_periodic_commands(self, buses, commands, period_s):
+        """Update latest targets while SocketCAN repeats them in the kernel."""
+        commands = list(commands)
+        grouped = {}
+        for cmd in commands:
+            bus = self._resolve_bus(buses, cmd.get("bus_name", "front"))
+            grouped.setdefault(id(bus), {"bus": bus, "frames": []})["frames"].append(
+                (cmd["can_id"], cmd["data"])
+            )
+        count = 0
+        for group in grouped.values():
+            bus = group["bus"]
+            if not hasattr(bus, "update_periodic_sequence"):
+                raise RuntimeError("CAN transport does not support kernel periodic commands")
+            count += int(bus.update_periodic_sequence(group["frames"], period_s))
+        return count
+
+    @staticmethod
+    def stop_periodic_commands(buses):
+        seen = set()
+        values = buses.values() if isinstance(buses, dict) else (buses,)
+        for bus in values:
+            if id(bus) in seen:
+                continue
+            seen.add(id(bus))
+            if hasattr(bus, "stop_periodic_sequence"):
+                bus.stop_periodic_sequence()
+
     def _send_raw_like_commands(self, buses, commands):
         commands = list(commands)
         if not commands:
