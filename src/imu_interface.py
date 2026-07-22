@@ -960,6 +960,7 @@ def main():
     duplicate_polls = 0
     previous_timestamp = None
     started_at = time.monotonic()
+    next_deadline = started_at
     interrupted = False
     try:
         for step in range(steps):
@@ -978,29 +979,31 @@ def main():
                     previous_timestamp = timestamp
                 else:
                     duplicate_polls += 1
-                if (args.fresh_only or args.summary_only) and not is_fresh:
-                    time.sleep(dt)
-                    continue
-                quat = reading.quaternion_wxyz
-                rpy = reading.rpy_abs_deg
-                det_r = reading.det_r
-                cross_err = reading.cross_err
-                quat_text = (
-                    f" q_abs=[{quat[0]:+.5f}, {quat[1]:+.5f}, {quat[2]:+.5f}, {quat[3]:+.5f}]"
-                    if quat is not None
-                    else ""
+                should_print = not args.summary_only and not (
+                    args.fresh_only and not is_fresh
                 )
-                rpy_text = (
-                    f" rpy_abs_deg=[{rpy[0]:+.2f}, {rpy[1]:+.2f}, {rpy[2]:+.2f}]"
-                    if rpy is not None
-                    else ""
-                )
-                quality_text = (
-                    f" det_R={det_r:+.3f} cross_err={cross_err:.2e}"
-                    if det_r is not None and cross_err is not None
-                    else ""
-                )
-                if not args.summary_only:
+                if should_print:
+                    quat = reading.quaternion_wxyz
+                    rpy = reading.rpy_abs_deg
+                    det_r = reading.det_r
+                    cross_err = reading.cross_err
+                    quat_text = (
+                        f" q_abs=[{quat[0]:+.5f}, {quat[1]:+.5f}, "
+                        f"{quat[2]:+.5f}, {quat[3]:+.5f}]"
+                        if quat is not None
+                        else ""
+                    )
+                    rpy_text = (
+                        f" rpy_abs_deg=[{rpy[0]:+.2f}, {rpy[1]:+.2f}, "
+                        f"{rpy[2]:+.2f}]"
+                        if rpy is not None
+                        else ""
+                    )
+                    quality_text = (
+                        f" det_R={det_r:+.3f} cross_err={cross_err:.2e}"
+                        if det_r is not None and cross_err is not None
+                        else ""
+                    )
                     print(
                         f"step={step:04d} "
                         f"fresh={'yes' if is_fresh else 'no'} "
@@ -1009,7 +1012,8 @@ def main():
                         f"lin_vel={reading.base_lin_vel_b}"
                         f"{quat_text}{rpy_text}{quality_text}"
                     )
-            time.sleep(dt)
+            next_deadline += dt
+            time.sleep(max(0.0, next_deadline - time.monotonic()))
     except KeyboardInterrupt:
         interrupted = True
         print("\nStopped by user.")
