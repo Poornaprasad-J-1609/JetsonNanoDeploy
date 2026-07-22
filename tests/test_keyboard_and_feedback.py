@@ -3,6 +3,7 @@ import contextlib
 import io
 import time
 import unittest
+from unittest import mock
 
 import numpy as np
 
@@ -152,6 +153,16 @@ class KeyboardAndFeedbackTests(unittest.TestCase):
             if "[KEYBOARD] latched command" in line
         ]
         self.assertEqual(len(lines), 1)
+        source.close()
+
+    def test_keyboard_runtime_read_does_not_touch_configuration_files(self):
+        source = self.make_keyboard()
+        source.key_queue.append("w")
+        with mock.patch(
+            "joystick_interface.load_command_limits",
+            side_effect=AssertionError("runtime command read reloaded YAML limits"),
+        ):
+            np.testing.assert_allclose(source.read(), [1.8, 0.0, 0.0])
         source.close()
 
     def test_encoder_safety_skips_fake_dry_mode(self):

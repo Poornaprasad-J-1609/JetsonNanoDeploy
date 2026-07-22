@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import hashlib
+import os
 from pathlib import Path
 import numpy as np
 import torch
@@ -26,6 +27,18 @@ EXPECTED_OBSERVATION_LAYOUT = {
     "joint_vel": list(range(24, 36)),
     "previous_action": list(range(36, 48)),
 }
+
+
+def configure_torch_for_realtime():
+    """Keep tiny actor inference off Torch's high-overhead CPU thread pool."""
+    thread_count = max(1, int(os.environ.get("GRALLATOR_TORCH_THREADS", "1")))
+    torch.set_num_threads(thread_count)
+    try:
+        torch.set_num_interop_threads(1)
+    except RuntimeError:
+        # PyTorch permits setting inter-op threads only before parallel work.
+        pass
+    return thread_count
 
 
 def load_yaml(path):
@@ -157,6 +170,7 @@ class PolicyRunner:
         expected_policy_sha256=EXPECTED_POLICY_SHA256,
     ):
         self.root = ROOT
+        self.torch_thread_count = configure_torch_for_realtime()
 
         self.joint_cfg = load_yaml(self.root / "config" / "joint_map.yaml")
         self.pose_cfg = load_yaml(self.root / "config" / "default_pose.yaml")

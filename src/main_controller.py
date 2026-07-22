@@ -6982,6 +6982,7 @@ def main():
     print("Policy hash verified:", runner.policy_hash_matches)
     print("Policy format:", runner.policy_format)
     print("Policy obs/actions:", runner.observation_dim, runner.action_dim)
+    print("Policy Torch CPU threads:", runner.torch_thread_count)
     print(
         "Control rate:",
         f"runtime={runtime_control_hz:.2f} Hz",

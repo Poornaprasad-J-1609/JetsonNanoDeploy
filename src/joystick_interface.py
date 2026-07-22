@@ -160,7 +160,6 @@ class FixedCommandSource:
         self.command = clip_command([vx, vy, yaw], self.command_limits)
 
     def read(self):
-        self.command_limits = load_command_limits()
         self.command = clip_command(self.command, self.command_limits)
         return self.command.copy()
 
@@ -357,14 +356,13 @@ class KeyboardCommandSource:
             )
         )
         if abs(self.speed_scale - old_scale) > 1.0e-9:
-            limits = load_command_limits()
             effective = clip_command(
                 [
                     self.max_vx * self.speed_scale,
                     self.max_vy * self.speed_scale,
                     self.max_yaw * self.speed_scale,
                 ],
-                limits,
+                self.command_limits,
             )
             print(
                 "[KEYBOARD] "
@@ -491,7 +489,6 @@ class KeyboardCommandSource:
                 self._update_command_from_latched_keys()
             else:
                 self._update_command_from_active_keys()
-            self.command_limits = load_command_limits()
             return clip_command(self.command * self.speed_scale, self.command_limits)
 
     def get_mode_request(self):
@@ -786,7 +783,6 @@ class JoystickCommandSource:
     def read(self):
         self.pygame.event.pump()
         self._update_speed_scale()
-        self.command_limits = load_command_limits()
 
         raw_vx = self._axis(self.axis_vx)
         raw_vy = self._axis(self.axis_vy)
