@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import errno
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -253,7 +254,13 @@ class SocketCan:
         self.tx_queue_len = None
         self.last_sequence_duration_s = 0.0
         self.max_sequence_duration_s = 0.0
+        self.last_frame_timings = []
+        self.backpressure_events = 0
+        self.last_sequence_backpressure_events = 0
+        self.transport_failed_batches = 0
+        self.transport_qualification_failed = False
         self._last_tx_stall_warning_s = -float("inf")
+        self._send_lock = threading.Lock()
 
     def open(self):
         from robstride_dynamics import RobstrideBus
@@ -313,6 +320,8 @@ class SocketCan:
             data=bytes(data),
             is_extended_id=True,
         )
+        started = time.monotonic()
+        eagain_count = 0
         for attempt in range(self.tx_retry_count + 1):
             try:
                 # RobstrideBus.transmit() uses a zero-timeout python-can send,
@@ -321,29 +330,63 @@ class SocketCan:
                 # wait so the current command set is submitted or fails now;
                 # it is never stored in an unbounded Python retry queue.
                 self.bus.send(message, timeout=self.timeout)
+                self.last_send_duration_s = time.monotonic() - started
+                self.last_send_eagain_count = eagain_count
                 return int(can_id), bytes(data)
             except Exception as exc:
                 if not self._is_tx_queue_full(exc) or attempt >= self.tx_retry_count:
                     raise
+                eagain_count += 1
+                self.backpressure_events += 1
                 time.sleep(self.tx_retry_delay)
 
     def send_raw_batch(self, frames):
         return [self.send_raw(can_id, data) for can_id, data in frames]
 
     def send_raw_sequence(self, frames, frame_gap_s=0.0):
+        with self._send_lock:
+            return self._send_raw_sequence_locked(frames, frame_gap_s=frame_gap_s)
+
+    def _send_raw_sequence_locked(self, frames, frame_gap_s=0.0):
         frames = list(frames)
         sent = []
         started = time.monotonic()
+        self.last_frame_timings = []
+        backpressure_before = self.backpressure_events
         for index, (can_id, data) in enumerate(frames):
+            frame_started = time.monotonic()
             sent.append(self.send_raw(can_id, data))
+            self.last_frame_timings.append({
+                "frame_index": int(index),
+                "motor_id": int(can_id) & 0xFF,
+                "can_id": int(can_id),
+                "send_duration_s": time.monotonic() - frame_started,
+                "socket_tx_queue_len": self.tx_queue_len,
+                "eagain_count": int(getattr(self, "last_send_eagain_count", 0)),
+            })
             if frame_gap_s > 0.0 and index + 1 < len(frames):
                 deadline = started + (index + 1) * float(frame_gap_s)
                 time.sleep(max(0.0, deadline - time.monotonic()))
         self.last_sequence_duration_s = time.monotonic() - started
+        self.last_sequence_backpressure_events = (
+            self.backpressure_events - backpressure_before
+        )
         self.max_sequence_duration_s = max(
             self.max_sequence_duration_s,
             self.last_sequence_duration_s,
         )
+        if len(frames) >= 12 and self.last_sequence_duration_s > 0.020:
+            self.transport_failed_batches += 1
+        else:
+            self.transport_failed_batches = 0
+        if self.transport_failed_batches >= 3 and not self.transport_qualification_failed:
+            self.transport_qualification_failed = True
+            print("SINGLE-ADAPTER TRANSPORT QUALIFICATION FAILED")
+            print(
+                f"{self.channel}: 12-frame batch exceeded 20 ms for "
+                f"{self.transport_failed_batches} consecutive cycles; "
+                "use two/four CAN adapters or resolve SLCAN latency before gait testing."
+            )
         expected_s = max(0.002, len(frames) * 0.00025)
         now = time.monotonic()
         if (

@@ -4,6 +4,8 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from joint_mapping import POLICY_JOINT_ORDER
+
 try:
     import yaml
 except ImportError as exc:
@@ -14,11 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_POLICY_SHA256 = "965e94c4cebfc45b9ef609d4a677a5ee35961a895700aad478603f43844b3779"
 EXPECTED_OBSERVATION_DIM = 48
 EXPECTED_ACTION_DIM = 12
-EXPECTED_POLICY_JOINT_ORDER = [
-    "BL_hip_joint", "BR_hip_joint", "FL_hip_joint", "FR_hip_joint",
-    "BL_thigh_joint", "BR_thigh_joint", "FL_thigh_joint", "FR_thigh_joint",
-    "BL_calf_joint", "BR_calf_joint", "FL_calf_joint", "FR_calf_joint",
-]
+EXPECTED_POLICY_JOINT_ORDER = list(POLICY_JOINT_ORDER)
 EXPECTED_OBSERVATION_LAYOUT = {
     "base_lin_vel": list(range(0, 3)),
     "base_ang_vel": list(range(3, 6)),

@@ -161,6 +161,7 @@ class MitFeedbackStateEstimator(FakeStateEstimator):
         imu_filter_cfg=None,
         pose_references=None,
         pose_snap_tolerance=0.0,
+        joint_velocity_source="mit",
     ):
         super().__init__(
             q_initial=q_initial,
@@ -178,6 +179,12 @@ class MitFeedbackStateEstimator(FakeStateEstimator):
         self.pose_references_by_joint = self._build_pose_references(pose_references)
         self.pose_reference_arrays = self._build_pose_reference_arrays(pose_references)
         self.pose_snap_tolerance = max(0.0, float(pose_snap_tolerance))
+        self.joint_velocity_source = str(joint_velocity_source).strip().lower()
+        if self.joint_velocity_source not in ("mit", "finite-difference"):
+            raise ValueError("joint_velocity_source must be mit or finite-difference")
+        self._previous_position_by_joint = {}
+        self._previous_timestamp_by_joint = {}
+        self._filtered_fd_velocity_by_joint = {}
         self.joint_name_by_bus_motor_id = {
             (self.motor_layer.joint_can_bus.get(joint_name, "front"), int(motor_id)): joint_name
             for joint_name, motor_id in motor_ids.items()
@@ -316,8 +323,23 @@ class MitFeedbackStateEstimator(FakeStateEstimator):
                 transmission_efficiency = 1.0
                 transmission_enabled = False
 
+            qd_mit = float(qd_joint)
+            previous_q = self._previous_position_by_joint.get(joint_name)
+            previous_t = self._previous_timestamp_by_joint.get(joint_name)
+            qd_fd = qd_mit
+            if previous_q is not None and previous_t is not None:
+                sample_dt = timestamp - float(previous_t)
+                if 1.0e-4 <= sample_dt <= 0.25:
+                    raw_fd = (q_joint - float(previous_q)) / sample_dt
+                    old_fd = self._filtered_fd_velocity_by_joint.get(joint_name, raw_fd)
+                    qd_fd = 0.35 * raw_fd + 0.65 * old_fd
+            self._previous_position_by_joint[joint_name] = q_joint
+            self._previous_timestamp_by_joint[joint_name] = timestamp
+            self._filtered_fd_velocity_by_joint[joint_name] = float(qd_fd)
+
+            qd_selected = qd_mit if self.joint_velocity_source == "mit" else float(qd_fd)
             self.q_current[index] = q_joint
-            self.qd_current[index] = qd_joint
+            self.qd_current[index] = qd_selected
             feedback = dict(feedback)
             feedback["timestamp"] = timestamp
             feedback["bus_name"] = bus_name
@@ -332,10 +354,13 @@ class MitFeedbackStateEstimator(FakeStateEstimator):
             feedback["motor_velocity"] = motor_velocity
             feedback["motor_torque"] = motor_torque
             feedback["joint_position"] = q_joint
-            feedback["joint_velocity"] = qd_joint
+            feedback["joint_velocity_mit"] = qd_mit
+            feedback["joint_velocity_finite_difference"] = float(qd_fd)
+            feedback["joint_velocity_source"] = self.joint_velocity_source
+            feedback["joint_velocity"] = qd_selected
             feedback["joint_torque"] = tau_joint
             feedback["position"] = q_joint
-            feedback["velocity"] = qd_joint
+            feedback["velocity"] = qd_selected
             feedback["torque"] = tau_joint
             feedback["joint_direction"] = direction
             feedback["transmission_jacobian"] = transmission_jacobian

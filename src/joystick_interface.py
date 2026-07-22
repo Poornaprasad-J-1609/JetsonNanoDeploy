@@ -5,6 +5,7 @@ from collections import deque
 import select
 import sys
 import termios
+import threading
 import time
 import tty
 import numpy as np
@@ -242,6 +243,9 @@ class KeyboardCommandSource:
         self.command = np.zeros(3, dtype=np.float32)
         self.command_limits = load_command_limits()
         self.key_queue = deque()
+        self._lock = threading.RLock()
+        self._stop_event = threading.Event()
+        self._reader_thread = None
         self.fd = None
         self.old_settings = None
         self.active = False
@@ -251,6 +255,12 @@ class KeyboardCommandSource:
             self.old_settings = termios.tcgetattr(self.fd)
             tty.setcbreak(self.fd)
             self.active = True
+            self._reader_thread = threading.Thread(
+                target=self._reader_loop,
+                name="KeyboardCommandReader",
+                daemon=True,
+            )
+            self._reader_thread.start()
 
         print("Terminal keyboard command source:")
         print("  w -> straight forward")
@@ -290,26 +300,52 @@ class KeyboardCommandSource:
             seq += sys.stdin.read(1)
         return seq
 
-    def _poll_keys(self):
-        if not self.active:
-            return
-        while True:
-            readable, _, _ = select.select([sys.stdin], [], [], 0.0)
-            if not readable:
+    def _reader_loop(self):
+        """Own terminal reads so the motor loop only copies an atomic snapshot."""
+        while not self._stop_event.is_set() and self.active:
+            try:
+                readable, _, _ = select.select([sys.stdin], [], [], 0.02)
+                if not readable:
+                    continue
+                key = sys.stdin.read(1)
+                if key == "\x1b":
+                    sequence = self._read_escape_sequence()
+                    key = {
+                        "\x1b[A": "arrow_up",
+                        "\x1b[B": "arrow_down",
+                    }.get(sequence)
+                    if key is None:
+                        continue
+                elif key == "\x03":
+                    key = "x"
+                else:
+                    key = key.lower()
+                with self._lock:
+                    self._handle_key_locked(key, time.monotonic())
+            except (OSError, ValueError):
                 break
-            key = sys.stdin.read(1)
-            if key == "\x03":
-                raise KeyboardInterrupt
-            if key == "\x1b":
-                seq = self._read_escape_sequence()
-                if seq == "\x1b[A":
-                    self.key_queue.append("arrow_up")
-                elif seq == "\x1b[B":
-                    self.key_queue.append("arrow_down")
-                # Ignore other escape sequences so arrow-left/right cannot be
-                # misread as movement keys from their trailing A/B/C/D bytes.
-                continue
-            self.key_queue.append(key.lower())
+
+    def _poll_keys(self):
+        """Compatibility hook; real terminal polling belongs to _reader_loop."""
+        return None
+
+    def _handle_key_locked(self, key, now):
+        if key in self.movement_key_deadlines:
+            if self.control_mode == "latched":
+                self._apply_latched_movement_key(key, now)
+            else:
+                # Repeated characters collapse into one deadline update.
+                self.movement_key_deadlines[key] = now + self.command_timeout_s
+                self._update_command_from_active_keys(now)
+            return
+        if key == "arrow_up":
+            self._change_speed_scale(self.speed_scale_step)
+            return
+        if key == "arrow_down":
+            self._change_speed_scale(-self.speed_scale_step)
+            return
+        if key not in self.key_queue:
+            self.key_queue.append(key)
 
     def _change_speed_scale(self, delta):
         old_scale = self.speed_scale
@@ -399,34 +435,20 @@ class KeyboardCommandSource:
         self._maybe_print_latched_command(now=now)
 
     def _process_movement_keys(self):
-        self._poll_keys()
-
-        now = time.monotonic()
-        kept = deque()
-        while self.key_queue:
-            key = self.key_queue.popleft()
-            consumed = True
-            if key in self.movement_key_deadlines:
-                if self.control_mode == "latched":
-                    self._apply_latched_movement_key(key, now)
+        with self._lock:
+            now = time.monotonic()
+            kept = deque()
+            while self.key_queue:
+                key = self.key_queue.popleft()
+                if key in self.movement_key_deadlines or key in ("arrow_up", "arrow_down"):
+                    self._handle_key_locked(key, now)
                 else:
-                    self.movement_key_deadlines[key] = now + self.command_timeout_s
-            elif key == "arrow_up":
-                self._change_speed_scale(self.speed_scale_step)
-            elif key == "arrow_down":
-                self._change_speed_scale(-self.speed_scale_step)
+                    kept.append(key)
+            self.key_queue = kept
+            if self.control_mode == "latched":
+                self._update_command_from_latched_keys()
             else:
-                consumed = False
-
-            if not consumed:
-                kept.append(key)
-        self.key_queue = kept
-        if self.control_mode == "latched":
-            self._update_command_from_latched_keys()
-            if self.latched_keys:
-                self._maybe_print_latched_command(now=now)
-        else:
-            self._update_command_from_active_keys(now)
+                self._update_command_from_active_keys(now)
 
     def _update_command_from_active_keys(self, now=None):
         now = time.monotonic() if now is None else float(now)
@@ -448,31 +470,29 @@ class KeyboardCommandSource:
         self._last_latched_command_print_value = None
 
     def _pop_matching_key(self, mapping):
-        self._poll_keys()
         mapping = mapping or {}
-        for index, key in enumerate(self.key_queue):
-            if key in mapping:
-                del self.key_queue[index]
-                # Terminal key repeat can enqueue dozens of identical pose
-                # events while a key is held briefly. Keep later, different
-                # commands, but collapse every duplicate of this key.
-                self.key_queue = deque(
-                    queued_key for queued_key in self.key_queue
-                    if queued_key != key
-                )
-                if mapping[key] in ("stand", "sit", "hold"):
-                    self._clear_motion_command()
-                return mapping[key]
+        with self._lock:
+            for index, key in enumerate(self.key_queue):
+                if key in mapping:
+                    del self.key_queue[index]
+                    self.key_queue = deque(
+                        queued_key for queued_key in self.key_queue
+                        if queued_key != key
+                    )
+                    if mapping[key] in ("stand", "sit", "hold"):
+                        self._clear_motion_command()
+                    return mapping[key]
         return None
 
     def read(self):
         self._process_movement_keys()
-        if self.control_mode == "latched":
-            self._update_command_from_latched_keys()
-        else:
-            self._update_command_from_active_keys()
-        self.command_limits = load_command_limits()
-        return clip_command(self.command * self.speed_scale, self.command_limits)
+        with self._lock:
+            if self.control_mode == "latched":
+                self._update_command_from_latched_keys()
+            else:
+                self._update_command_from_active_keys()
+            self.command_limits = load_command_limits()
+            return clip_command(self.command * self.speed_scale, self.command_limits)
 
     def get_mode_request(self):
         return self._pop_matching_key({
@@ -486,24 +506,28 @@ class KeyboardCommandSource:
         return reason
 
     def get_speed_scale(self):
-        return self.speed_scale
+        with self._lock:
+            return self.speed_scale
 
     def get_calibration_request(self):
         return None
 
     def raw_state(self):
-        self._poll_keys()
-        return {
-            "pending_keys": list(self.key_queue),
-            "active_keys": [
-                key for key, deadline in self.movement_key_deadlines.items()
-                if time.monotonic() <= float(deadline)
-            ] if self.control_mode == "repeat" else sorted(self.latched_keys),
-            "keyboard_control_mode": self.control_mode,
-            "command": [float(x) for x in self.command],
-        }
+        with self._lock:
+            return {
+                "pending_keys": list(self.key_queue),
+                "active_keys": [
+                    key for key, deadline in self.movement_key_deadlines.items()
+                    if time.monotonic() <= float(deadline)
+                ] if self.control_mode == "repeat" else sorted(self.latched_keys),
+                "keyboard_control_mode": self.control_mode,
+                "command": [float(x) for x in self.command],
+            }
 
     def close(self):
+        self._stop_event.set()
+        if self._reader_thread is not None:
+            self._reader_thread.join(timeout=0.2)
         if self.active and self.old_settings is not None and self.fd is not None:
             termios.tcsetattr(self.fd, termios.TCSADRAIN, self.old_settings)
         self.active = False

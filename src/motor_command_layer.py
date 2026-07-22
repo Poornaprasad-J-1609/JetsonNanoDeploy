@@ -209,6 +209,8 @@ class MotorCommandLayer:
         self.policy_pd_torque_limits_override = None
         self.pose_pd_torque_limit_override = None
         self.startup_pd_torque_limit = 0.0
+        self.sit_pd_torque_limit = 0.0
+        self.stand_pd_torque_limit = 0.0
         self.hold_pd_torque_limit = 0.0
         self.leveling_pd_torque_limit = 0.0
         self.hard_joint_limits = {}
@@ -450,23 +452,39 @@ class MotorCommandLayer:
         )
         if (
             not np.isfinite(configured_startup_torque_limit)
-            or configured_startup_torque_limit < 0.0
+            or configured_startup_torque_limit <= 0.0
         ):
-            raise ValueError("mit_parameters.startup_pd_torque_limit must be finite and >= 0")
+            raise ValueError("mit_parameters.startup_pd_torque_limit must be finite and > 0")
         configured_hold_torque_limit = float(
             mit_cfg.get("hold_pd_torque_limit", 0.0)
         )
         if (
             not np.isfinite(configured_hold_torque_limit)
-            or configured_hold_torque_limit < 0.0
+            or configured_hold_torque_limit <= 0.0
         ):
-            raise ValueError("mit_parameters.hold_pd_torque_limit must be finite and >= 0")
+            raise ValueError("mit_parameters.hold_pd_torque_limit must be finite and > 0")
+        configured_sit_torque_limit = float(
+            mit_cfg.get("sit_pd_torque_limit", configured_startup_torque_limit)
+        )
+        configured_stand_torque_limit = float(
+            mit_cfg.get("stand_pd_torque_limit", configured_startup_torque_limit)
+        )
+        if not np.isfinite(configured_sit_torque_limit) or configured_sit_torque_limit <= 0.0:
+            raise ValueError("mit_parameters.sit_pd_torque_limit must be finite and > 0")
+        if not np.isfinite(configured_stand_torque_limit) or configured_stand_torque_limit <= 0.0:
+            raise ValueError("mit_parameters.stand_pd_torque_limit must be finite and > 0")
+        if configured_hold_torque_limit <= 0.0:
+            raise ValueError("mit_parameters.hold_pd_torque_limit must be > 0")
         if self.pose_pd_torque_limit_override is None:
             self.startup_pd_torque_limit = configured_startup_torque_limit
+            self.sit_pd_torque_limit = configured_sit_torque_limit
+            self.stand_pd_torque_limit = configured_stand_torque_limit
             self.hold_pd_torque_limit = configured_hold_torque_limit
         else:
             override = float(self.pose_pd_torque_limit_override)
             self.startup_pd_torque_limit = override
+            self.sit_pd_torque_limit = override
+            self.stand_pd_torque_limit = override
             self.hold_pd_torque_limit = override
         self.leveling_pd_torque_limit = float(
             mit_cfg.get("leveling_pd_torque_limit", 0.0)
@@ -557,6 +575,8 @@ class MotorCommandLayer:
             raise ValueError("pose PD torque limit override must be finite and >= 0")
         self.pose_pd_torque_limit_override = value
         self.startup_pd_torque_limit = value
+        self.sit_pd_torque_limit = value
+        self.stand_pd_torque_limit = value
         self.hold_pd_torque_limit = value
 
     def policy_pd_torque_limit_for_joint(self, joint_name):
@@ -567,6 +587,8 @@ class MotorCommandLayer:
     def pose_pd_torque_limits(self):
         return {
             "startup": float(self.startup_pd_torque_limit),
+            "sit": float(self.sit_pd_torque_limit),
+            "stand": float(self.stand_pd_torque_limit),
             "hold": float(self.hold_pd_torque_limit),
         }
 
@@ -759,17 +781,22 @@ class MotorCommandLayer:
         commands = []
         feedback_by_joint = feedback_by_joint or {}
 
-        if phase not in self.gains:
+        gain_phase = "startup" if phase in ("sit", "stand") else phase
+        if gain_phase not in self.gains:
             raise ValueError(f"Unknown phase {phase}. Expected one of {list(self.gains.keys())}")
-        command_proto = self.command_proto_for_phase(phase)
+        command_proto = self.command_proto_for_phase(gain_phase)
         command_encoding = self.phase_command_encoding.get(
-            phase,
+            gain_phase,
             self.command_encoding,
         )
 
         base_phase_torque_limit = 0.0
         if phase == "startup":
             base_phase_torque_limit = self.startup_pd_torque_limit
+        elif phase == "sit":
+            base_phase_torque_limit = self.sit_pd_torque_limit
+        elif phase == "stand":
+            base_phase_torque_limit = self.stand_pd_torque_limit
         elif phase == "hold":
             base_phase_torque_limit = self.hold_pd_torque_limit
         elif phase == "policy":
@@ -784,7 +811,7 @@ class MotorCommandLayer:
             offset = float(self.joint_offsets[joint_name])
             direction = float(self.joint_directions[joint_name])
 
-            kp, kd = self._joint_gains(phase, joint_name, group)
+            kp, kd = self._joint_gains(gain_phase, joint_name, group)
             kp_effective = self._effective_unsigned_wire_value(
                 kp,
                 "kp",

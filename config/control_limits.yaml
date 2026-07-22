@@ -76,10 +76,12 @@ joint_rate:
 
 mit_parameters:
   enabled: true
-  # Zero disables target rewriting for pose/hold and reproduces the original
-  # MIT behavior. Measured torque safety remains independently enforced.
-  startup_pd_torque_limit: 0.0
-  hold_pd_torque_limit: 0.0
+  # Pose phases always have a finite estimated-PD-torque bound, including the
+  # very first transition packet. These are independent from policy stages.
+  startup_pd_torque_limit: 16.0
+  sit_pd_torque_limit: 16.0
+  stand_pd_torque_limit: 16.0
+  hold_pd_torque_limit: 16.0
   leveling_pd_torque_limit: 20.0
   p_min: -12.566370614359172
   p_max: 12.566370614359172

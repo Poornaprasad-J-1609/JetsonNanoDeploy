@@ -311,6 +311,7 @@ position, x = emergency stop. Startup is idle: no auto-zero and no auto-hold.
   --stand-calibration-value 0.0 \
   --policy-steps 0 \
   --control-hz 50 \
+  --can-command-hz 200 \
   --walk-command-threshold 999 \
   --max-vx 0.0 \
   --max-vy 0.0 \
@@ -364,6 +365,7 @@ sudo ip link set "$CAN0" txqueuelen 32
   --no-auto-sit-zero \
   --policy-steps 0 \
   --control-hz 50 \
+  --can-command-hz 200 \
   --walk-command-threshold 999 \
   --max-vx 0.0 \
   --max-vy 0.0 \
