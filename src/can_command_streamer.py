@@ -20,6 +20,7 @@ class CanCommandStreamer:
         receive_callback=None,
         clear_callback=None,
         send_only_on_change=False,
+        receive_every_n_cycles=1,
         command_dt_s=0.005,
         stale_timeout_s=0.080,
         fault_consecutive_overruns=3,
@@ -31,6 +32,7 @@ class CanCommandStreamer:
         self.receive_callback = receive_callback
         self.clear_callback = clear_callback
         self.send_only_on_change = bool(send_only_on_change)
+        self.receive_every_n_cycles = int(max(1, receive_every_n_cycles))
         self.command_dt_s = float(command_dt_s)
         self.stale_timeout_s = float(stale_timeout_s)
         self.fault_consecutive_overruns = int(fault_consecutive_overruns)
@@ -70,6 +72,7 @@ class CanCommandStreamer:
         self._last_receive_duration_s = 0.0
         self._maximum_receive_duration_s = 0.0
         self._applied_generation = -1
+        self._cycle_count = 0
 
     @staticmethod
     def _freeze_commands(commands):
@@ -241,7 +244,11 @@ class CanCommandStreamer:
                 self._io_idle.set()
                 continue
 
-            if self.receive_callback is not None:
+            self._cycle_count += 1
+            if (
+                self.receive_callback is not None
+                and self._cycle_count % self.receive_every_n_cycles == 0
+            ):
                 receive_started = self.clock()
                 try:
                     received = list(self.receive_callback() or ())

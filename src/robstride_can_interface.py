@@ -251,6 +251,21 @@ class SocketCan:
         self.tx_retry_delay = float(max(0.0, tx_retry_delay))
         self.driver = None
         self.bus = None
+
+    def configure_feedback_filters(self, communication_types=(2, 24)):
+        """Discard SLCAN transmit echoes before they reach the Python reader."""
+        if self.bus is None:
+            raise RuntimeError("SocketCAN channel is not open")
+        mask = 0x1F << 24
+        filters = [
+            {
+                "can_id": (int(comm_type) & 0x1F) << 24,
+                "can_mask": mask,
+                "extended": True,
+            }
+            for comm_type in communication_types
+        ]
+        self.bus.set_filters(filters)
         self.tx_queue_len = None
         self.last_sequence_duration_s = 0.0
         self.max_sequence_duration_s = 0.0

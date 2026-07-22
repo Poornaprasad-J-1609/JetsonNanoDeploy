@@ -7096,6 +7096,16 @@ def main():
                 else:
                     print(f"USB-CAN {bus_name} ({port}) opened.")
 
+            if feedback_source == "mit":
+                feedback_types = motor_layer._feedback_comm_types(motor_layer.proto)
+                configured = set()
+                for bus in buses.values():
+                    if id(bus) in configured:
+                        continue
+                    configured.add(id(bus))
+                    if hasattr(bus, "configure_feedback_filters"):
+                        bus.configure_feedback_filters(feedback_types)
+
         if feedback_source == "mit":
             if args.mode != "mit-signal" or buses is None:
                 print("ERROR: --feedback-source mit requires --mode mit-signal.")
@@ -7293,6 +7303,7 @@ def main():
                     buses,
                     timeout=0.0,
                     proto=motor_layer.proto,
+                    max_frames=24,
                 )
 
             can_streamer = CanCommandStreamer(
@@ -7302,6 +7313,7 @@ def main():
                     clear_latest_can_snapshot if args.mode == "mit-signal" else None
                 ),
                 send_only_on_change=(args.mode == "mit-signal"),
+                receive_every_n_cycles=(2 if args.mode == "mit-signal" else 1),
                 command_dt_s=1.0 / float(args.can_command_hz),
                 stale_timeout_s=float(args.can_command_stale_timeout),
                 fault_consecutive_overruns=int(args.can_command_fault_consecutive),
