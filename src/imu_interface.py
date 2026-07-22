@@ -955,11 +955,13 @@ def main():
     duplicate_polls = 0
     previous_timestamp = None
     started_at = time.monotonic()
+    interrupted = False
     try:
         for step in range(steps):
             reading = sensor.read()
             if reading is None:
-                print(f"step={step:04d} imu=no_new_data")
+                if not args.fresh_only or step % max(1, int(args.hz)) == 0:
+                    print(f"step={step:04d} imu=no_new_data")
             else:
                 timestamp = float(reading.timestamp)
                 is_fresh = previous_timestamp is None or timestamp > previous_timestamp
@@ -999,6 +1001,9 @@ def main():
                     f"{quat_text}{rpy_text}{quality_text}"
                 )
             time.sleep(dt)
+    except KeyboardInterrupt:
+        interrupted = True
+        print("\nStopped by user.")
     finally:
         sensor.close()
 
@@ -1020,6 +1025,13 @@ def main():
     print(f"duplicate_polls: {duplicate_polls}")
     print(f"maximum_packet_gap_ms: {maximum_gap_ms:.3f}")
     print(f"elapsed_s: {elapsed:.3f}")
+    if not fresh_timestamps:
+        print(
+            "ERROR: no valid MTData2 packets were decoded. Check that the "
+            "Python --baud exactly matches the Xsens communication baud."
+        )
+    elif interrupted:
+        print("NOTE: summary covers the partial run before Ctrl+C.")
 
     return 0
 
