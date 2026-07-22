@@ -1902,6 +1902,8 @@ class CsvRunLogger:
         "can_command_max_batch_ms",
         "can_command_missed_deadlines",
         "can_command_consecutive_overruns",
+        "can_command_scheduler_lateness_ms",
+        "can_command_max_scheduler_lateness_ms",
         "can_command_stale_events",
         "can_command_target_age_ms",
         "can_command_fault",
@@ -5648,6 +5650,13 @@ def run_policy_loop(
 
 
 def main():
+    # The 200 Hz CAN sender shares the CPython process with the 50 Hz policy
+    # loop.  CPython's default ~5 ms thread switch interval can starve a CAN
+    # lane for an entire command period while observation/target arrays are
+    # being built.  A 1 ms interval keeps both SocketCAN lanes schedulable;
+    # the transport deadline itself remains the strict 5 ms safety limit.
+    sys.setswitchinterval(0.001)
+
     joystick_defaults = load_joystick_defaults()
     speed_defaults = load_speed_scale_defaults()
     imu_defaults = load_imu_config()
@@ -7226,6 +7235,7 @@ def main():
                 command_dt_s=1.0 / float(args.can_command_hz),
                 stale_timeout_s=float(args.can_command_stale_timeout),
                 fault_consecutive_overruns=int(args.can_command_fault_consecutive),
+                transport_label=f"{int(args.can_count)}-ADAPTER",
             )
             can_streamer.start()
             print(

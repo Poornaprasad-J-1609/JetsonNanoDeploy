@@ -83,6 +83,7 @@ def test_streamer_faults_after_consecutive_five_ms_batch_overruns():
         command_dt_s=0.005,
         stale_timeout_s=0.100,
         fault_consecutive_overruns=3,
+        transport_label="2-ADAPTER",
     )
     streamer.start()
     try:
@@ -90,9 +91,10 @@ def test_streamer_faults_after_consecutive_five_ms_batch_overruns():
         assert wait_until(lambda: streamer.fault_reason is not None)
 
         assert send_count == 3
-        assert "TRANSPORT QUALIFICATION FAILED" in streamer.fault_reason
+        assert "2-ADAPTER TRANSPORT DEADLINE FAILED" in streamer.fault_reason
         telemetry = streamer.telemetry()
         assert telemetry["can_command_consecutive_overruns"] == 3
         assert telemetry["can_command_max_batch_ms"] > 5.0
+        assert "can_command_scheduler_lateness_ms" in telemetry
     finally:
         streamer.stop()

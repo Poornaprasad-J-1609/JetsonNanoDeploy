@@ -20,6 +20,7 @@ class CanCommandStreamer:
         command_dt_s=0.005,
         stale_timeout_s=0.080,
         fault_consecutive_overruns=3,
+        transport_label="CAN",
         clock=time.monotonic,
         sleep=time.sleep,
     ):
@@ -27,6 +28,7 @@ class CanCommandStreamer:
         self.command_dt_s = float(command_dt_s)
         self.stale_timeout_s = float(stale_timeout_s)
         self.fault_consecutive_overruns = int(fault_consecutive_overruns)
+        self.transport_label = str(transport_label).strip() or "CAN"
         if not math.isfinite(self.command_dt_s) or self.command_dt_s <= 0.0:
             raise ValueError("command_dt_s must be finite and > 0")
         if not math.isfinite(self.stale_timeout_s) or self.stale_timeout_s <= 0.0:
@@ -53,6 +55,8 @@ class CanCommandStreamer:
         self._missed_deadlines = 0
         self._consecutive_overruns = 0
         self._stale_target_events = 0
+        self._last_scheduler_lateness_s = 0.0
+        self._maximum_scheduler_lateness_s = 0.0
 
     @staticmethod
     def _freeze_commands(commands):
@@ -133,6 +137,15 @@ class CanCommandStreamer:
                 if self._stop.is_set():
                     break
 
+            woke_at = self.clock()
+            scheduler_lateness = max(0.0, woke_at - next_deadline)
+            with self._lock:
+                self._last_scheduler_lateness_s = scheduler_lateness
+                self._maximum_scheduler_lateness_s = max(
+                    self._maximum_scheduler_lateness_s,
+                    scheduler_lateness,
+                )
+
             # A producer update may arrive while this thread is sleeping. Read
             # the atomic slot again immediately before transmission so a
             # superseded policy target is never sent from a local stale copy.
@@ -180,7 +193,7 @@ class CanCommandStreamer:
                 consecutive = self._consecutive_overruns
             if consecutive >= self.fault_consecutive_overruns:
                 self._set_fault(
-                    "SINGLE-ADAPTER TRANSPORT QUALIFICATION FAILED: "
+                    f"{self.transport_label} TRANSPORT DEADLINE FAILED: "
                     f"CAN batch took {1000.0 * duration:.2f} ms with a "
                     f"{1000.0 * self.command_dt_s:.2f} ms deadline for "
                     f"{consecutive} consecutive batches"
@@ -208,6 +221,12 @@ class CanCommandStreamer:
                 "can_command_max_batch_ms": 1000.0 * self._maximum_batch_duration_s,
                 "can_command_missed_deadlines": int(self._missed_deadlines),
                 "can_command_consecutive_overruns": int(self._consecutive_overruns),
+                "can_command_scheduler_lateness_ms": (
+                    1000.0 * self._last_scheduler_lateness_s
+                ),
+                "can_command_max_scheduler_lateness_ms": (
+                    1000.0 * self._maximum_scheduler_lateness_s
+                ),
                 "can_command_stale_events": int(self._stale_target_events),
                 "can_command_target_age_ms": (
                     "" if published_age is None else 1000.0 * published_age
