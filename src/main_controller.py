@@ -5734,8 +5734,12 @@ def main():
     parser.add_argument(
         "--can-command-stale-timeout",
         type=float,
-        default=0.080,
-        help="stop retransmission if the 50 Hz producer does not refresh its target",
+        default=0.250,
+        help=(
+            "stop retransmission if the 50 Hz producer does not refresh its "
+            "target; BCM safely holds the last complete target through brief "
+            "Jetson scheduling stalls"
+        ),
     )
     parser.add_argument(
         "--can-command-fault-consecutive",

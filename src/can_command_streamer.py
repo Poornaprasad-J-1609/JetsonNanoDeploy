@@ -23,7 +23,7 @@ class CanCommandStreamer:
         receive_every_n_cycles=1,
         initial_stale_timeout_s=0.250,
         command_dt_s=0.005,
-        stale_timeout_s=0.080,
+        stale_timeout_s=0.250,
         fault_consecutive_overruns=3,
         transport_label="CAN",
         clock=time.monotonic,

@@ -13,6 +13,12 @@ def wait_until(predicate, timeout=0.5):
     return bool(predicate())
 
 
+def test_default_stale_timeout_tolerates_brief_jetson_scheduler_stalls():
+    streamer = CanCommandStreamer(send_callback=lambda _commands: None)
+    assert streamer.command_dt_s == 0.005
+    assert streamer.stale_timeout_s == 0.250
+
+
 def test_streamer_repeats_only_latest_atomic_snapshot_at_200_hz():
     sent = []
     lock = threading.Lock()

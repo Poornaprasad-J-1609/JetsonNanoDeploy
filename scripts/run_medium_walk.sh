@@ -35,6 +35,7 @@ args=(
     --imu-stale-timeout 0.10
     --control-hz 50
     --can-command-hz 200
+    --can-command-stale-timeout 0.25
     --base-lin-vel-source zero
     --start-control-mode idle
     --startup-action hold
