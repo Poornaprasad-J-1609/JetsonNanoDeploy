@@ -1529,6 +1529,7 @@ def compact_telemetry_record(
                     "phase",
                     "command_encoding",
                     "q_requested",
+                    "q_prelimit_requested",
                     "q_des",
                     "q_before_torque_limit",
                     "torque_limited",
@@ -1551,6 +1552,9 @@ def compact_telemetry_record(
                     "kd_effective",
                     "joint_tau_ff",
                     "joint_tau_ff_effective",
+                    "joint_limit_preload_error",
+                    "joint_limit_preload_tau_ff_requested",
+                    "joint_limit_preload_tau_ff",
                     "tau_ff",
                     "can_id",
                 ):
@@ -1702,6 +1706,7 @@ def joint_telemetry_fieldnames(policy_order):
         "phase",
         "command_encoding",
         "q_requested",
+        "q_prelimit_requested",
         "q_des",
         "q_before_torque_limit",
         "torque_limited",
@@ -1723,6 +1728,9 @@ def joint_telemetry_fieldnames(policy_order):
         "kd_effective",
         "joint_tau_ff",
         "joint_tau_ff_effective",
+        "joint_limit_preload_error",
+        "joint_limit_preload_tau_ff_requested",
+        "joint_limit_preload_tau_ff",
         "tau_ff",
         "can_id",
     ]
@@ -4001,13 +4009,19 @@ def run_policy_loop(
     policy_summary_stride = max(1, min(5, int(log_every)))
     command_build_s = 0.0
 
-    def build_loop_mit_commands(q_target, phase, feedback_by_joint=None):
+    def build_loop_mit_commands(
+        q_target,
+        phase,
+        feedback_by_joint=None,
+        prelimit_q_target=None,
+    ):
         nonlocal command_build_s
         started = time.monotonic()
         commands_out = motor_layer.build_mit_commands(
             q_target,
             phase=phase,
             feedback_by_joint=feedback_by_joint,
+            prelimit_q_target=prelimit_q_target,
         )
         command_build_s += time.monotonic() - started
         return commands_out
@@ -4936,6 +4950,7 @@ def run_policy_loop(
                     q_safe_target,
                     phase="policy",
                     feedback_by_joint=fresh_feedback_for_commands,
+                    prelimit_q_target=q_policy_target,
                 )
             )
             if (
@@ -5028,6 +5043,7 @@ def run_policy_loop(
                     q_safe_target,
                     phase="policy",
                     feedback_by_joint=fresh_feedback_for_commands,
+                    prelimit_q_target=q_policy_target,
                 )
             if float(policy_entry_scale) >= 0.999:
                 policy_steady_cycles += 1
@@ -6963,6 +6979,12 @@ def main():
         f"delay={float(args.policy_torque_ramp_delay_seconds):.2f}s",
         f"ramp={float(args.policy_torque_ramp_seconds):.2f}s",
         f"require_clean={bool(args.policy_torque_ramp_require_clean)}",
+    )
+    print(
+        "Virtual joint-stop preload:",
+        "enabled" if motor_layer.virtual_joint_stop_enabled else "disabled",
+        f"max={motor_layer.virtual_joint_stop_max_preload_nm:.2f} Nm",
+        "(policy only; fresh feedback required)",
     )
     pose_torque_limits = motor_layer.pose_pd_torque_limits()
     if args.pose_pd_torque_limit > 0.0:

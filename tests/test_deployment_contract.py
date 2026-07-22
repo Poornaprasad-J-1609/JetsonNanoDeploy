@@ -521,6 +521,91 @@ def test_policy_packet_boundary_uses_physical_not_diagnostic_limits():
     assert command["q_des"] == pytest.approx(0.0)
 
 
+@pytest.mark.parametrize(
+    ("joint_name", "actor_target", "expected_preload_sign"),
+    (
+        ("FL_calf_joint", -0.50, -1.0),
+        ("BR_calf_joint", +0.50, +1.0),
+    ),
+)
+def test_virtual_joint_stop_preserves_bounded_policy_torque_at_physical_limit(
+    joint_name,
+    actor_target,
+    expected_preload_sign,
+):
+    runner = PolicyRunner()
+    motor_ids = load_yaml(ROOT / "config" / "motor_ids.yaml")["motor_ids"]
+    joint_index = runner.policy_order.index(joint_name)
+    layer = MotorCommandLayer(
+        runner.policy_order,
+        motor_ids,
+        active_joints=[joint_name],
+        joint_can_bus=resolve_joint_can_bus(runner.policy_order, 1),
+    )
+    layer.set_policy_pd_torque_limit(14.0)
+    q_safe = np.zeros(12, dtype=np.float32)
+    q_actor = q_safe.copy()
+    q_actor[joint_index] = actor_target
+    command = layer.build_mit_commands(
+        q_safe,
+        phase="policy",
+        prelimit_q_target=q_actor,
+        feedback_by_joint={
+            joint_name: {
+                "position_raw": 0.0,
+                "joint_position": 0.0,
+                "joint_velocity": 0.0,
+            }
+        },
+    )[0]
+
+    assert command["q_des"] == pytest.approx(0.0)
+    assert command["q_prelimit_requested"] == pytest.approx(actor_target)
+    assert command["joint_limit_preload_error"] == pytest.approx(actor_target)
+    assert abs(command["joint_limit_preload_tau_ff"]) == pytest.approx(8.0)
+    assert np.sign(command["joint_limit_preload_tau_ff"]) == expected_preload_sign
+    assert abs(command["tau_pd_est"]) <= 14.05
+
+
+def test_virtual_joint_stop_requires_fresh_feedback_and_policy_phase():
+    runner = PolicyRunner()
+    motor_ids = load_yaml(ROOT / "config" / "motor_ids.yaml")["motor_ids"]
+    joint_name = "BR_calf_joint"
+    joint_index = runner.policy_order.index(joint_name)
+    layer = MotorCommandLayer(
+        runner.policy_order,
+        motor_ids,
+        active_joints=[joint_name],
+        joint_can_bus=resolve_joint_can_bus(runner.policy_order, 1),
+    )
+    layer.set_policy_pd_torque_limit(14.0)
+    q_safe = np.zeros(12, dtype=np.float32)
+    q_actor = q_safe.copy()
+    q_actor[joint_index] = 0.50
+
+    missing_feedback = layer.build_mit_commands(
+        q_safe,
+        phase="policy",
+        prelimit_q_target=q_actor,
+        feedback_by_joint={},
+    )[0]
+    pose_command = layer.build_mit_commands(
+        q_safe,
+        phase="stand",
+        prelimit_q_target=q_actor,
+        feedback_by_joint={
+            joint_name: {
+                "position_raw": 0.0,
+                "joint_position": 0.0,
+                "joint_velocity": 0.0,
+            }
+        },
+    )[0]
+
+    assert missing_feedback["joint_limit_preload_tau_ff"] == pytest.approx(0.0)
+    assert pose_command["joint_limit_preload_tau_ff"] == pytest.approx(0.0)
+
+
 def test_per_joint_policy_torque_limits_are_preserved_in_commands():
     runner = PolicyRunner()
     motor_ids = load_yaml(ROOT / "config" / "motor_ids.yaml")["motor_ids"]

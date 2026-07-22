@@ -242,6 +242,16 @@ class MotorCommandLayer:
         }
         self.gains = self.cfg["gains"]
         self.feedforward = self.cfg["feedforward"]
+        virtual_stop_cfg = self.cfg.get("virtual_joint_stop", {}) or {}
+        self.virtual_joint_stop_enabled = bool(virtual_stop_cfg.get("enabled", False))
+        self.virtual_joint_stop_max_preload_nm = float(
+            virtual_stop_cfg.get("max_preload_nm", 0.0)
+        )
+        if (
+            not math.isfinite(self.virtual_joint_stop_max_preload_nm)
+            or self.virtual_joint_stop_max_preload_nm < 0.0
+        ):
+            raise ValueError("virtual_joint_stop.max_preload_nm must be finite and >= 0")
         communication_cfg = self.cfg.get("communication", {})
         self.frame_gap_s = float(communication_cfg.get("frame_gap_s", 0.0))
         self.batch_writes = bool(communication_cfg.get("batch_writes", False))
@@ -760,6 +770,7 @@ class MotorCommandLayer:
         phase="policy",
         feedback_by_joint=None,
         joint_velocity_target=None,
+        prelimit_q_target=None,
     ):
         self.maybe_reload_control_limits()
         self.maybe_reload_joint_limits()
@@ -771,6 +782,15 @@ class MotorCommandLayer:
             )
         if not np.all(np.isfinite(q_target)):
             raise ValueError("q_target contains NaN or Inf")
+        if prelimit_q_target is not None:
+            prelimit_q_target = np.asarray(prelimit_q_target, dtype=np.float32)
+            if prelimit_q_target.shape != q_target.shape:
+                raise ValueError(
+                    "prelimit_q_target has shape "
+                    f"{list(prelimit_q_target.shape)}, expected {list(q_target.shape)}"
+                )
+            if not np.all(np.isfinite(prelimit_q_target)):
+                raise ValueError("prelimit_q_target contains NaN or Inf")
         if joint_velocity_target is not None:
             joint_velocity_target = np.asarray(
                 joint_velocity_target,
@@ -835,14 +855,13 @@ class MotorCommandLayer:
                 else float(joint_velocity_target[i])
             )
             joint_v_des_requested = joint_v_des
-            joint_tau_ff = float(self.feedforward["tau_ff"])
-            joint_tau_ff_effective = self._effective_signed_wire_value(
-                joint_tau_ff,
-                "tau",
-                command_proto,
-            )
             q_requested = float(q_target[i])
             q_des = self.apply_hard_joint_limit(joint_name, q_requested, phase=phase)
+            q_prelimit_requested = (
+                q_requested
+                if prelimit_q_target is None
+                else float(prelimit_q_target[i])
+            )
             feedback = feedback_by_joint.get(joint_name, {})
             feedback_position = feedback.get("position_raw") if isinstance(feedback, dict) else None
             feedback_joint_position = feedback.get("joint_position") if isinstance(feedback, dict) else None
@@ -851,6 +870,45 @@ class MotorCommandLayer:
                 self.policy_pd_torque_limit_for_joint(joint_name)
                 if phase == "policy"
                 else base_phase_torque_limit
+            )
+            joint_limit_preload_error = 0.0
+            joint_limit_preload_tau_ff_requested = 0.0
+            joint_limit_preload_tau_ff = 0.0
+            preload_feedback_valid = (
+                feedback_joint_position is not None
+                and feedback_joint_velocity is not None
+                and math.isfinite(float(feedback_joint_position))
+                and math.isfinite(float(feedback_joint_velocity))
+            )
+            if (
+                phase == "policy"
+                and self.virtual_joint_stop_enabled
+                and self.virtual_joint_stop_max_preload_nm > 0.0
+                and phase_torque_limit > 0.0
+                and preload_feedback_valid
+            ):
+                joint_limit_preload_error = q_prelimit_requested - q_des
+                if abs(joint_limit_preload_error) > 1.0e-7:
+                    joint_limit_preload_tau_ff_requested = (
+                        kp_effective * joint_limit_preload_error
+                    )
+                    preload_limit = min(
+                        self.virtual_joint_stop_max_preload_nm,
+                        float(phase_torque_limit),
+                    )
+                    joint_limit_preload_tau_ff = clip_scalar(
+                        joint_limit_preload_tau_ff_requested,
+                        -preload_limit,
+                        preload_limit,
+                    )
+            joint_tau_ff = (
+                float(self.feedforward["tau_ff"])
+                + joint_limit_preload_tau_ff
+            )
+            joint_tau_ff_effective = self._effective_signed_wire_value(
+                joint_tau_ff,
+                "tau",
+                command_proto,
             )
             q_before_torque_limit = q_des
             torque_limited = False
@@ -1009,6 +1067,7 @@ class MotorCommandLayer:
                 "command_encoding": command_encoding,
                 "q_des": q_des_sent,
                 "q_requested": q_requested,
+                "q_prelimit_requested": q_prelimit_requested,
                 "q_before_torque_limit": q_before_torque_limit,
                 "torque_limited": torque_limited,
                 "impedance_scale": impedance_scale,
@@ -1034,6 +1093,9 @@ class MotorCommandLayer:
                 "kd_effective": kd_effective,
                 "joint_tau_ff": joint_tau_ff,
                 "joint_tau_ff_effective": joint_tau_ff_effective,
+                "joint_limit_preload_error": joint_limit_preload_error,
+                "joint_limit_preload_tau_ff_requested": joint_limit_preload_tau_ff_requested,
+                "joint_limit_preload_tau_ff": joint_limit_preload_tau_ff,
                 "tau_ff": motor_tau_ff,
                 "can_id": can_id,
                 "data": data,

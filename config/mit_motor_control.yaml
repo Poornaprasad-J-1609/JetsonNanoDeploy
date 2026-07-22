@@ -129,3 +129,12 @@ gains:
 feedforward:
   tau_ff: 0.0
   v_des: 0.0
+
+# Isaac/MuJoCo computes actuator torque from the raw policy target before the
+# physical joint constraint is solved. On hardware we keep q_des inside the
+# measured envelope and reproduce only that discarded position error as a
+# bounded feedforward preload. The normal per-stage total torque limiter still
+# applies after this contribution is added.
+virtual_joint_stop:
+  enabled: true
+  max_preload_nm: 8.0
