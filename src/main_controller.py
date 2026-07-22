@@ -1525,6 +1525,7 @@ def compact_telemetry_record(
                     "q_des",
                     "q_before_torque_limit",
                     "torque_limited",
+                    "impedance_scale",
                     "torque_limit_effective",
                     "torque_limit_start",
                     "torque_limit_final",

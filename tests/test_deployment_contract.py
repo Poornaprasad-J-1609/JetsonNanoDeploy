@@ -395,6 +395,76 @@ def test_policy_and_pose_pd_torque_limits_are_separate():
     assert layer.policy_pd_torque_limit_for_joint(runner.policy_order[0]) == pytest.approx(21.0)
 
 
+def test_pose_torque_limit_preserves_synchronized_target_and_scales_impedance():
+    runner = PolicyRunner()
+    motor_ids = load_yaml(ROOT / "config" / "motor_ids.yaml")["motor_ids"]
+    joint_name = "FL_thigh_joint"
+    joint_index = runner.policy_order.index(joint_name)
+    layer = MotorCommandLayer(
+        runner.policy_order,
+        motor_ids,
+        active_joints=[joint_name],
+        joint_can_bus=resolve_joint_can_bus(runner.policy_order, 1),
+    )
+    layer.set_pose_pd_torque_limit(12.0)
+
+    targets = (0.30, 0.40, 0.50, 0.60)
+    feedback_positions = (0.00, 0.18, 0.12, 0.31)
+    sent_targets = []
+    for target, feedback_position in zip(targets, feedback_positions):
+        q_target = np.zeros(12, dtype=np.float32)
+        q_target[joint_index] = target
+        command = layer.build_mit_commands(
+            q_target,
+            phase="sit",
+            feedback_by_joint={
+                joint_name: {
+                    "position_raw": feedback_position,
+                    "joint_position": feedback_position,
+                    "joint_velocity": 0.0,
+                }
+            },
+        )[0]
+        sent_targets.append(command["q_des"])
+        assert command["q_des"] == pytest.approx(target, abs=1.0e-6)
+        assert command["q_before_torque_limit"] == pytest.approx(target, abs=1.0e-6)
+        assert 0.0 < command["impedance_scale"] <= 1.0
+        assert abs(command["tau_pd_est"]) <= 12.05
+
+    assert np.all(np.diff(sent_targets) > 0.0)
+
+
+def test_policy_torque_limit_still_limits_position_target():
+    runner = PolicyRunner()
+    motor_ids = load_yaml(ROOT / "config" / "motor_ids.yaml")["motor_ids"]
+    joint_name = "FL_thigh_joint"
+    joint_index = runner.policy_order.index(joint_name)
+    layer = MotorCommandLayer(
+        runner.policy_order,
+        motor_ids,
+        active_joints=[joint_name],
+        joint_can_bus=resolve_joint_can_bus(runner.policy_order, 1),
+    )
+    layer.set_policy_pd_torque_limit(12.0)
+    q_target = np.zeros(12, dtype=np.float32)
+    q_target[joint_index] = 0.60
+    command = layer.build_mit_commands(
+        q_target,
+        phase="policy",
+        feedback_by_joint={
+            joint_name: {
+                "position_raw": 0.0,
+                "joint_position": 0.0,
+                "joint_velocity": 0.0,
+            }
+        },
+    )[0]
+
+    assert command["q_des"] < 0.60
+    assert command["impedance_scale"] == pytest.approx(1.0)
+    assert abs(command["tau_pd_est"]) <= 12.05
+
+
 def test_per_joint_policy_torque_limits_are_preserved_in_commands():
     runner = PolicyRunner()
     motor_ids = load_yaml(ROOT / "config" / "motor_ids.yaml")["motor_ids"]
