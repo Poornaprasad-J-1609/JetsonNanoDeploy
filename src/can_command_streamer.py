@@ -21,6 +21,7 @@ class CanCommandStreamer:
         clear_callback=None,
         send_only_on_change=False,
         receive_every_n_cycles=1,
+        initial_stale_timeout_s=0.250,
         command_dt_s=0.005,
         stale_timeout_s=0.080,
         fault_consecutive_overruns=3,
@@ -33,6 +34,7 @@ class CanCommandStreamer:
         self.clear_callback = clear_callback
         self.send_only_on_change = bool(send_only_on_change)
         self.receive_every_n_cycles = int(max(1, receive_every_n_cycles))
+        self.initial_stale_timeout_s = float(initial_stale_timeout_s)
         self.command_dt_s = float(command_dt_s)
         self.stale_timeout_s = float(stale_timeout_s)
         self.fault_consecutive_overruns = int(fault_consecutive_overruns)
@@ -45,6 +47,8 @@ class CanCommandStreamer:
             raise ValueError("stale_timeout_s must be at least two CAN command periods")
         if self.fault_consecutive_overruns <= 0:
             raise ValueError("fault_consecutive_overruns must be > 0")
+        if self.initial_stale_timeout_s < self.stale_timeout_s:
+            raise ValueError("initial_stale_timeout_s must be >= stale_timeout_s")
 
         self.clock = clock
         self.sleep = sleep
@@ -195,13 +199,18 @@ class CanCommandStreamer:
                 next_deadline = self.clock()
                 continue
             now = self.clock()
-            if published_at is None or now - published_at > self.stale_timeout_s:
+            stale_limit = (
+                self.initial_stale_timeout_s
+                if generation <= 1
+                else self.stale_timeout_s
+            )
+            if published_at is None or now - published_at > stale_limit:
                 with self._lock:
                     self._stale_target_events += 1
                 age = 0.0 if published_at is None else now - float(published_at)
                 self._set_fault(
                     "CAN command target became stale: "
-                    f"age={age:.3f}s limit={self.stale_timeout_s:.3f}s"
+                    f"age={age:.3f}s limit={stale_limit:.3f}s"
                 )
                 continue
 
@@ -225,7 +234,11 @@ class CanCommandStreamer:
                 )
                 self._last_send_timestamp = send_finished
                 self._send_count += 1
-                if duration > self.command_dt_s:
+                # With kernel-periodic SocketCAN, this callback only updates
+                # BCM task data. The kernel continues the previous complete
+                # snapshot at 200 Hz while an update is in progress, so update
+                # wall time is not a missed motor-command deadline.
+                if duration > self.command_dt_s and not self.send_only_on_change:
                     self._missed_deadlines += max(
                         1,
                         int(math.ceil(duration / self.command_dt_s)) - 1,

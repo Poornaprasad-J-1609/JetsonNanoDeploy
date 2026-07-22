@@ -7314,6 +7314,10 @@ def main():
                 ),
                 send_only_on_change=(args.mode == "mit-signal"),
                 receive_every_n_cycles=(2 if args.mode == "mit-signal" else 1),
+                initial_stale_timeout_s=max(
+                    0.250,
+                    float(args.can_command_stale_timeout),
+                ),
                 command_dt_s=1.0 / float(args.can_command_hz),
                 stale_timeout_s=float(args.can_command_stale_timeout),
                 fault_consecutive_overruns=int(args.can_command_fault_consecutive),
