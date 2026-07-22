@@ -100,6 +100,20 @@ def test_one_can_socketcan_defaults_and_unique_ids():
 def test_policy_contract_observation_and_action():
     runner = PolicyRunner()
     assert runner.policy_order == EXPECTED_POLICY_JOINT_ORDER
+    assert runner.policy_order == [
+        "BL_hip_joint",
+        "BR_hip_joint",
+        "FL_hip_joint",
+        "FR_hip_joint",
+        "BL_thigh_joint",
+        "BR_thigh_joint",
+        "FL_thigh_joint",
+        "FR_thigh_joint",
+        "BL_calf_joint",
+        "BR_calf_joint",
+        "FL_calf_joint",
+        "FR_calf_joint",
+    ]
     assert runner.observation_dim == 48
     assert runner.action_dim == 12
     assert runner.action_scale == pytest.approx(0.25)

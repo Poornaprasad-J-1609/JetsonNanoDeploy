@@ -6,22 +6,21 @@ policy_action_scale: 0.25
 
 # Policy output/observation joint order.
 #
-# Verified against grallator_sim_motor_log_20260701_065137.csv and policy.pt.
-# Replaying the logged 48-value observations in this order reproduces the
-# simulation actions with less than 2e-6 maximum absolute error.
+# Verified against the Isaac/MuJoCo policy observation and action schema. Keep
+# this in actor order; name-based routing handles the different motor-ID order.
 policy_to_real_order:
-  - FL_hip_joint
-  - FR_hip_joint
   - BL_hip_joint
   - BR_hip_joint
-  - FL_thigh_joint
-  - FR_thigh_joint
+  - FL_hip_joint
+  - FR_hip_joint
   - BL_thigh_joint
   - BR_thigh_joint
-  - FL_calf_joint
-  - FR_calf_joint
+  - FL_thigh_joint
+  - FR_thigh_joint
   - BL_calf_joint
   - BR_calf_joint
+  - FL_calf_joint
+  - FR_calf_joint
 
 # Optional sign transform between the policy coordinate convention and the
 # deployment/sit-stand joint coordinate convention. Keep these signs in the
