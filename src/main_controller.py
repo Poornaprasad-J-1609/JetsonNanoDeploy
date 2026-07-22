@@ -3065,6 +3065,40 @@ def max_active_error(q_a, q_b, active_indices):
     return float(np.max(np.abs(q_a[active_indices] - q_b[active_indices])))
 
 
+def stand_ready_for_walking(
+    command_error,
+    feedback_error,
+    trajectory_elapsed_s,
+    trajectory_duration_s,
+    error_tolerance_rad,
+):
+    """Return true only after the complete stand trajectory has settled.
+
+    Walking readiness is deliberately separate from hardware/software-zero
+    calibration. A loaded PD-controlled leg needs finite steady-state position
+    error to support weight, so requiring the calibration tolerance here can
+    permanently block policy entry even though the robot is safely standing.
+    """
+    values = (
+        command_error,
+        feedback_error,
+        trajectory_elapsed_s,
+        trajectory_duration_s,
+        error_tolerance_rad,
+    )
+    if not all(np.isfinite(float(value)) for value in values):
+        return False
+    tolerance = float(error_tolerance_rad)
+    duration = max(0.0, float(trajectory_duration_s))
+    trajectory_complete = float(trajectory_elapsed_s) >= duration - 1.0e-6
+    return bool(
+        tolerance > 0.0
+        and trajectory_complete
+        and float(command_error) <= tolerance
+        and float(feedback_error) <= tolerance
+    )
+
+
 def constant_pose_like(runner, value):
     return np.full(len(runner.policy_order), float(value), dtype=np.float32)
 
@@ -3680,6 +3714,7 @@ def run_policy_loop(
     auto_stand_zero,
     auto_sit_zero,
     stand_zero_error_rad,
+    stand_ready_error_rad,
     stand_zero_settle_steps,
     pose_sync_error_rad,
     policy_command_gain,
@@ -3878,6 +3913,7 @@ def run_policy_loop(
     print("auto_stand_zero:", bool(auto_stand_zero))
     print("auto_sit_zero:", bool(auto_sit_zero))
     print("pose_sync_error_rad:", float(pose_sync_error_rad))
+    print("stand_ready_error_rad:", float(stand_ready_error_rad))
     print("policy_command_gain:", float(policy_command_gain))
     print(
         "policy_command_caps:",
@@ -5207,9 +5243,12 @@ def run_policy_loop(
             q_feedback = getattr(estimator, "q_current", q_safe_target)
             command_error = max_active_error(q_safe_target, q_stand_target, active_indices)
             feedback_error = max_active_error(q_feedback, q_stand_target, active_indices)
-            if (
-                command_error <= float(stand_zero_error_rad)
-                and feedback_error <= float(stand_zero_error_rad)
+            if stand_ready_for_walking(
+                command_error=command_error,
+                feedback_error=feedback_error,
+                trajectory_elapsed_s=pose_transition_elapsed_s,
+                trajectory_duration_s=pose_transition_duration_s,
+                error_tolerance_rad=stand_ready_error_rad,
             ):
                 stand_ready_settle_count += 1
             else:
@@ -5983,6 +6022,15 @@ def main():
         help="joint-coordinate value assigned to stand during stand auto-calibration; keep 0.0 for RL policy",
     )
     parser.add_argument("--stand-zero-error-rad", type=float, default=0.08)
+    parser.add_argument(
+        "--stand-ready-error-rad",
+        type=float,
+        default=0.25,
+        help=(
+            "maximum loaded stand tracking error used only to arm policy "
+            "walking after the complete stand trajectory"
+        ),
+    )
     parser.add_argument("--stand-zero-settle-steps", type=int, default=15)
     parser.add_argument(
         "--pose-sync-error-rad",
@@ -6511,6 +6559,12 @@ def main():
             parser.error("--routing-test-torque-limit must be finite and within 0.0..12.0")
     if not np.isfinite(args.fresh_feedback_max_age) or args.fresh_feedback_max_age < 0.0:
         parser.error("--fresh-feedback-max-age must be finite and >= 0")
+    if (
+        not np.isfinite(args.stand_ready_error_rad)
+        or args.stand_ready_error_rad <= 0.0
+        or args.stand_ready_error_rad > 0.50
+    ):
+        parser.error("--stand-ready-error-rad must be finite and within 0.0..0.50")
     if (
         not np.isfinite(args.encoder_limit_tolerance_rad)
         or args.encoder_limit_tolerance_rad < 0.0
@@ -7388,6 +7442,7 @@ def main():
             auto_stand_zero=args.auto_stand_zero,
             auto_sit_zero=args.auto_sit_zero,
             stand_zero_error_rad=args.stand_zero_error_rad,
+            stand_ready_error_rad=args.stand_ready_error_rad,
             stand_zero_settle_steps=max(1, args.stand_zero_settle_steps),
             pose_sync_error_rad=max(0.0, args.pose_sync_error_rad),
             policy_command_gain=args.policy_command_gain,

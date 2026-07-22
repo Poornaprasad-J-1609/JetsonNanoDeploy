@@ -28,6 +28,7 @@ from main_controller import (
     compact_telemetry_record,
     constant_joint_map,
     shifted_safety_filter_with_diagnostics,
+    stand_ready_for_walking,
     validate_required_policy_imu,
     validate_torque_profile,
     smoothstep,
@@ -369,6 +370,15 @@ def test_main_controller_safe_defaults_are_pinned():
     assert "--exact-policy-after-entry" in source
     assert "default=True" in source[source.index("--exact-policy-after-entry"):source.index("--fake-start")]
     assert "if not bool(exact_policy_after_entry):" in source
+
+
+def test_loaded_stand_readiness_is_separate_from_zero_calibration():
+    # Values measured in the 2026-07-22 hardware log: the loaded back calves
+    # settled near 0.20 rad while the complete synchronized stand target was 0.
+    assert not stand_ready_for_walking(0.0, 0.1983, 3.0, 3.64, 0.25)
+    assert stand_ready_for_walking(0.0, 0.1983, 3.64, 3.64, 0.25)
+    assert not stand_ready_for_walking(0.0, 0.251, 3.64, 3.64, 0.25)
+    assert not stand_ready_for_walking(0.0, 0.1983, 3.64, 3.64, 0.08)
 
 
 def test_policy_and_pose_pd_torque_limits_are_separate():
