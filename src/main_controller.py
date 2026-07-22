@@ -266,6 +266,17 @@ def active_feedback_bus_motor_ids(estimator, motor_layer, active_joints=None):
 
 
 def refresh_estimator_feedback(estimator, timeout=0.0, expected_bus_motor_ids=None):
+    can_feedback_streamer = getattr(estimator, "can_feedback_streamer", None)
+    if can_feedback_streamer is not None:
+        frames = can_feedback_streamer.drain_received()
+        count = 0
+        if frames and hasattr(estimator, "update_from_frames"):
+            count = estimator.update_from_frames(frames)
+        # While command streaming is active, this worker exclusively owns the
+        # SocketCAN receive calls. Concurrent recv() calls from the 50 Hz loop
+        # previously starved the 200 Hz sender and reduced it to 143-188 Hz.
+        if can_feedback_streamer.has_active_commands:
+            return count
     if hasattr(estimator, "refresh_from_bus"):
         try:
             return estimator.refresh_from_bus(
@@ -7230,14 +7241,24 @@ def main():
                 else:
                     motor_layer.send_signal_commands(buses, command_snapshot)
 
+            def receive_latest_can_feedback():
+                return MotorCommandLayer.read_all_frames(
+                    buses,
+                    timeout=0.0,
+                    proto=motor_layer.proto,
+                )
+
             can_streamer = CanCommandStreamer(
                 send_callback=send_latest_can_snapshot,
+                receive_callback=receive_latest_can_feedback,
                 command_dt_s=1.0 / float(args.can_command_hz),
                 stale_timeout_s=float(args.can_command_stale_timeout),
                 fault_consecutive_overruns=int(args.can_command_fault_consecutive),
                 transport_label=f"{int(args.can_count)}-ADAPTER",
             )
             can_streamer.start()
+            if hasattr(estimator, "update_from_frames"):
+                estimator.can_feedback_streamer = can_streamer
             print(
                 "Two-rate command streamer started: policy=50 Hz, "
                 f"CAN={float(args.can_command_hz):.0f} Hz"

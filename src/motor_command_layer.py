@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-from concurrent.futures import ThreadPoolExecutor
+import math
 from pathlib import Path
 import time
 import numpy as np
@@ -18,14 +18,19 @@ def load_yaml(path):
         return yaml.safe_load(f)
 
 
+def clip_scalar(value, lower, upper):
+    """Clamp one numeric value without constructing a NumPy scalar array."""
+    return min(max(float(value), float(lower)), float(upper))
+
+
 def float_to_uint(x, x_min, x_max, bits):
-    x = float(np.clip(x, x_min, x_max))
+    x = clip_scalar(x, x_min, x_max)
     span = x_max - x_min
     return int((x - x_min) * ((1 << bits) - 1) / span)
 
 
 def uint_to_float(x, x_min, x_max, bits):
-    x = int(np.clip(x, 0, (1 << bits) - 1))
+    x = int(clip_scalar(x, 0, (1 << bits) - 1))
     span = x_max - x_min
     return float(x_min + span * x / ((1 << bits) - 1))
 
@@ -61,23 +66,23 @@ def motor_command_position_near_feedback(
 
 def signed_offset_to_uint(x, x_min, x_max):
     limit = max(abs(float(x_min)), abs(float(x_max)))
-    x = float(np.clip(x, -limit, limit))
+    x = clip_scalar(x, -limit, limit)
     raw = int((x / limit + 1.0) * 0x7FFF)
-    return int(np.clip(raw, 0, 0xFFFF))
+    return int(clip_scalar(raw, 0, 0xFFFF))
 
 
 def uint_to_signed_offset(x, x_min, x_max):
     limit = max(abs(float(x_min)), abs(float(x_max)))
-    x = int(np.clip(x, 0, 0xFFFF))
+    x = int(clip_scalar(x, 0, 0xFFFF))
     value = (x / 0x7FFF - 1.0) * limit
-    return float(np.clip(value, -limit, limit))
+    return clip_scalar(value, -limit, limit)
 
 
 def unsigned_to_uint(x, x_min, x_max):
     if float(x_min) != 0.0:
         raise ValueError("RobStride/CyberGear unsigned MIT fields must have min=0.0")
-    x = float(np.clip(x, x_min, x_max))
-    return int(np.clip(int(x / float(x_max) * 0xFFFF), 0, 0xFFFF))
+    x = clip_scalar(x, x_min, x_max)
+    return int(clip_scalar(int(x / float(x_max) * 0xFFFF), 0, 0xFFFF))
 
 
 def pack_mit_command(p_des, v_des, kp, kd, proto):
@@ -245,22 +250,12 @@ class MotorCommandLayer:
         self.joint_directions = self._load_joint_directions()
         self.active_joints = self.resolve_active_joints(active_joints)
         self.joint_can_bus = dict(joint_can_bus) if joint_can_bus else {}
-        # Keep the physical CAN lanes alive across command cycles. Constructing
-        # and tearing down a ThreadPoolExecutor for every 5 ms batch adds avoidable
-        # scheduler jitter precisely where the two-adapter transport needs margin.
-        self._send_executor = ThreadPoolExecutor(
-            max_workers=4,
-            thread_name_prefix="grallator-can-lane",
-        )
         self.joint_coordinate_shifts = {joint_name: 0.0 for joint_name in self.policy_order}
         self.reload_joint_limits(force=True)
         self.reload_control_limits(force=True)
 
     def close(self):
-        executor = getattr(self, "_send_executor", None)
-        if executor is not None:
-            executor.shutdown(wait=True, cancel_futures=True)
-            self._send_executor = None
+        return None
 
     def _load_official_mit_ranges(self, model):
         try:
@@ -661,7 +656,7 @@ class MotorCommandLayer:
 
     def apply_hard_joint_limit(self, joint_name, q_des, phase=None):
         self.maybe_reload_joint_limits()
-        if not np.isfinite(q_des):
+        if not math.isfinite(float(q_des)):
             raise ValueError(f"{joint_name}: requested joint target is NaN or Inf")
         if phase == "policy":
             q_min, q_max = self.policy_target_limits.get(
@@ -673,7 +668,7 @@ class MotorCommandLayer:
         shift = float(self.joint_coordinate_shifts.get(joint_name, 0.0))
         q_min += shift
         q_max += shift
-        return float(np.clip(q_des, q_min, q_max))
+        return clip_scalar(q_des, q_min, q_max)
 
     def apply_hard_joint_limit_to_motor_position(self, joint_name, p_des, offset, direction=1.0):
         q_des = motor_position_to_joint_angle(
@@ -745,19 +740,19 @@ class MotorCommandLayer:
 
     def apply_mit_parameter_limits(self, p_des, v_des, kp, kd, tau_ff):
         self.maybe_reload_control_limits()
-        values = np.asarray([p_des, v_des, kp, kd, tau_ff], dtype=np.float64)
-        if not np.all(np.isfinite(values)):
+        values = (p_des, v_des, kp, kd, tau_ff)
+        if not all(math.isfinite(float(value)) for value in values):
             raise ValueError("MIT command parameters contain NaN or Inf")
         if not self.mit_parameter_limits_enabled:
             return p_des, v_des, kp, kd, tau_ff
 
         lim = self.mit_parameter_limits
         return (
-            float(np.clip(p_des, lim["p_min"], lim["p_max"])),
-            float(np.clip(v_des, lim["v_min"], lim["v_max"])),
-            float(np.clip(kp, lim["kp_min"], lim["kp_max"])),
-            float(np.clip(kd, lim["kd_min"], lim["kd_max"])),
-            float(np.clip(tau_ff, lim["tau_ff_min"], lim["tau_ff_max"])),
+            clip_scalar(p_des, lim["p_min"], lim["p_max"]),
+            clip_scalar(v_des, lim["v_min"], lim["v_max"]),
+            clip_scalar(kp, lim["kp_min"], lim["kp_max"]),
+            clip_scalar(kd, lim["kd_min"], lim["kd_max"]),
+            clip_scalar(tau_ff, lim["tau_ff_min"], lim["tau_ff_max"]),
         )
 
     def build_mit_commands(
@@ -865,7 +860,8 @@ class MotorCommandLayer:
                 phase_torque_limit > 0.0
                 and feedback_joint_position is not None
                 and feedback_joint_velocity is not None
-                and np.all(np.isfinite([feedback_joint_position, feedback_joint_velocity]))
+                and math.isfinite(float(feedback_joint_position))
+                and math.isfinite(float(feedback_joint_velocity))
                 and kp_effective > 0.0
             ):
                 q_feedback = float(feedback_joint_position)
@@ -875,11 +871,11 @@ class MotorCommandLayer:
                     + joint_tau_ff_effective
                 )
                 position_torque = kp_effective * (q_des - q_feedback)
-                position_torque = float(np.clip(
+                position_torque = clip_scalar(
                     position_torque,
                     -phase_torque_limit - velocity_and_ff_torque,
                     phase_torque_limit - velocity_and_ff_torque,
-                ))
+                )
                 q_des = self.apply_hard_joint_limit(
                     joint_name,
                     q_feedback + position_torque / kp_effective,
@@ -890,21 +886,21 @@ class MotorCommandLayer:
                     + velocity_and_ff_torque
                 )
                 if abs(tau_pd_est) > phase_torque_limit and kd_effective > 0.0:
-                    target_torque = float(np.clip(
+                    target_torque = clip_scalar(
                         tau_pd_est,
                         -phase_torque_limit,
                         phase_torque_limit,
-                    ))
+                    )
                     joint_v_des = qd_feedback + (
                         target_torque
                         - kp_effective * (q_des - q_feedback)
                         - joint_tau_ff_effective
                     ) / kd_effective
-                    joint_v_des = float(np.clip(
+                    joint_v_des = clip_scalar(
                         joint_v_des,
                         float(self.proto["v_min"]),
                         float(self.proto["v_max"]),
-                    ))
+                    )
                     tau_pd_est = (
                         kp_effective * (q_des - q_feedback)
                         + kd_effective * (joint_v_des - qd_feedback)
@@ -919,7 +915,8 @@ class MotorCommandLayer:
                 tau_pd_est is None
                 and feedback_joint_position is not None
                 and feedback_joint_velocity is not None
-                and np.all(np.isfinite([feedback_joint_position, feedback_joint_velocity]))
+                and math.isfinite(float(feedback_joint_position))
+                and math.isfinite(float(feedback_joint_velocity))
             ):
                 q_feedback = float(feedback_joint_position)
                 qd_feedback = float(feedback_joint_velocity)
@@ -1258,17 +1255,15 @@ class MotorCommandLayer:
 
         sent = [None] * len(commands)
 
-        def send_group(group):
-            return send_items(group["bus"], group["items"])
-
-        if self._send_executor is None:
-            raise RuntimeError("MotorCommandLayer is closed")
-        futures = [
-            self._send_executor.submit(send_group, grouped[key])
-            for key in group_order
-        ]
-        for future in futures:
-            for index, pkt in future.result():
+        # The caller is already the dedicated 200 Hz CAN sender. Dispatching
+        # each lane through another Python worker pool makes that sender wait
+        # for two additional GIL-scheduled threads. Under the active 50 Hz
+        # policy loop this added 6-13 ms stalls even though direct SocketCAN
+        # submission for both six-motor lanes takes less than the 5 ms budget.
+        # Submit each complete lane directly and deterministically instead.
+        for key in group_order:
+            group = grouped[key]
+            for index, pkt in send_items(group["bus"], group["items"]):
                 sent[index] = pkt
 
         return sent

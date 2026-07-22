@@ -17,6 +17,7 @@ class CanCommandStreamer:
     def __init__(
         self,
         send_callback,
+        receive_callback=None,
         command_dt_s=0.005,
         stale_timeout_s=0.080,
         fault_consecutive_overruns=3,
@@ -25,6 +26,7 @@ class CanCommandStreamer:
         sleep=time.sleep,
     ):
         self.send_callback = send_callback
+        self.receive_callback = receive_callback
         self.command_dt_s = float(command_dt_s)
         self.stale_timeout_s = float(stale_timeout_s)
         self.fault_consecutive_overruns = int(fault_consecutive_overruns)
@@ -43,6 +45,8 @@ class CanCommandStreamer:
         self._lock = threading.Lock()
         self._wake = threading.Event()
         self._stop = threading.Event()
+        self._io_idle = threading.Event()
+        self._io_idle.set()
         self._thread = None
         self._commands = ()
         self._generation = 0
@@ -57,6 +61,10 @@ class CanCommandStreamer:
         self._stale_target_events = 0
         self._last_scheduler_lateness_s = 0.0
         self._maximum_scheduler_lateness_s = 0.0
+        self._received_items = []
+        self._receive_count = 0
+        self._last_receive_duration_s = 0.0
+        self._maximum_receive_duration_s = 0.0
 
     @staticmethod
     def _freeze_commands(commands):
@@ -85,7 +93,9 @@ class CanCommandStreamer:
         return self._generation
 
     def clear(self):
-        self.submit(())
+        generation = self.submit(())
+        self._io_idle.wait(timeout=max(0.020, 2.0 * self.command_dt_s))
+        return generation
 
     def stop(self, timeout=1.0):
         self._stop.set()
@@ -105,6 +115,18 @@ class CanCommandStreamer:
     def last_send_timestamp(self):
         with self._lock:
             return self._last_send_timestamp
+
+    @property
+    def has_active_commands(self):
+        with self._lock:
+            return bool(self._commands) and self._fault_reason is None
+
+    def drain_received(self):
+        """Return feedback collected by the CAN owner thread exactly once."""
+        with self._lock:
+            items = self._received_items
+            self._received_items = []
+        return items
 
     def _set_fault(self, reason):
         with self._lock:
@@ -167,10 +189,12 @@ class CanCommandStreamer:
                 continue
 
             send_started = self.clock()
+            self._io_idle.clear()
             try:
                 self.send_callback(commands)
             except Exception as exc:
                 self._set_fault(f"CAN command send failed: {exc}")
+                self._io_idle.set()
                 continue
             send_finished = self.clock()
             duration = max(0.0, send_finished - send_started)
@@ -198,7 +222,34 @@ class CanCommandStreamer:
                     f"{1000.0 * self.command_dt_s:.2f} ms deadline for "
                     f"{consecutive} consecutive batches"
                 )
+                self._io_idle.set()
                 continue
+
+            if self.receive_callback is not None:
+                receive_started = self.clock()
+                try:
+                    received = list(self.receive_callback() or ())
+                except Exception as exc:
+                    self._set_fault(f"CAN feedback receive failed: {exc}")
+                    self._io_idle.set()
+                    continue
+                receive_finished = self.clock()
+                receive_duration = max(0.0, receive_finished - receive_started)
+                with self._lock:
+                    if received:
+                        self._received_items.extend(received)
+                        # Four 200 Hz batches contain 48 replies per 50 Hz
+                        # policy cycle. Keep ample diagnostic history while
+                        # bounding memory if the producer is temporarily late.
+                        if len(self._received_items) > 1024:
+                            del self._received_items[:-1024]
+                        self._receive_count += len(received)
+                    self._last_receive_duration_s = receive_duration
+                    self._maximum_receive_duration_s = max(
+                        self._maximum_receive_duration_s,
+                        receive_duration,
+                    )
+            self._io_idle.set()
 
             next_deadline += self.command_dt_s
             if send_finished > next_deadline:
@@ -228,6 +279,13 @@ class CanCommandStreamer:
                     1000.0 * self._maximum_scheduler_lateness_s
                 ),
                 "can_command_stale_events": int(self._stale_target_events),
+                "can_feedback_receive_count": int(self._receive_count),
+                "can_feedback_last_drain_ms": (
+                    1000.0 * self._last_receive_duration_s
+                ),
+                "can_feedback_max_drain_ms": (
+                    1000.0 * self._maximum_receive_duration_s
+                ),
                 "can_command_target_age_ms": (
                     "" if published_age is None else 1000.0 * published_age
                 ),

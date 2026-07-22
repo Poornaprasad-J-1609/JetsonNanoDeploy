@@ -98,3 +98,30 @@ def test_streamer_faults_after_consecutive_five_ms_batch_overruns():
         assert "can_command_scheduler_lateness_ms" in telemetry
     finally:
         streamer.stop()
+
+
+def test_streamer_collects_feedback_for_the_policy_thread():
+    pending = [["front-frame", "back-frame"]]
+
+    def receive():
+        return pending.pop(0) if pending else []
+
+    streamer = CanCommandStreamer(
+        send_callback=lambda _commands: None,
+        receive_callback=receive,
+        command_dt_s=0.005,
+        stale_timeout_s=0.100,
+    )
+    streamer.start()
+    try:
+        streamer.submit([{"target": 1.0}])
+        assert wait_until(
+            lambda: streamer.telemetry()["can_feedback_receive_count"] >= 2
+        )
+        assert streamer.has_active_commands
+        assert streamer.drain_received() == ["front-frame", "back-frame"]
+        assert streamer.drain_received() == []
+        streamer.clear()
+        assert not streamer.has_active_commands
+    finally:
+        streamer.stop()

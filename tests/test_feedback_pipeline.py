@@ -1,4 +1,3 @@
-import threading
 import time
 
 import numpy as np
@@ -8,6 +7,7 @@ from main_controller import (
     feedback_recency_summary,
     fresh_feedback_by_joint,
     refresh_active_feedback_before_fault,
+    refresh_estimator_feedback,
 )
 from motor_command_layer import MotorCommandLayer
 from policy_runner import PolicyRunner
@@ -16,6 +16,35 @@ from robstride_can_interface import SocketCan
 
 def feedback_can_id(motor_id, comm_type=2):
     return (int(comm_type) << 24) | ((int(motor_id) & 0xFF) << 8) | 0xFD
+
+
+def test_active_can_streamer_owns_feedback_socket_reads():
+    class Streamer:
+        has_active_commands = True
+
+        @staticmethod
+        def drain_received():
+            return ["cached-frame"]
+
+    class Estimator:
+        can_feedback_streamer = Streamer()
+
+        def __init__(self):
+            self.direct_reads = 0
+            self.frames = []
+
+        def update_from_frames(self, frames):
+            self.frames.extend(frames)
+            return len(frames)
+
+        def refresh_from_bus(self, timeout=0.0, expected_bus_motor_ids=None):
+            self.direct_reads += 1
+            return 99
+
+    estimator = Estimator()
+    assert refresh_estimator_feedback(estimator, timeout=0.003) == 1
+    assert estimator.frames == ["cached-frame"]
+    assert estimator.direct_reads == 0
 
 
 class FakeCanMessage:
@@ -238,7 +267,7 @@ def test_all_motor_stop_frames_are_sent_to_one_socketcan_bus():
     assert {command["motor_id"] for command in commands} == set(range(1, 13))
 
 
-def test_two_can_command_lanes_send_front_and_back_concurrently():
+def test_two_can_command_lanes_send_complete_deterministic_batches():
     runner = PolicyRunner()
     motor_ids = {
         name: index + 1
@@ -250,31 +279,31 @@ def test_two_can_command_lanes_send_front_and_back_concurrently():
         active_joints=runner.policy_order,
         joint_can_bus=resolve_joint_can_bus(runner.policy_order, 2),
     )
-    both_lanes_started = threading.Barrier(2)
+    dispatch_order = []
 
-    class ParallelBus:
+    class RecordingBus:
         requires_frame_gap = False
 
-        def __init__(self):
+        def __init__(self, name):
+            self.name = name
             self.sent = []
 
         def send_raw_sequence(self, frames, frame_gap_s=0.0):
-            both_lanes_started.wait(timeout=0.1)
-            time.sleep(0.005)
+            dispatch_order.append(self.name)
             self.sent.extend(frames)
             return frames
 
-    front = ParallelBus()
-    back = ParallelBus()
+    front = RecordingBus("front")
+    back = RecordingBus("back")
     commands = layer.build_stop_commands()
-    started = time.monotonic()
     try:
         sent = layer.send_raw_commands({"front": front, "back": back}, commands)
     finally:
         layer.close()
-    elapsed = time.monotonic() - started
 
-    assert elapsed < 0.030
+    assert len(dispatch_order) == 2
+    assert set(dispatch_order) == {"front", "back"}
     assert len(sent) == 12
+    assert sent == [(command["can_id"], command["data"]) for command in commands]
     assert len(front.sent) == 6
     assert len(back.sent) == 6
