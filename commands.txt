@@ -334,20 +334,21 @@ position, x = emergency stop. Startup is idle: no auto-zero and no auto-hold.
   --gui
 
 
-9a. Keyboard sit/stand only, one SocketCAN bus
-------------------------------------------------
+9a. Keyboard sit/stand only, two SocketCAN buses
+-------------------------------------------------
 
-Use this when all 12 uniquely addressed motors are on CAN0/slcan0. The queue
-limit prevents old pose targets accumulating behind the current command set.
+Use this with front motors 1-6 on slcan0 and back motors 7-12 on slcan1. The
+two physical buses transmit their six-frame command batches concurrently.
 The robot must be secured for the first run. Keys: c = crouch, space = stand,
 h = hold current joint-radian feedback, x = emergency stop.
 
-sudo ip link set "$CAN0" txqueuelen 32
+sudo ip link set "$FRONT_CAN" txqueuelen 32
+sudo ip link set "$BACK_CAN" txqueuelen 32
 
 /usr/bin/python3 src/main_controller.py \
   --mode mit-signal \
-  --can-count 1 \
-  --can-ports "$CAN0" \
+  --can-count 2 \
+  --can-ports "$FRONT_CAN" "$BACK_CAN" \
   --can-backend socketcan \
   --can-bitrate 1000000 \
   --feedback-source mit \

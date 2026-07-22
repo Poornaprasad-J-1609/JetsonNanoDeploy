@@ -5666,9 +5666,10 @@ def main():
     add_can_topology_args(
         parser,
         default_port="slcan0",
-        default_can_count=1,
+        default_can_count=2,
         default_backend="socketcan",
     )
+    parser.set_defaults(port_front="slcan0", port_back="slcan1")
     parser.add_argument("--baud", type=int, default=921600)
     parser.add_argument(
         "--active-joints",
@@ -6663,6 +6664,16 @@ def main():
     )
     if not active_port_by_bus:
         active_port_by_bus = port_by_bus
+    if args.mode == "mit-signal" and len(motor_layer.active_joints) > 6:
+        physical_can_ports = {
+            os.path.realpath(str(port)) for port in active_port_by_bus.values()
+        }
+        if len(physical_can_ports) < 2:
+            print(
+                "ERROR: 12-motor control at 200 Hz requires two distinct CAN "
+                "interfaces. Use --can-count 2 --can-ports slcan0 slcan1."
+            )
+            return 1
     try:
         validate_unique_motor_ids_per_physical_bus(
             motor_ids=motor_ids,
@@ -7326,6 +7337,7 @@ def main():
                     print("Motor stop frames sent.")
                 except Exception as exc:
                     print("\nWARNING: failed to send motor stop frames:", exc)
+            motor_layer.close()
             close_can_buses(buses)
             print("\nCAN interfaces closed.")
         if telemetry is not None:

@@ -1,3 +1,4 @@
+import threading
 import time
 
 import numpy as np
@@ -235,3 +236,45 @@ def test_all_motor_stop_frames_are_sent_to_one_socketcan_bus():
     assert len(commands) == 12
     assert len(bus.sent) == 12
     assert {command["motor_id"] for command in commands} == set(range(1, 13))
+
+
+def test_two_can_command_lanes_send_front_and_back_concurrently():
+    runner = PolicyRunner()
+    motor_ids = {
+        name: index + 1
+        for index, name in enumerate(runner.policy_order)
+    }
+    layer = MotorCommandLayer(
+        runner.policy_order,
+        motor_ids,
+        active_joints=runner.policy_order,
+        joint_can_bus=resolve_joint_can_bus(runner.policy_order, 2),
+    )
+    both_lanes_started = threading.Barrier(2)
+
+    class ParallelBus:
+        requires_frame_gap = False
+
+        def __init__(self):
+            self.sent = []
+
+        def send_raw_sequence(self, frames, frame_gap_s=0.0):
+            both_lanes_started.wait(timeout=0.1)
+            time.sleep(0.005)
+            self.sent.extend(frames)
+            return frames
+
+    front = ParallelBus()
+    back = ParallelBus()
+    commands = layer.build_stop_commands()
+    started = time.monotonic()
+    try:
+        sent = layer.send_raw_commands({"front": front, "back": back}, commands)
+    finally:
+        layer.close()
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 0.030
+    assert len(sent) == 12
+    assert len(front.sent) == 6
+    assert len(back.sent) == 6

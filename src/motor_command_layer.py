@@ -245,9 +245,22 @@ class MotorCommandLayer:
         self.joint_directions = self._load_joint_directions()
         self.active_joints = self.resolve_active_joints(active_joints)
         self.joint_can_bus = dict(joint_can_bus) if joint_can_bus else {}
+        # Keep the physical CAN lanes alive across command cycles. Constructing
+        # and tearing down a ThreadPoolExecutor for every 5 ms batch adds avoidable
+        # scheduler jitter precisely where the two-adapter transport needs margin.
+        self._send_executor = ThreadPoolExecutor(
+            max_workers=4,
+            thread_name_prefix="grallator-can-lane",
+        )
         self.joint_coordinate_shifts = {joint_name: 0.0 for joint_name in self.policy_order}
         self.reload_joint_limits(force=True)
         self.reload_control_limits(force=True)
+
+    def close(self):
+        executor = getattr(self, "_send_executor", None)
+        if executor is not None:
+            executor.shutdown(wait=True, cancel_futures=True)
+            self._send_executor = None
 
     def _load_official_mit_ranges(self, model):
         try:
@@ -1248,11 +1261,15 @@ class MotorCommandLayer:
         def send_group(group):
             return send_items(group["bus"], group["items"])
 
-        with ThreadPoolExecutor(max_workers=len(group_order)) as executor:
-            futures = [executor.submit(send_group, grouped[key]) for key in group_order]
-            for future in futures:
-                for index, pkt in future.result():
-                    sent[index] = pkt
+        if self._send_executor is None:
+            raise RuntimeError("MotorCommandLayer is closed")
+        futures = [
+            self._send_executor.submit(send_group, grouped[key])
+            for key in group_order
+        ]
+        for future in futures:
+            for index, pkt in future.result():
+                sent[index] = pkt
 
         return sent
 
