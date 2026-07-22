@@ -7301,6 +7301,7 @@ def main():
                 clear_callback=(
                     clear_latest_can_snapshot if args.mode == "mit-signal" else None
                 ),
+                send_only_on_change=(args.mode == "mit-signal"),
                 command_dt_s=1.0 / float(args.can_command_hz),
                 stale_timeout_s=float(args.can_command_stale_timeout),
                 fault_consecutive_overruns=int(args.can_command_fault_consecutive),

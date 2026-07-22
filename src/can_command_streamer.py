@@ -19,6 +19,7 @@ class CanCommandStreamer:
         send_callback,
         receive_callback=None,
         clear_callback=None,
+        send_only_on_change=False,
         command_dt_s=0.005,
         stale_timeout_s=0.080,
         fault_consecutive_overruns=3,
@@ -29,6 +30,7 @@ class CanCommandStreamer:
         self.send_callback = send_callback
         self.receive_callback = receive_callback
         self.clear_callback = clear_callback
+        self.send_only_on_change = bool(send_only_on_change)
         self.command_dt_s = float(command_dt_s)
         self.stale_timeout_s = float(stale_timeout_s)
         self.fault_consecutive_overruns = int(fault_consecutive_overruns)
@@ -67,6 +69,7 @@ class CanCommandStreamer:
         self._receive_count = 0
         self._last_receive_duration_s = 0.0
         self._maximum_receive_duration_s = 0.0
+        self._applied_generation = -1
 
     @staticmethod
     def _freeze_commands(commands):
@@ -143,12 +146,17 @@ class CanCommandStreamer:
 
     def _snapshot(self):
         with self._lock:
-            return self._commands, self._published_at, self._fault_reason
+            return (
+                self._commands,
+                self._published_at,
+                self._fault_reason,
+                self._generation,
+            )
 
     def _run(self):
         next_deadline = self.clock()
         while not self._stop.is_set():
-            commands, published_at, fault = self._snapshot()
+            commands, published_at, fault, generation = self._snapshot()
             if fault is not None:
                 self._wake.wait(timeout=self.command_dt_s)
                 self._wake.clear()
@@ -177,7 +185,7 @@ class CanCommandStreamer:
             # A producer update may arrive while this thread is sleeping. Read
             # the atomic slot again immediately before transmission so a
             # superseded policy target is never sent from a local stale copy.
-            commands, published_at, fault = self._snapshot()
+            commands, published_at, fault, generation = self._snapshot()
             if fault is not None:
                 continue
             if not commands:
@@ -197,7 +205,9 @@ class CanCommandStreamer:
             send_started = self.clock()
             self._io_idle.clear()
             try:
-                self.send_callback(commands)
+                if not self.send_only_on_change or generation != self._applied_generation:
+                    self.send_callback(commands)
+                    self._applied_generation = generation
             except Exception as exc:
                 self._set_fault(f"CAN command send failed: {exc}")
                 self._io_idle.set()
@@ -257,9 +267,13 @@ class CanCommandStreamer:
                     )
             self._io_idle.set()
 
+            # Feedback draining is part of this worker's cycle. Scheduling
+            # from the pre-drain send timestamp makes an over-budget drain run
+            # immediate catch-up iterations and can starve the 50 Hz producer.
+            cycle_finished = self.clock()
             next_deadline += self.command_dt_s
-            if send_finished > next_deadline:
-                missed = int((send_finished - next_deadline) / self.command_dt_s) + 1
+            if cycle_finished > next_deadline:
+                missed = int((cycle_finished - next_deadline) / self.command_dt_s) + 1
                 next_deadline += missed * self.command_dt_s
 
     def telemetry(self):
