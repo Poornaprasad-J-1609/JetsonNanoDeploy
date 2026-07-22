@@ -14,7 +14,7 @@ except ImportError as exc:
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_POLICY_SHA256 = "965e94c4cebfc45b9ef609d4a677a5ee35961a895700aad478603f43844b3779"
+EXPECTED_POLICY_SHA256 = "b808d5967cc672ffeefb3807c088f6623c6acd20cc02f14a14c32ea856baa2a8"
 EXPECTED_OBSERVATION_DIM = 48
 EXPECTED_ACTION_DIM = 12
 EXPECTED_POLICY_JOINT_ORDER = list(POLICY_JOINT_ORDER)
@@ -123,7 +123,11 @@ def load_policy_model(policy_path, activation="elu"):
     except RuntimeError:
         pass
 
-    checkpoint = torch.load(policy_path, map_location="cpu")
+    try:
+        checkpoint = torch.load(policy_path, map_location="cpu", weights_only=True)
+    except TypeError:
+        # Jetson releases with older PyTorch do not expose weights_only yet.
+        checkpoint = torch.load(policy_path, map_location="cpu")
     if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
         state_dict = checkpoint["model_state_dict"]
     elif isinstance(checkpoint, dict):
