@@ -702,7 +702,7 @@ def wait_for_live_policy_imu(
         except (TypeError, ValueError):
             timestamp = None
         if timestamp is None or timestamp == last_counted_timestamp:
-            time.sleep(0.01)
+            time.sleep(0.001)
             continue
         ok, reason = imu_reading_quality(
             reading,
@@ -718,7 +718,7 @@ def wait_for_live_policy_imu(
             last_reason = reason
             counted_timestamps.clear()
             last_counted_timestamp = None
-        time.sleep(0.01)
+        time.sleep(0.001)
 
     if len(counted_timestamps) < samples:
         print(
@@ -739,6 +739,12 @@ def wait_for_live_policy_imu(
     roll, pitch = projected_gravity_to_roll_pitch(gravity)
     elapsed = max(1.0e-6, counted_timestamps[-1] - counted_timestamps[0])
     sample_rate = 0.0 if len(counted_timestamps) < 2 else (len(counted_timestamps) - 1) / elapsed
+    imu_sensor = getattr(estimator, "imu_sensor", None)
+    if hasattr(imu_sensor, "status"):
+        sensor_status = imu_sensor.status()
+        background_rate = float(sensor_status.get("sample_rate_hz", 0.0) or 0.0)
+        if np.isfinite(background_rate) and background_rate > 0.0:
+            sample_rate = background_rate
     print(f"[IMU] source={source_name} status=live")
     print(f"[IMU] gyro_body={format_vector(gyro)}")
     print(f"[IMU] projected_gravity={format_vector(gravity)}")
