@@ -352,6 +352,7 @@ def open_can_buses(
     timeout=None,
     backend="auto",
     bitrate=1_000_000,
+    socketcan_tx_retry_count=None,
 ):
     buses = {}
     opened_by_port = {}
@@ -370,6 +371,8 @@ def open_can_buses(
                 }
                 if timeout is not None:
                     kwargs["timeout"] = timeout
+                if socketcan_tx_retry_count is not None:
+                    kwargs["tx_retry_count"] = int(socketcan_tx_retry_count)
                 adapter = SocketCan(**kwargs).open()
             elif selected_backend == "serial-at":
                 kwargs = {"port": port, "baud": baud}

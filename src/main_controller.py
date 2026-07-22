@@ -5742,6 +5742,21 @@ def main():
         default=3,
         help="fault after this many consecutive CAN batches exceed the 5 ms budget",
     )
+    parser.add_argument(
+        "--can-tx-timeout-ms",
+        type=float,
+        default=1.0,
+        help=(
+            "maximum SocketCAN wait for each frame submission; production uses "
+            "no retry so a full queue faults instead of delaying newer targets"
+        ),
+    )
+    parser.add_argument(
+        "--python-thread-switch-ms",
+        type=float,
+        default=1.0,
+        help="CPython thread handoff interval used by the 200 Hz CAN sender",
+    )
 
     parser.add_argument("--command-source", choices=["fixed", "joystick", "keyboard"], default="keyboard")
 
@@ -6517,6 +6532,18 @@ def main():
     if int(args.can_command_fault_consecutive) <= 0:
         parser.error("--can-command-fault-consecutive must be > 0")
     if (
+        not np.isfinite(args.can_tx_timeout_ms)
+        or args.can_tx_timeout_ms < 0.0
+        or args.can_tx_timeout_ms > 2.5
+    ):
+        parser.error("--can-tx-timeout-ms must be finite and within 0.0..2.5")
+    if (
+        not np.isfinite(args.python_thread_switch_ms)
+        or args.python_thread_switch_ms < 0.25
+        or args.python_thread_switch_ms > 2.5
+    ):
+        parser.error("--python-thread-switch-ms must be finite and within 0.25..2.5")
+    if (
         not np.isfinite(args.pose_transition_speed_rad_s)
         or args.pose_transition_speed_rad_s <= 0.0
     ):
@@ -6536,6 +6563,11 @@ def main():
     except ValueError as exc:
         print("ERROR:", exc)
         return 1
+
+    # The low-level CAN sender is a dedicated Python thread. CPython's usual
+    # 5 ms handoff interval equals the entire 200 Hz CAN period, allowing a
+    # busy 50 Hz policy/pose cycle to starve it for a complete deadline.
+    sys.setswitchinterval(0.001 * float(args.python_thread_switch_ms))
 
     if args.mode == "motors":
         print("ERROR: --mode motors is intentionally blocked for now.")
@@ -7048,6 +7080,8 @@ def main():
                     baud=args.baud,
                     backend=args.can_backend,
                     bitrate=args.can_bitrate,
+                    timeout=0.001 * float(args.can_tx_timeout_ms),
+                    socketcan_tx_retry_count=0,
                 )
             except Exception:
                 raise
