@@ -949,6 +949,13 @@ class PolicyTorqueRamp:
     def effective_max(self):
         return max(self.effective_by_joint.values(), default=0.0)
 
+    @property
+    def is_fixed(self):
+        return all(
+            abs(self.final_by_joint[name] - self.start_by_joint[name]) <= 1.0e-9
+            for name in self.policy_order
+        )
+
     def _reason(
         self,
         entry_complete,
@@ -3990,6 +3997,8 @@ def run_policy_loop(
     root_observation_seen = False
     root_encoder_faulted = False
     last_suspension_status_time = -1.0e9
+    last_timing_breakdown_print_time = -1.0e9
+    policy_summary_stride = max(1, min(5, int(log_every)))
     command_build_s = 0.0
 
     def build_loop_mit_commands(q_target, phase, feedback_by_joint=None):
@@ -4927,7 +4936,11 @@ def run_policy_loop(
                     feedback_by_joint=fresh_feedback_for_commands,
                 )
             )
-            if torque_ramp is not None and not policy_shadow_mode:
+            if (
+                torque_ramp is not None
+                and not policy_shadow_mode
+                and not torque_ramp.is_fixed
+            ):
                 measured_supervision = measured_torque_supervisor.update(estimator)
                 measured_soft_limit_active_by_joint_for_log = measured_supervision[
                     "soft_limit_active_by_joint"
@@ -5465,16 +5478,17 @@ def run_policy_loop(
                         float(feedback[name]["joint_velocity_finite_difference"])
                         for name in runner.policy_order
                     ], dtype=np.float32))
-            update_policy_joint_summary(
-                policy_joint_summary,
-                runner.policy_order,
-                commands,
-                estimator,
-                q_actor_target_for_log,
-                q_sent_target,
-                target_joint_limited=target_joint_limited_mask,
-                target_rate_limited=target_rate_limited_mask,
-            )
+            if step % policy_summary_stride == 0:
+                update_policy_joint_summary(
+                    policy_joint_summary,
+                    runner.policy_order,
+                    commands,
+                    estimator,
+                    q_actor_target_for_log,
+                    q_sent_target,
+                    target_joint_limited=target_joint_limited_mask,
+                    target_rate_limited=target_rate_limited_mask,
+                )
             now_status = time.monotonic()
             if (
                 float(suspension_status_seconds) > 0.0
@@ -5566,7 +5580,13 @@ def run_policy_loop(
 
         step += 1
         timing = scheduler.finish_cycle(cycle_start)
-        if timing.work_overrun and not timing.timing_fault:
+        timing_warning_now = time.monotonic()
+        if (
+            timing.work_overrun
+            and not timing.timing_fault
+            and timing_warning_now - last_timing_breakdown_print_time >= 0.5
+        ):
+            last_timing_breakdown_print_time = timing_warning_now
             print(
                 timing_breakdown_line(
                     cycle_work_s=timing.cycle_work_s,

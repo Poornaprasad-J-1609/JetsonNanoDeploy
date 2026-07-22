@@ -612,6 +612,15 @@ def test_policy_torque_ramp_waits_for_clean_entry_and_resets_after_violations():
     assert max(effective.values()) == pytest.approx(14.0)
 
 
+def test_policy_torque_ramp_identifies_fixed_stage():
+    runner = PolicyRunner()
+    fixed = constant_joint_map(runner.policy_order, 14.0)
+    staged = constant_joint_map(runner.policy_order, 18.0)
+
+    assert PolicyTorqueRamp(runner.policy_order, fixed, fixed).is_fixed
+    assert not PolicyTorqueRamp(runner.policy_order, fixed, staged).is_fixed
+
+
 def test_measured_torque_supervisor_uses_rolling_window_soft_limit():
     runner = PolicyRunner()
 

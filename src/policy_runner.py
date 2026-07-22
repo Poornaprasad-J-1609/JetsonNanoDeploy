@@ -367,7 +367,7 @@ class PolicyRunner:
             raise ValueError("Policy observation indices 0:3 must be exactly [0, 0, 0]")
 
         obs_t = torch.from_numpy(obs).unsqueeze(0)
-        with torch.no_grad():
+        with torch.inference_mode():
             action = self.policy(obs_t).squeeze(0).cpu().numpy()
         action = action.astype(np.float32)
         if action.shape != (EXPECTED_ACTION_DIM,):
