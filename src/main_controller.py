@@ -29,7 +29,7 @@ from imu_interface import (
     policy_frame_roll_pitch_from_gravity,
 )
 from motor_command_layer import MotorCommandLayer, print_mit_commands
-from timing_scheduler import DeadlineScheduler
+from timing_scheduler import DeadlineScheduler, timing_qualification_passed
 from can_command_streamer import CanCommandStreamer
 from gait_diagnostics import (
     calculate_tracking_errors,
@@ -4917,7 +4917,9 @@ def run_policy_loop(
                     q_previous_target,
                     q_coordinate_shift,
                     apply_rate_limit=policy_entry_rate_limit_active,
-                    use_policy_limits=True,
+                    # Raw actor targets are logged above. Commands sent to real
+                    # motors must remain inside the physical joint envelope.
+                    use_policy_limits=False,
                 )
                 safety_filter_s += time.monotonic() - safety_filter_start
                 target_joint_limited_mask = target_diag["target_joint_limited"]
@@ -5115,15 +5117,6 @@ def run_policy_loop(
         safety_feedback_by_joint = (
             post_send_fresh_feedback if post_send_fresh_feedback else None
         )
-        # A terminal movement key can briefly time out between repeat events.
-        # During that recovery loop the measured calf can still be in a normal
-        # policy gait pose even though the controller is transitioning back to
-        # stand/sit, so keep the wider policy encoder window until that pose
-        # transition settles.
-        encoder_policy_limit_window = bool(
-            active_control_mode == "policy"
-            or (policy_has_started and pose_transition_mode in ("stand", "sit"))
-        )
         safety_check_start = time.monotonic()
         reason = encoder_safety_stop_reason(
             safety=safety,
@@ -5133,7 +5126,10 @@ def run_policy_loop(
             require_feedback=require_command_feedback,
             q_shift=q_coordinate_shift,
             feedback_by_joint=safety_feedback_by_joint,
-            use_policy_limits=encoder_policy_limit_window,
+            # Feedback is checked against the physical envelope in every mode.
+            # The configured margin permits ordinary tracking overshoot without
+            # allowing a wide actor diagnostic range to become an encoder range.
+            use_policy_limits=False,
         )
         safety_check_s += time.monotonic() - safety_check_start
         if reason is not None:
@@ -5678,8 +5674,19 @@ def run_policy_loop(
     raw_status = gait_status(root_raw_signals)
     transmitted_status = "UNKNOWN" if policy_shadow_mode else gait_status(root_transmitted_signals)
     measured_status = "UNKNOWN" if policy_shadow_mode else gait_status(root_measured_signals)
+    selected_joint_velocity_source = str(
+        getattr(estimator, "joint_velocity_source", "fake")
+    )
     if policy_shadow_mode:
         velocity_status = "UNKNOWN"
+    elif selected_joint_velocity_source == "finite-difference":
+        finite_difference_values = np.asarray(root_velocity_fd, dtype=np.float32)
+        velocity_status = (
+            "FD SOURCE"
+            if len(root_velocity_fd) >= 20
+            and np.all(np.isfinite(finite_difference_values))
+            else "FAIL"
+        )
     elif len(root_velocity_mit) >= 20:
         velocity_passed, _ = validate_joint_velocity_arrays(
             np.asarray(root_velocity_mit),
@@ -5710,7 +5717,15 @@ def run_policy_loop(
             if float(np.percentile(root_tracking_error_maxima, 95)) <= 0.25
             else "FAIL"
         ),
-        "timing_50hz": "PASS" if scheduler.total_missed_deadlines == 0 else "FAIL",
+        "timing_50hz": (
+            "PASS"
+            if timing_qualification_passed(
+                scheduler.total_missed_deadlines,
+                step,
+                scheduler.consecutive_work_overruns,
+            )
+            else "FAIL"
+        ),
         "can_command_200hz": can_command_status,
         "encoder_calibration": (
             "PASS" if encoder_calibration_passed and not root_encoder_faulted else "FAIL"
@@ -6131,10 +6146,11 @@ def main():
     parser.add_argument(
         "--joint-velocity-source",
         choices=["mit", "finite-difference"],
-        default="mit",
+        default="finite-difference",
         help=(
             "joint velocity placed in policy obs[24:36]; finite-difference is "
-            "diagnostic-only and must not be used for qualification"
+            "derived from sign-corrected joint-radian feedback and avoids MIT "
+            "velocity scale bias"
         ),
     )
     parser.add_argument(

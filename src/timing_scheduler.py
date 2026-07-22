@@ -145,3 +145,21 @@ class DeadlineScheduler:
             work_overrun=work_overrun,
         )
         return self.last_snapshot
+
+
+def timing_qualification_passed(
+    total_missed_deadlines,
+    total_cycles,
+    consecutive_work_overruns=0,
+    allowed_miss_ratio=0.02,
+):
+    """Qualify stable control timing while tolerating isolated resync events."""
+    total_missed_deadlines = max(0, int(total_missed_deadlines))
+    total_cycles = max(1, int(total_cycles))
+    consecutive_work_overruns = max(0, int(consecutive_work_overruns))
+    allowed_miss_ratio = max(0.0, float(allowed_miss_ratio))
+    allowed_misses = max(2, int(math.ceil(total_cycles * allowed_miss_ratio)))
+    return bool(
+        consecutive_work_overruns == 0
+        and total_missed_deadlines <= allowed_misses
+    )

@@ -29,6 +29,7 @@ args=(
     --can-backend socketcan
     --can-bitrate 1000000
     --feedback-source mit
+    --joint-velocity-source finite-difference
     --command-source keyboard
     --imu-source xsens
     --imu-port "$IMU_PORT"

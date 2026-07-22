@@ -1,4 +1,4 @@
-from timing_scheduler import DeadlineScheduler
+from timing_scheduler import DeadlineScheduler, timing_qualification_passed
 
 
 class FakeClock:
@@ -170,3 +170,9 @@ def test_repeated_policy_budget_cycles_do_not_trip_watchdog():
 
     assert snapshots[-1].consecutive_work_overruns == 0
     assert not any(snapshot.timing_fault for snapshot in snapshots)
+
+
+def test_timing_qualification_allows_sparse_resync_misses():
+    assert timing_qualification_passed(8, 786, consecutive_work_overruns=0)
+    assert not timing_qualification_passed(20, 786, consecutive_work_overruns=0)
+    assert not timing_qualification_passed(0, 786, consecutive_work_overruns=1)

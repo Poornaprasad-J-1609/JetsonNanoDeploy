@@ -658,13 +658,12 @@ class MotorCommandLayer:
         self.maybe_reload_joint_limits()
         if not math.isfinite(float(q_des)):
             raise ValueError(f"{joint_name}: requested joint target is NaN or Inf")
-        if phase == "policy":
-            q_min, q_max = self.policy_target_limits.get(
-                joint_name,
-                self.hard_joint_limits[joint_name],
-            )
-        else:
-            q_min, q_max = self.hard_joint_limits[joint_name]
+        # The actor may request targets beyond the physical articulation range,
+        # just as a simulator actuator target may sit beyond a joint stop. Real
+        # hardware has no simulator constraint solver to absorb that request,
+        # so the final packet boundary must always enforce the physical limits.
+        # Wider policy limits remain useful for raw-actor diagnostics only.
+        q_min, q_max = self.hard_joint_limits[joint_name]
         shift = float(self.joint_coordinate_shifts.get(joint_name, 0.0))
         q_min += shift
         q_max += shift

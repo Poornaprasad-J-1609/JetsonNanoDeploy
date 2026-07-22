@@ -1,8 +1,8 @@
 # Runtime control limits and switches.
 #
 # Set enabled: false on a section to let the policy command through that soft
-# limit layer. The hard joint limits in config/joint_limits.yaml are still
-# enforced in the final MIT packet builder before anything is sent to motors.
+# limit layer. Physical joint limits in config/joint_limits.yaml are always
+# enforced in the safety filter and final MIT packet builder.
 # The joystick always owns commanded vx/vy/yaw. RobStride protocol packing still
 # saturates to the physical protocol ranges in mit_motor_control.yaml.
 

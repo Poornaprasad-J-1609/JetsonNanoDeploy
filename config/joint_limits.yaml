@@ -50,9 +50,8 @@ joint_limits:
   FL_calf_joint:
     min: 0.0
     max: 1.36
-    # Walking policy targets follow q_default + 0.25 * raw_action. Keep this
-    # wider than the crouch hard stop so the actor's gait is not flattened.
-    # Measured encoder sanity still uses min/max plus margin below.
+    # Raw actor targets can exceed the physical range and remain visible in
+    # diagnostics. Runtime commands are always clamped to min/max.
     policy_min: -2.0
     policy_max: 2.0
     dq_max_per_step: 0.080

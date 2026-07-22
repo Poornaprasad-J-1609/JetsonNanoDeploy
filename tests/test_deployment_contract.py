@@ -475,6 +475,38 @@ def test_policy_torque_limit_still_limits_position_target():
     assert abs(command["tau_pd_est"]) <= 12.05
 
 
+def test_policy_packet_boundary_uses_physical_not_diagnostic_limits():
+    runner = PolicyRunner()
+    motor_ids = load_yaml(ROOT / "config" / "motor_ids.yaml")["motor_ids"]
+    joint_name = "BR_calf_joint"
+    joint_index = runner.policy_order.index(joint_name)
+    layer = MotorCommandLayer(
+        runner.policy_order,
+        motor_ids,
+        active_joints=[joint_name],
+        joint_can_bus=resolve_joint_can_bus(runner.policy_order, 1),
+    )
+    assert layer.policy_target_limits[joint_name][1] > 0.0
+    assert layer.hard_joint_limits[joint_name][1] == pytest.approx(0.0)
+    assert layer.apply_hard_joint_limit(joint_name, 0.50, phase="policy") == pytest.approx(0.0)
+
+    q_target = np.zeros(12, dtype=np.float32)
+    q_target[joint_index] = 0.50
+    command = layer.build_mit_commands(
+        q_target,
+        phase="policy",
+        feedback_by_joint={
+            joint_name: {
+                "position_raw": 0.0,
+                "joint_position": 0.0,
+                "joint_velocity": 0.0,
+            }
+        },
+    )[0]
+    assert command["q_requested"] == pytest.approx(0.50)
+    assert command["q_des"] == pytest.approx(0.0)
+
+
 def test_per_joint_policy_torque_limits_are_preserved_in_commands():
     runner = PolicyRunner()
     motor_ids = load_yaml(ROOT / "config" / "motor_ids.yaml")["motor_ids"]
