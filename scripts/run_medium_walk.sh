@@ -72,7 +72,8 @@ args=(
     --pose-transition-speed-rad-s 0.55
     --pose-transition-min-seconds 1.2
     --stand-ready-error-rad 0.25
-    --pose-pd-torque-limit 16
+    # Use the phase-specific YAML pose limits: crouch remains conservative,
+    # while stand/hold have enough static authority for the 47 kg ground load.
     --feedback-timeout 0.05
     --fresh-feedback-max-age 0.08
     --policy-steps 0
