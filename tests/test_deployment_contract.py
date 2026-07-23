@@ -548,6 +548,45 @@ def test_configured_pose_path_matches_proven_e9a4a13_packet_behavior():
     assert command["kd_effective"] == pytest.approx(36.0, abs=0.1)
 
 
+def test_policy_uses_official_120_4_gains_without_changing_pose_gains():
+    runner = PolicyRunner()
+    motor_ids = load_yaml(ROOT / "config" / "motor_ids.yaml")["motor_ids"]
+    joint_name = "FR_calf_joint"
+    joint_index = runner.policy_order.index(joint_name)
+    layer = MotorCommandLayer(
+        runner.policy_order,
+        motor_ids,
+        active_joints=[joint_name],
+        joint_can_bus=resolve_joint_can_bus(runner.policy_order, 1),
+    )
+    q_target = np.zeros(12, dtype=np.float32)
+    feedback = {
+        joint_name: {
+            "position_raw": 0.0,
+            "joint_position": 0.0,
+            "joint_velocity": 0.0,
+        }
+    }
+
+    policy_command = layer.build_mit_commands(
+        q_target,
+        phase="policy",
+        feedback_by_joint=feedback,
+    )[0]
+    pose_command = layer.build_mit_commands(
+        q_target,
+        phase="stand",
+        feedback_by_joint=feedback,
+    )[0]
+
+    assert policy_command["command_encoding"] == "official"
+    assert policy_command["kp_effective"] == pytest.approx(120.0, abs=0.1)
+    assert policy_command["kd_effective"] == pytest.approx(4.0, abs=0.01)
+    assert pose_command["command_encoding"] == "legacy_9b03a77"
+    assert pose_command["kp_effective"] == pytest.approx(750.0, abs=0.1)
+    assert pose_command["kd_effective"] == pytest.approx(36.0, abs=0.1)
+
+
 def test_policy_torque_limit_still_limits_position_target():
     runner = PolicyRunner()
     motor_ids = load_yaml(ROOT / "config" / "motor_ids.yaml")["motor_ids"]
