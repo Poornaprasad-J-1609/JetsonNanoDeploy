@@ -85,27 +85,27 @@ gains:
 
   policy:
     hip:
-      kp: 120.0
-      kd: 4.0
+      kp: 80.0
+      kd: 2.0
     thigh:
-      kp: 120.0
-      kd: 4.0
+      kp: 80.0
+      kd: 2.0
     calf:
-      kp: 120.0
-      kd: 4.0
+      kp: 80.0
+      kd: 2.0
     joints:
-      BL_hip_joint: {kp: 120.0, kd: 4.0}
-      BR_hip_joint: {kp: 120.0, kd: 4.0}
-      FL_hip_joint: {kp: 120.0, kd: 4.0}
-      FR_hip_joint: {kp: 120.0, kd: 4.0}
-      BL_thigh_joint: {kp: 120.0, kd: 4.0}
-      BR_thigh_joint: {kp: 120.0, kd: 4.0}
-      FL_thigh_joint: {kp: 120.0, kd: 4.0}
-      FR_thigh_joint: {kp: 120.0, kd: 4.0}
-      BL_calf_joint: {kp: 120.0, kd: 4.0}
-      BR_calf_joint: {kp: 120.0, kd: 4.0}
-      FL_calf_joint: {kp: 120.0, kd: 4.0}
-      FR_calf_joint: {kp: 120.0, kd: 4.0}
+      BL_hip_joint: {kp: 80.0, kd: 2.0}
+      BR_hip_joint: {kp: 80.0, kd: 2.0}
+      FL_hip_joint: {kp: 80.0, kd: 2.0}
+      FR_hip_joint: {kp: 80.0, kd: 2.0}
+      BL_thigh_joint: {kp: 80.0, kd: 2.0}
+      BR_thigh_joint: {kp: 80.0, kd: 2.0}
+      FL_thigh_joint: {kp: 80.0, kd: 2.0}
+      FR_thigh_joint: {kp: 80.0, kd: 2.0}
+      BL_calf_joint: {kp: 80.0, kd: 2.0}
+      BR_calf_joint: {kp: 80.0, kd: 2.0}
+      FL_calf_joint: {kp: 80.0, kd: 2.0}
+      FR_calf_joint: {kp: 80.0, kd: 2.0}
 
   # These take over only after stand has settled and direct IMU stabilization
   # is explicitly enabled.

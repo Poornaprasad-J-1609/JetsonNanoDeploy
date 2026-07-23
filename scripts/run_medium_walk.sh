@@ -65,6 +65,10 @@ args=(
     --policy-action-smoothing 0.35
     --policy-action-delta-limit 0.20
     --policy-entry-ramp-seconds 2.0
+    # Real feedback caused the unbounded actor to reach |action|=10.34 after
+    # entry. Keep the trained 0.25 action scale, but activate the configured
+    # clip/smoothing/delta pipeline before targets reach loaded hardware.
+    --no-exact-policy-after-entry
     # Loaded ground profile. The successful stand log needs 23-26 Nm steady
     # rear-leg support and reached 50.8 Nm transiently. Enter policy at 30 Nm
     # and ramp toward the bounded 40 Nm software ceiling only while clean.
@@ -81,7 +85,7 @@ args=(
     --feedback-timeout 0.05
     --fresh-feedback-max-age 0.08
     --policy-steps 0
-    --log-every 5
+    --log-every 10
     --no-auto-push-log
 )
 

@@ -557,7 +557,7 @@ def test_configured_pose_path_matches_proven_e9a4a13_packet_behavior():
     assert command["kd_effective"] == pytest.approx(36.0, abs=0.1)
 
 
-def test_policy_uses_official_120_4_gains_without_changing_pose_gains():
+def test_policy_uses_official_80_2_gains_without_changing_pose_gains():
     runner = PolicyRunner()
     motor_ids = load_yaml(ROOT / "config" / "motor_ids.yaml")["motor_ids"]
     joint_name = "FR_calf_joint"
@@ -589,8 +589,8 @@ def test_policy_uses_official_120_4_gains_without_changing_pose_gains():
     )[0]
 
     assert policy_command["command_encoding"] == "official"
-    assert policy_command["kp_effective"] == pytest.approx(120.0, abs=0.1)
-    assert policy_command["kd_effective"] == pytest.approx(4.0, abs=0.01)
+    assert policy_command["kp_effective"] == pytest.approx(80.0, abs=0.1)
+    assert policy_command["kd_effective"] == pytest.approx(2.0, abs=0.01)
     assert pose_command["command_encoding"] == "legacy_9b03a77"
     assert pose_command["kp_effective"] == pytest.approx(750.0, abs=0.1)
     assert pose_command["kd_effective"] == pytest.approx(36.0, abs=0.1)
