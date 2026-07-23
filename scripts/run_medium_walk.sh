@@ -65,10 +65,14 @@ args=(
     --policy-action-smoothing 0.35
     --policy-action-delta-limit 0.20
     --policy-entry-ramp-seconds 2.0
-    # Stage20 did not materially improve gait frequency and caused more ramp
-    # backoffs. Stage18 provides the better measured authority/smoothness
-    # balance; the controller now backs it off gradually instead of snapping.
-    --torque-profile-stage stage18
+    # Loaded ground profile. The successful stand log needs 23-26 Nm steady
+    # rear-leg support and reached 50.8 Nm transiently. Enter policy at 24 Nm
+    # and ramp toward the bounded 40 Nm software ceiling only while clean.
+    --torque-profile-stage stage40
+    --policy-pd-torque-limit-start 24
+    --policy-pd-torque-limit-final 40
+    --policy-torque-ramp-max-measured-torque 40
+    --acknowledge-40nm-suspension-test
     --pose-transition-speed-rad-s 0.55
     --pose-transition-min-seconds 1.2
     --stand-ready-error-rad 0.25
