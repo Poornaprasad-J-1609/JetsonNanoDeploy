@@ -65,10 +65,10 @@ args=(
     --policy-action-smoothing 0.35
     --policy-action-delta-limit 0.20
     --policy-entry-ramp-seconds 2.0
-    # The July 23 run saturated BR/FL calf authority on 97%/80% of forward
-    # cycles at fixed 14 Nm. This stage starts at 14 Nm and ramps to 18 Nm only
-    # while feedback, timing, IMU, tracking, and measured torque remain clean.
-    --torque-profile-stage stage18
+    # Stage18 improved motion, but the following July 23 runs still limited
+    # 38-59% of forward calf commands. Stage20 remains a gradual 14 Nm start
+    # and advances only while all ramp supervision checks remain clean.
+    --torque-profile-stage stage20
     --pose-transition-speed-rad-s 0.55
     --pose-transition-min-seconds 1.2
     --stand-ready-error-rad 0.25

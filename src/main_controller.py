@@ -756,6 +756,7 @@ def wait_for_live_policy_imu(
 TORQUE_PROFILE_STAGES = {
     "stage14": (14.0, 14.0),
     "stage18": (14.0, 18.0),
+    "stage20": (14.0, 20.0),
     "stage24": (14.0, 24.0),
     "stage30": (14.0, 30.0),
     "stage40": (14.0, 40.0),
