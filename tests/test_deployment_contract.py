@@ -387,6 +387,12 @@ def test_main_controller_safe_defaults_are_pinned():
     assert "if not bool(exact_policy_after_entry):" in source
 
 
+def test_policy_runner_uses_short_thread_handoff_for_can_concurrency():
+    runner = PolicyRunner()
+    assert runner.torch_thread_count >= 1
+    assert runner.python_gil_switch_interval_s == pytest.approx(0.001)
+
+
 def test_loaded_stand_readiness_is_separate_from_zero_calibration():
     # Values measured in the 2026-07-22 hardware log: the loaded back calves
     # settled near 0.20 rad while the complete synchronized stand target was 0.

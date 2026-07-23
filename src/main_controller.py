@@ -5061,6 +5061,12 @@ def run_policy_loop(
                     estimator,
                     max_roll_pitch_deg=imu_active_max_roll_pitch_deg,
                 )
+                previous_effective_torque_limits = {
+                    joint_name: motor_layer.policy_pd_torque_limit_for_joint(
+                        joint_name
+                    )
+                    for joint_name in motor_layer.active_joints
+                }
                 effective_torque_limits = torque_ramp.update(
                     steady_policy_elapsed_s=float(policy_steady_cycles) * float(dt),
                     entry_complete=float(policy_entry_scale) >= 0.999,
@@ -5080,19 +5086,30 @@ def run_policy_loop(
                     timing_fault=bool(scheduler.last_snapshot.work_overrun),
                     print_fn=print,
                 )
-                motor_layer.set_policy_pd_torque_limits(
-                    effective_torque_limits,
-                    start_limits_by_joint=torque_ramp.start_by_joint,
-                    final_limits_by_joint=torque_ramp.final_by_joint,
-                )
                 torque_ramp_state_for_log = torque_ramp.telemetry()
-                # A changed ramp limit affects this cycle's transmitted target.
-                commands = build_loop_mit_commands(
-                    q_safe_target,
-                    phase="policy",
-                    feedback_by_joint=fresh_feedback_for_commands,
-                    prelimit_q_target=q_policy_target,
+                torque_limits_changed = any(
+                    abs(
+                        float(effective_torque_limits[joint_name])
+                        - float(previous_effective_torque_limits[joint_name])
+                    )
+                    > 1.0e-9
+                    for joint_name in motor_layer.active_joints
                 )
+                if torque_limits_changed:
+                    motor_layer.set_policy_pd_torque_limits(
+                        effective_torque_limits,
+                        start_limits_by_joint=torque_ramp.start_by_joint,
+                        final_limits_by_joint=torque_ramp.final_by_joint,
+                    )
+                    # A changed ramp limit affects this cycle's transmitted
+                    # target. A paused/unchanged ramp already has the correct
+                    # packet set and must not pay for a duplicate 12-motor build.
+                    commands = build_loop_mit_commands(
+                        q_safe_target,
+                        phase="policy",
+                        feedback_by_joint=fresh_feedback_for_commands,
+                        prelimit_q_target=q_policy_target,
+                    )
             if float(policy_entry_scale) >= 0.999:
                 policy_steady_cycles += 1
                 policy_target_clip_counts += (
@@ -7099,6 +7116,10 @@ def main():
     print("Policy format:", runner.policy_format)
     print("Policy obs/actions:", runner.observation_dim, runner.action_dim)
     print("Policy Torch CPU threads:", runner.torch_thread_count)
+    print(
+        "Python GIL switch interval: "
+        f"{1000.0 * runner.python_gil_switch_interval_s:.2f} ms"
+    )
     print(
         "Control rate:",
         f"runtime={runtime_control_hz:.2f} Hz",
