@@ -420,6 +420,60 @@ def test_policy_and_pose_pd_torque_limits_are_separate():
     assert layer.policy_pd_torque_limit_for_joint(runner.policy_order[0]) == pytest.approx(21.0)
 
 
+def test_periodic_commands_update_independent_can_adapters_in_parallel():
+    class SlowPeriodicBus:
+        def __init__(self):
+            self.calls = []
+
+        def update_periodic_sequence(self, frames, period_s):
+            time.sleep(0.030)
+            self.calls.append((list(frames), float(period_s)))
+            return len(frames)
+
+    runner = PolicyRunner()
+    motor_ids = load_yaml(ROOT / "config" / "motor_ids.yaml")["motor_ids"]
+    front_joint = "FR_hip_joint"
+    back_joint = "BR_hip_joint"
+    layer = MotorCommandLayer(
+        runner.policy_order,
+        motor_ids,
+        active_joints=[front_joint, back_joint],
+        joint_can_bus={front_joint: "front", back_joint: "back"},
+    )
+    front_bus = SlowPeriodicBus()
+    back_bus = SlowPeriodicBus()
+    commands = [
+        {
+            "joint_name": front_joint,
+            "bus_name": "front",
+            "can_id": 1,
+            "data": bytes(8),
+        },
+        {
+            "joint_name": back_joint,
+            "bus_name": "back",
+            "can_id": 7,
+            "data": bytes(8),
+        },
+    ]
+
+    try:
+        started = time.monotonic()
+        count = layer.update_periodic_commands(
+            {"front": front_bus, "back": back_bus},
+            commands,
+            period_s=0.005,
+        )
+        elapsed = time.monotonic() - started
+    finally:
+        layer.close()
+
+    assert count == 2
+    assert elapsed < 0.050
+    assert front_bus.calls == [([(1, bytes(8))], 0.005)]
+    assert back_bus.calls == [([(7, bytes(8))], 0.005)]
+
+
 def test_pose_torque_limit_preserves_synchronized_target_and_scales_impedance():
     runner = PolicyRunner()
     motor_ids = load_yaml(ROOT / "config" / "motor_ids.yaml")["motor_ids"]

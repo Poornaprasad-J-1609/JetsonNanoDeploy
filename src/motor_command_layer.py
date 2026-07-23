@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from concurrent.futures import ThreadPoolExecutor
 import math
 from pathlib import Path
 import time
@@ -261,11 +262,17 @@ class MotorCommandLayer:
         self.active_joints = self.resolve_active_joints(active_joints)
         self.joint_can_bus = dict(joint_can_bus) if joint_can_bus else {}
         self.joint_coordinate_shifts = {joint_name: 0.0 for joint_name in self.policy_order}
+        self._periodic_update_executor = None
+        self._periodic_update_worker_count = 0
         self.reload_joint_limits(force=True)
         self.reload_control_limits(force=True)
 
     def close(self):
-        return None
+        executor = self._periodic_update_executor
+        self._periodic_update_executor = None
+        self._periodic_update_worker_count = 0
+        if executor is not None:
+            executor.shutdown(wait=True, cancel_futures=True)
 
     def _load_official_mit_ranges(self, model):
         try:
@@ -1310,7 +1317,14 @@ class MotorCommandLayer:
         return self._send_raw_like_commands(buses, commands)
 
     def update_periodic_commands(self, buses, commands, period_s):
-        """Update latest targets while SocketCAN repeats them in the kernel."""
+        """Update latest targets while SocketCAN repeats them in the kernel.
+
+        Separate SocketCAN adapters are independent transport lanes. Updating
+        their BCM tasks serially makes a two-adapter target refresh take the
+        sum of both lane latencies and can starve the 50 Hz policy producer.
+        Keep frame order serial within each adapter, but refresh adapters in
+        parallel using a persistent pool so no threads are created per cycle.
+        """
         commands = list(commands)
         grouped = {}
         for cmd in commands:
@@ -1318,13 +1332,44 @@ class MotorCommandLayer:
             grouped.setdefault(id(bus), {"bus": bus, "frames": []})["frames"].append(
                 (cmd["can_id"], cmd["data"])
             )
-        count = 0
-        for group in grouped.values():
+
+        groups = list(grouped.values())
+        for group in groups:
             bus = group["bus"]
             if not hasattr(bus, "update_periodic_sequence"):
                 raise RuntimeError("CAN transport does not support kernel periodic commands")
-            count += int(bus.update_periodic_sequence(group["frames"], period_s))
-        return count
+
+        if len(groups) <= 1:
+            if not groups:
+                return 0
+            group = groups[0]
+            return int(
+                group["bus"].update_periodic_sequence(group["frames"], period_s)
+            )
+
+        worker_count = len(groups)
+        if (
+            self._periodic_update_executor is None
+            or self._periodic_update_worker_count != worker_count
+        ):
+            old_executor = self._periodic_update_executor
+            if old_executor is not None:
+                old_executor.shutdown(wait=True, cancel_futures=True)
+            self._periodic_update_executor = ThreadPoolExecutor(
+                max_workers=worker_count,
+                thread_name_prefix="grallator-can-lane",
+            )
+            self._periodic_update_worker_count = worker_count
+
+        futures = [
+            self._periodic_update_executor.submit(
+                group["bus"].update_periodic_sequence,
+                group["frames"],
+                period_s,
+            )
+            for group in groups
+        ]
+        return sum(int(future.result()) for future in futures)
 
     @staticmethod
     def stop_periodic_commands(buses):
