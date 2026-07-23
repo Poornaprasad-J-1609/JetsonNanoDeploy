@@ -6808,9 +6808,13 @@ def main():
                 joint_name: float(value) * float(args.policy_pd_torque_scale)
                 for joint_name, value in torque_final_by_joint.items()
             }
+    calibration_required = requires_calf_endpoint_gate(
+        four_bar_enabled,
+        torque_final_by_joint,
+    )
     calibration_ok = True
     calibration_reason = "not required for disabled nonlinear transmission"
-    if requires_calf_endpoint_gate(four_bar_enabled, torque_final_by_joint):
+    if calibration_required:
         calibration_ok, calibration_reason = calf_calibration_gate(
             args.calf_calibration_recommendation,
             joint_name="FL_calf_joint",
@@ -7112,7 +7116,11 @@ def main():
     root_cause_results = {
         "policy_joint_order": "PASS",
         "motor_routing": "PASS",
-        "encoder_calibration": "PASS" if calibration_ok else "FAIL",
+        "encoder_calibration": (
+            "PASS" if calibration_required and calibration_ok else
+            "FAIL" if calibration_required else
+            "NOT REQUIRED"
+        ),
         "ground_contact_validity": "NOT TESTED",
     }
 
