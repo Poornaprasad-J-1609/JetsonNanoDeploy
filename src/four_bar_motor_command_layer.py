@@ -170,6 +170,11 @@ class FourBarMotorCommandLayer(MotorCommandLayer):
         phase="policy",
         feedback_by_joint=None,
         joint_velocity_target=None,
+        prelimit_q_target=None,
+        gain_blend_from_phase=None,
+        gain_blend_alpha=1.0,
+        previous_command_q=None,
+        max_command_delta=None,
     ):
         # Parent code performs virtual joint clipping, phase-specific gains,
         # virtual PD torque limiting, and command bookkeeping first.
@@ -178,6 +183,11 @@ class FourBarMotorCommandLayer(MotorCommandLayer):
             phase=phase,
             feedback_by_joint=feedback_by_joint,
             joint_velocity_target=joint_velocity_target,
+            prelimit_q_target=prelimit_q_target,
+            gain_blend_from_phase=gain_blend_from_phase,
+            gain_blend_alpha=gain_blend_alpha,
+            previous_command_q=previous_command_q,
+            max_command_delta=max_command_delta,
         )
         feedback_by_joint = feedback_by_joint or {}
         for command in commands:

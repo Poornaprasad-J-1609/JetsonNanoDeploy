@@ -29,6 +29,7 @@ from main_controller import (
     constant_joint_map,
     requires_calf_endpoint_gate,
     runtime_stand_command_phase,
+    policy_entry_gain_blend_scale,
     shifted_safety_filter_with_diagnostics,
     stand_ready_for_walking,
     torque_ramp_supervision_due,
@@ -602,6 +603,155 @@ def test_policy_uses_official_80_2_gains_without_changing_pose_gains():
     assert pose_command["command_encoding"] == "legacy_9b03a77"
     assert pose_command["kp_effective"] == pytest.approx(750.0, abs=0.1)
     assert pose_command["kd_effective"] == pytest.approx(36.0, abs=0.1)
+
+
+def test_policy_entry_blends_effective_pose_gains_without_a_gain_step():
+    runner = PolicyRunner()
+    motor_ids = load_yaml(ROOT / "config" / "motor_ids.yaml")["motor_ids"]
+    joint_name = "FR_calf_joint"
+    joint_index = runner.policy_order.index(joint_name)
+    layer = MotorCommandLayer(
+        runner.policy_order,
+        motor_ids,
+        active_joints=[joint_name],
+        joint_can_bus=resolve_joint_can_bus(runner.policy_order, 1),
+    )
+    q_target = np.zeros(12, dtype=np.float32)
+    feedback = {
+        joint_name: {
+            "position_raw": 0.0,
+            "joint_position": 0.0,
+            "joint_velocity": 0.0,
+        }
+    }
+
+    entry_start = layer.build_mit_commands(
+        q_target,
+        phase="policy",
+        feedback_by_joint=feedback,
+        gain_blend_from_phase="stand",
+        gain_blend_alpha=0.0,
+    )[0]
+    entry_middle = layer.build_mit_commands(
+        q_target,
+        phase="policy",
+        feedback_by_joint=feedback,
+        gain_blend_from_phase="stand",
+        gain_blend_alpha=0.5,
+    )[0]
+    entry_end = layer.build_mit_commands(
+        q_target,
+        phase="policy",
+        feedback_by_joint=feedback,
+        gain_blend_from_phase="stand",
+        gain_blend_alpha=1.0,
+    )[0]
+
+    assert entry_start["command_encoding"] == "official"
+    assert entry_start["gain_blend_from_phase"] == "startup"
+    assert entry_start["gain_blend_alpha"] == pytest.approx(0.0)
+    assert entry_start["kp_effective"] == pytest.approx(750.0, abs=0.2)
+    assert entry_start["kd_effective"] == pytest.approx(36.0, abs=0.02)
+    assert entry_middle["kp_effective"] == pytest.approx(415.0, abs=0.2)
+    assert entry_middle["kd_effective"] == pytest.approx(19.0, abs=0.02)
+    assert entry_end["gain_blend_from_phase"] is None
+    assert entry_end["kp_effective"] == pytest.approx(80.0, abs=0.2)
+    assert entry_end["kd_effective"] == pytest.approx(2.0, abs=0.02)
+
+
+def test_policy_entry_gain_blend_remains_inside_policy_torque_limit():
+    runner = PolicyRunner()
+    motor_ids = load_yaml(ROOT / "config" / "motor_ids.yaml")["motor_ids"]
+    joint_name = "BL_thigh_joint"
+    joint_index = runner.policy_order.index(joint_name)
+    layer = MotorCommandLayer(
+        runner.policy_order,
+        motor_ids,
+        active_joints=[joint_name],
+        joint_can_bus=resolve_joint_can_bus(runner.policy_order, 1),
+    )
+    layer.set_policy_pd_torque_limit(30.0)
+    q_target = np.zeros(12, dtype=np.float32)
+    q_target[joint_index] = 0.40
+    feedback = {
+        joint_name: {
+            "position_raw": 0.0,
+            "joint_position": 0.0,
+            "joint_velocity": 0.0,
+        }
+    }
+
+    for alpha in np.linspace(0.0, 1.0, 101):
+        command = layer.build_mit_commands(
+            q_target,
+            phase="policy",
+            feedback_by_joint=feedback,
+            gain_blend_from_phase="stand",
+            gain_blend_alpha=float(alpha),
+        )[0]
+        assert abs(command["tau_pd_est"]) <= 30.05
+
+
+def test_policy_entry_gain_handoff_finishes_halfway_through_target_ramp():
+    assert policy_entry_gain_blend_scale(0.0, 2.0) == pytest.approx(0.0)
+    assert policy_entry_gain_blend_scale(0.5, 2.0) == pytest.approx(0.5)
+    assert policy_entry_gain_blend_scale(1.0, 2.0) == pytest.approx(1.0)
+    assert policy_entry_gain_blend_scale(2.0, 2.0) == pytest.approx(1.0)
+    assert policy_entry_gain_blend_scale(0.0, 0.0) == pytest.approx(1.0)
+
+
+def test_final_policy_packet_respects_position_rate_and_torque_limits():
+    runner = PolicyRunner()
+    motor_ids = load_yaml(ROOT / "config" / "motor_ids.yaml")["motor_ids"]
+    joint_name = "BL_thigh_joint"
+    joint_index = runner.policy_order.index(joint_name)
+    layer = MotorCommandLayer(
+        runner.policy_order,
+        motor_ids,
+        active_joints=[joint_name],
+        joint_can_bus=resolve_joint_can_bus(runner.policy_order, 1),
+    )
+    layer.set_policy_pd_torque_limit(30.0)
+    q_target = np.zeros(12, dtype=np.float32)
+    q_target[joint_index] = 0.60
+    q_previous = np.zeros(12, dtype=np.float32)
+    max_delta = np.full(12, 0.08, dtype=np.float32)
+    command = layer.build_mit_commands(
+        q_target,
+        phase="policy",
+        feedback_by_joint={
+            joint_name: {
+                "position_raw": 0.0,
+                "joint_position": 0.0,
+                "joint_velocity": 0.0,
+            }
+        },
+        previous_command_q=q_previous,
+        max_command_delta=max_delta,
+    )[0]
+
+    assert command["command_rate_limited"]
+    assert command["q_des"] == pytest.approx(0.08, abs=1.0e-6)
+    assert abs(command["tau_pd_est"]) <= 30.05
+
+    extreme_feedback = layer.build_mit_commands(
+        q_target,
+        phase="policy",
+        feedback_by_joint={
+            joint_name: {
+                "position_raw": -2.0,
+                "joint_position": -2.0,
+                "joint_velocity": 0.0,
+            }
+        },
+        gain_blend_from_phase="stand",
+        gain_blend_alpha=0.0,
+        previous_command_q=q_previous,
+        max_command_delta=max_delta,
+    )[0]
+    assert abs(extreme_feedback["q_des"]) <= 0.080001
+    assert extreme_feedback["impedance_scale"] < 1.0
+    assert abs(extreme_feedback["tau_pd_est"]) <= 30.05
 
 
 def test_policy_torque_limit_still_limits_position_target():

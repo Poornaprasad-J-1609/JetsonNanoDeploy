@@ -231,6 +231,15 @@ def smoothstep(alpha):
     return alpha * alpha * (3.0 - 2.0 * alpha)
 
 
+def policy_entry_gain_blend_scale(elapsed_s, entry_ramp_s):
+    """Finish the impedance handoff before the actor reaches full amplitude."""
+    elapsed_s = max(0.0, float(elapsed_s))
+    entry_ramp_s = float(entry_ramp_s)
+    if entry_ramp_s <= 0.0:
+        return 1.0
+    return smoothstep(min(1.0, 2.0 * elapsed_s / entry_ramp_s))
+
+
 def torque_ramp_supervision_due(policy_entry_scale, step, cadence_steps=5):
     """Run gradual authority supervision only after entry and at 10 Hz."""
     cadence_steps = max(1, int(cadence_steps))
@@ -4080,6 +4089,10 @@ def run_policy_loop(
         phase,
         feedback_by_joint=None,
         prelimit_q_target=None,
+        gain_blend_from_phase=None,
+        gain_blend_alpha=1.0,
+        previous_command_q=None,
+        max_command_delta=None,
     ):
         nonlocal command_build_s
         started = time.monotonic()
@@ -4088,6 +4101,10 @@ def run_policy_loop(
             phase=phase,
             feedback_by_joint=feedback_by_joint,
             prelimit_q_target=prelimit_q_target,
+            gain_blend_from_phase=gain_blend_from_phase,
+            gain_blend_alpha=gain_blend_alpha,
+            previous_command_q=previous_command_q,
+            max_command_delta=max_command_delta,
         )
         command_build_s += time.monotonic() - started
         return commands_out
@@ -5020,6 +5037,13 @@ def run_policy_loop(
                     phase="policy",
                     feedback_by_joint=fresh_feedback_for_commands,
                     prelimit_q_target=q_policy_target,
+                    gain_blend_from_phase="stand",
+                    gain_blend_alpha=policy_entry_gain_blend_scale(
+                        policy_entry_elapsed_s,
+                        policy_entry_ramp_seconds,
+                    ),
+                    previous_command_q=q_previous_target,
+                    max_command_delta=safety.dq_max,
                 )
             )
             if (
@@ -5136,6 +5160,13 @@ def run_policy_loop(
                         phase="policy",
                         feedback_by_joint=fresh_feedback_for_commands,
                         prelimit_q_target=q_policy_target,
+                        gain_blend_from_phase="stand",
+                        gain_blend_alpha=policy_entry_gain_blend_scale(
+                            policy_entry_elapsed_s,
+                            policy_entry_ramp_seconds,
+                        ),
+                        previous_command_q=q_previous_target,
+                        max_command_delta=safety.dq_max,
                     )
             if float(policy_entry_scale) >= 0.999:
                 policy_steady_cycles += 1

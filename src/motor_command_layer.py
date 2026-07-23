@@ -792,6 +792,10 @@ class MotorCommandLayer:
         feedback_by_joint=None,
         joint_velocity_target=None,
         prelimit_q_target=None,
+        gain_blend_from_phase=None,
+        gain_blend_alpha=1.0,
+        previous_command_q=None,
+        max_command_delta=None,
     ):
         self.maybe_reload_control_limits()
         self.maybe_reload_joint_limits()
@@ -825,6 +829,30 @@ class MotorCommandLayer:
                 )
             if not np.all(np.isfinite(joint_velocity_target)):
                 raise ValueError("joint_velocity_target contains NaN or Inf")
+        if previous_command_q is not None:
+            previous_command_q = np.asarray(previous_command_q, dtype=np.float32)
+            if previous_command_q.shape != q_target.shape:
+                raise ValueError(
+                    "previous_command_q has shape "
+                    f"{list(previous_command_q.shape)}, expected {list(q_target.shape)}"
+                )
+            if not np.all(np.isfinite(previous_command_q)):
+                raise ValueError("previous_command_q contains NaN or Inf")
+        if max_command_delta is not None:
+            max_command_delta = np.asarray(max_command_delta, dtype=np.float32)
+            if max_command_delta.ndim == 0:
+                max_command_delta = np.full_like(q_target, float(max_command_delta))
+            if max_command_delta.shape != q_target.shape:
+                raise ValueError(
+                    "max_command_delta has shape "
+                    f"{list(max_command_delta.shape)}, expected {list(q_target.shape)}"
+                )
+            if not np.all(np.isfinite(max_command_delta)) or np.any(
+                max_command_delta < 0.0
+            ):
+                raise ValueError(
+                    "max_command_delta must contain finite non-negative values"
+                )
 
         commands = []
         feedback_by_joint = feedback_by_joint or {}
@@ -837,6 +865,28 @@ class MotorCommandLayer:
             gain_phase,
             self.command_encoding,
         )
+        gain_blend_source_phase = None
+        gain_blend_alpha = float(gain_blend_alpha)
+        if not math.isfinite(gain_blend_alpha):
+            raise ValueError("gain_blend_alpha must be finite")
+        gain_blend_alpha = clip_scalar(gain_blend_alpha, 0.0, 1.0)
+        if gain_blend_from_phase is not None and gain_blend_alpha < 1.0:
+            gain_blend_source_phase = (
+                "startup"
+                if gain_blend_from_phase in ("sit", "stand")
+                else str(gain_blend_from_phase)
+            )
+            if gain_blend_source_phase not in self.gains:
+                raise ValueError(
+                    "Unknown gain_blend_from_phase "
+                    f"{gain_blend_from_phase}. Expected one of "
+                    f"{list(self.gains.keys())}"
+                )
+            if bool(command_proto.get("use_float_to_uint", False)):
+                raise ValueError(
+                    "effective gain blending requires an official target "
+                    "command encoding"
+                )
 
         base_phase_torque_limit = 0.0
         if phase == "startup":
@@ -860,6 +910,47 @@ class MotorCommandLayer:
             direction = float(self.joint_directions[joint_name])
 
             kp, kd = self._joint_gains(gain_phase, joint_name, group)
+            if gain_blend_source_phase is not None:
+                source_kp, source_kd = self._joint_gains(
+                    gain_blend_source_phase,
+                    joint_name,
+                    group,
+                )
+                source_proto = self.command_proto_for_phase(
+                    gain_blend_source_phase
+                )
+                source_kp_effective = self._effective_unsigned_wire_value(
+                    source_kp,
+                    "kp",
+                    source_proto,
+                )
+                source_kd_effective = self._effective_unsigned_wire_value(
+                    source_kd,
+                    "kd",
+                    source_proto,
+                )
+                target_kp_effective = self._effective_unsigned_wire_value(
+                    kp,
+                    "kp",
+                    command_proto,
+                )
+                target_kd_effective = self._effective_unsigned_wire_value(
+                    kd,
+                    "kd",
+                    command_proto,
+                )
+                # Policy packets use official RS04 units, so their configured
+                # values are the effective motor-side gains. Blend in that
+                # physical space to avoid an impedance step when the legacy
+                # loaded-stand packet path hands control to the policy.
+                kp = (
+                    (1.0 - gain_blend_alpha) * source_kp_effective
+                    + gain_blend_alpha * target_kp_effective
+                )
+                kd = (
+                    (1.0 - gain_blend_alpha) * source_kd_effective
+                    + gain_blend_alpha * target_kd_effective
+                )
             kp_effective = self._effective_unsigned_wire_value(
                 kp,
                 "kp",
@@ -1046,6 +1137,92 @@ class MotorCommandLayer:
                     + joint_tau_ff_effective
                 )
 
+            q_before_command_rate_limit = q_des
+            command_rate_limited = False
+            if previous_command_q is not None and max_command_delta is not None:
+                q_des = clip_scalar(
+                    q_des,
+                    float(previous_command_q[i] - max_command_delta[i]),
+                    float(previous_command_q[i] + max_command_delta[i]),
+                )
+                q_des = self.apply_hard_joint_limit(
+                    joint_name,
+                    q_des,
+                    phase=phase,
+                )
+                command_rate_limited = (
+                    abs(q_des - q_before_command_rate_limit) > 1.0e-7
+                )
+                if command_rate_limited and preload_feedback_valid:
+                    tau_pd_est = (
+                        kp_effective * (q_des - q_feedback)
+                        + kd_effective * (joint_v_des - qd_feedback)
+                        + joint_tau_ff_effective
+                    )
+                    if (
+                        phase_torque_limit > 0.0
+                        and abs(tau_pd_est) > phase_torque_limit
+                        and kd_effective > 0.0
+                    ):
+                        target_torque = clip_scalar(
+                            tau_pd_est,
+                            -phase_torque_limit,
+                            phase_torque_limit,
+                        )
+                        joint_v_des = qd_feedback + (
+                            target_torque
+                            - kp_effective * (q_des - q_feedback)
+                            - joint_tau_ff_effective
+                        ) / kd_effective
+                        joint_v_des = clip_scalar(
+                            joint_v_des,
+                            float(self.proto["v_min"]),
+                            float(self.proto["v_max"]),
+                        )
+                        tau_pd_est = (
+                            kp_effective * (q_des - q_feedback)
+                            + kd_effective * (joint_v_des - qd_feedback)
+                            + joint_tau_ff_effective
+                        )
+                    if (
+                        phase_torque_limit > 0.0
+                        and abs(tau_pd_est) > phase_torque_limit
+                    ):
+                        gain_torque = tau_pd_est - joint_tau_ff_effective
+                        target_gain_torque = clip_scalar(
+                            gain_torque,
+                            -phase_torque_limit - joint_tau_ff_effective,
+                            phase_torque_limit - joint_tau_ff_effective,
+                        )
+                        final_impedance_scale = (
+                            clip_scalar(
+                                target_gain_torque / gain_torque,
+                                0.0,
+                                1.0,
+                            )
+                            if abs(gain_torque) > 1.0e-9
+                            else 0.0
+                        )
+                        kp *= final_impedance_scale
+                        kd *= final_impedance_scale
+                        impedance_scale *= final_impedance_scale
+                        kp_effective = self._effective_unsigned_wire_value(
+                            kp,
+                            "kp",
+                            command_proto,
+                        )
+                        kd_effective = self._effective_unsigned_wire_value(
+                            kd,
+                            "kd",
+                            command_proto,
+                        )
+                        tau_pd_est = (
+                            kp_effective * (q_des - q_feedback)
+                            + kd_effective * (joint_v_des - qd_feedback)
+                            + joint_tau_ff_effective
+                        )
+                        torque_limited = True
+
             p_base = offset + direction * q_des
             p_des = motor_command_position_near_feedback(
                 q_des=q_des,
@@ -1086,10 +1263,14 @@ class MotorCommandLayer:
                 "bus_name": self.joint_can_bus.get(joint_name, "front"),
                 "phase": phase,
                 "command_encoding": command_encoding,
+                "gain_blend_from_phase": gain_blend_source_phase,
+                "gain_blend_alpha": gain_blend_alpha,
                 "q_des": q_des_sent,
                 "q_requested": q_requested,
                 "q_prelimit_requested": q_prelimit_requested,
                 "q_before_torque_limit": q_before_torque_limit,
+                "q_before_command_rate_limit": q_before_command_rate_limit,
+                "command_rate_limited": command_rate_limited,
                 "torque_limited": torque_limited,
                 "impedance_scale": impedance_scale,
                 "torque_limit_effective": phase_torque_limit,

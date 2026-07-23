@@ -242,6 +242,7 @@ class FourBarCommandAdapterTests(unittest.TestCase):
                 phase="policy",
                 feedback_by_joint=None,
                 joint_velocity_target=None,
+                **kwargs,
             ):
                 return [
                     {
