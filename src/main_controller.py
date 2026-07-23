@@ -3765,6 +3765,7 @@ def run_policy_loop(
     deadline_resync_s,
     timing_fault_consecutive,
     policy_shadow_mode=False,
+    encoder_calibration_required=True,
     encoder_calibration_passed=False,
     torque_ramp=None,
     measured_torque_soft_limits=None,
@@ -5752,7 +5753,11 @@ def run_policy_loop(
         ),
         "can_command_200hz": can_command_status,
         "encoder_calibration": (
-            "PASS" if encoder_calibration_passed and not root_encoder_faulted else "FAIL"
+            "NOT REQUIRED"
+            if not encoder_calibration_required
+            else "PASS"
+            if encoder_calibration_passed and not root_encoder_faulted
+            else "FAIL"
         ),
         "torque_authority": (
             "UNKNOWN"
@@ -7547,6 +7552,7 @@ def main():
             deadline_resync_s=0.001 * float(args.deadline_resync_ms),
             timing_fault_consecutive=int(args.timing_fault_consecutive),
             policy_shadow_mode=bool(args.policy_shadow_mode),
+            encoder_calibration_required=bool(calibration_required),
             encoder_calibration_passed=bool(calibration_ok),
             torque_ramp=torque_ramp,
             measured_torque_soft_limits=measured_torque_soft_limits,
