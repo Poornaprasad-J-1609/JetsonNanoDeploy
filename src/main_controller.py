@@ -240,6 +240,15 @@ def torque_ramp_supervision_due(policy_entry_scale, step, cadence_steps=5):
     )
 
 
+def runtime_stand_command_phase(policy_has_started, walking_armed):
+    """Use bounded walking impedance when returning from gait to stand."""
+    return (
+        "policy"
+        if bool(policy_has_started) and bool(walking_armed)
+        else "stand"
+    )
+
+
 def synchronized_pose_trajectory(start, target, elapsed_s, duration_s):
     """Interpolate every joint with one smooth phase so they finish together."""
     start = np.asarray(start, dtype=np.float32)
@@ -4811,7 +4820,10 @@ def run_policy_loop(
             # Initial crouch-to-stand lifting retains the proven startup
             # impedance. Once gait has started, every return to stand uses the
             # bounded policy impedance to avoid a gain-switch torque impulse.
-            stand_command_phase = "stand"
+            stand_command_phase = runtime_stand_command_phase(
+                policy_has_started,
+                walking_armed,
+            )
             learned_stand_stabilization_active = bool(
                 stand_policy_stabilization
                 and walking_armed

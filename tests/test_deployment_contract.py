@@ -28,6 +28,7 @@ from main_controller import (
     compact_telemetry_record,
     constant_joint_map,
     requires_calf_endpoint_gate,
+    runtime_stand_command_phase,
     shifted_safety_filter_with_diagnostics,
     stand_ready_for_walking,
     torque_ramp_supervision_due,
@@ -403,6 +404,13 @@ def test_torque_ramp_supervision_stays_off_entry_critical_path():
     assert torque_ramp_supervision_due(1.0, 100)
     assert not torque_ramp_supervision_due(1.0, 101)
     assert torque_ramp_supervision_due(1.0, 105)
+
+
+def test_return_from_policy_to_stand_keeps_bounded_policy_impedance():
+    assert runtime_stand_command_phase(False, False) == "stand"
+    assert runtime_stand_command_phase(False, True) == "stand"
+    assert runtime_stand_command_phase(True, False) == "stand"
+    assert runtime_stand_command_phase(True, True) == "policy"
 
 
 def test_policy_and_pose_pd_torque_limits_are_separate():
