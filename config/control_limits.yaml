@@ -76,16 +76,13 @@ joint_rate:
 
 mit_parameters:
   enabled: true
-  # Pose phases always have a finite estimated-PD-torque bound, including the
-  # very first transition packet. These are independent from policy stages.
-  # The 47 kg ground robot needs more static support torque than the walking
-  # policy. Keep crouch conservative, but allow stand/hold to reach the zero
-  # pose without collapsing the effective impedance gains. Ground logs showed
-  # both rear calves stalled near 0.75 rad at the previous 30 Nm ceiling.
-  startup_pd_torque_limit: 20.0
-  sit_pd_torque_limit: 20.0
-  stand_pd_torque_limit: 40.0
-  hold_pd_torque_limit: 40.0
+  # Zero disables host-side pose target/gain rewriting and restores the proven
+  # e9a4a13 sit/stand/hold packet behavior. Independent measured torque,
+  # position, velocity, tilt, and stale-feedback emergency checks remain on.
+  startup_pd_torque_limit: 0.0
+  sit_pd_torque_limit: 0.0
+  stand_pd_torque_limit: 0.0
+  hold_pd_torque_limit: 0.0
   leveling_pd_torque_limit: 20.0
   p_min: -12.566370614359172
   p_max: 12.566370614359172

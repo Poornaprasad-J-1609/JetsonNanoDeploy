@@ -1,13 +1,11 @@
 motor:
   model: rs-04
   use_official_mit_ranges: true
-  # All commanded phases use official RS04 encoding so configured Kp/Kd values
-  # are the physical wire values. The legacy table remains below only for
-  # explicit compatibility tests.
+  # Sit/stand/hold retain the exact legacy operation-control encoding from
+  # e9a4a13, where loaded pose motion was proven strong and smooth. Policy and
+  # leveling use official RS04 units independently.
   command_encoding: legacy_9b03a77
   phase_command_encoding:
-    startup: official
-    hold: official
     policy: official
     leveling: official
 
@@ -62,31 +60,28 @@ communication:
   frame_gap_s: 0.0010
 
 gains:
-  # Official RS04-unit gains. Loaded pose control needs enough stiffness to
-  # support 47 kg without several tenths of a radian of static sag; its total
-  # effort remains bounded by the independent 20/40 Nm pose torque ceilings.
-  # Policy walking and IMU leveling stay at the requested lower 80/2 gains.
+  # Config-side values from the proven e9a4a13 sit/stand packet path.
   startup:
     hip:
-      kp: 160.0
-      kd: 2.0
+      kp: 75.0
+      kd: 1.8
     thigh:
-      kp: 160.0
-      kd: 2.0
+      kp: 50.0
+      kd: 1.8
     calf:
-      kp: 160.0
-      kd: 2.0
+      kp: 75.0
+      kd: 1.8
 
   hold:
     hip:
-      kp: 160.0
-      kd: 2.0
+      kp: 75.0
+      kd: 1.8
     thigh:
-      kp: 160.0
-      kd: 2.0
+      kp: 50.0
+      kd: 1.8
     calf:
-      kp: 160.0
-      kd: 2.0
+      kp: 75.0
+      kd: 1.8
 
   policy:
     hip:

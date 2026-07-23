@@ -72,8 +72,8 @@ args=(
     --pose-transition-speed-rad-s 0.55
     --pose-transition-min-seconds 1.2
     --stand-ready-error-rad 0.25
-    # Use the phase-specific YAML pose limits: crouch remains conservative,
-    # while stand/hold have enough static authority for the 47 kg ground load.
+    # Pose phases use the proven e9a4a13 legacy packet path; measured hardware
+    # safety remains active while host-side pose torque rewriting is disabled.
     --feedback-timeout 0.05
     --fresh-feedback-max-age 0.08
     --policy-steps 0

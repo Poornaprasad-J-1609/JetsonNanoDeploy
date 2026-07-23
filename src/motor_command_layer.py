@@ -470,29 +470,27 @@ class MotorCommandLayer:
         )
         if (
             not np.isfinite(configured_startup_torque_limit)
-            or configured_startup_torque_limit <= 0.0
+            or configured_startup_torque_limit < 0.0
         ):
-            raise ValueError("mit_parameters.startup_pd_torque_limit must be finite and > 0")
+            raise ValueError("mit_parameters.startup_pd_torque_limit must be finite and >= 0")
         configured_hold_torque_limit = float(
             mit_cfg.get("hold_pd_torque_limit", 0.0)
         )
         if (
             not np.isfinite(configured_hold_torque_limit)
-            or configured_hold_torque_limit <= 0.0
+            or configured_hold_torque_limit < 0.0
         ):
-            raise ValueError("mit_parameters.hold_pd_torque_limit must be finite and > 0")
+            raise ValueError("mit_parameters.hold_pd_torque_limit must be finite and >= 0")
         configured_sit_torque_limit = float(
             mit_cfg.get("sit_pd_torque_limit", configured_startup_torque_limit)
         )
         configured_stand_torque_limit = float(
             mit_cfg.get("stand_pd_torque_limit", configured_startup_torque_limit)
         )
-        if not np.isfinite(configured_sit_torque_limit) or configured_sit_torque_limit <= 0.0:
-            raise ValueError("mit_parameters.sit_pd_torque_limit must be finite and > 0")
-        if not np.isfinite(configured_stand_torque_limit) or configured_stand_torque_limit <= 0.0:
-            raise ValueError("mit_parameters.stand_pd_torque_limit must be finite and > 0")
-        if configured_hold_torque_limit <= 0.0:
-            raise ValueError("mit_parameters.hold_pd_torque_limit must be > 0")
+        if not np.isfinite(configured_sit_torque_limit) or configured_sit_torque_limit < 0.0:
+            raise ValueError("mit_parameters.sit_pd_torque_limit must be finite and >= 0")
+        if not np.isfinite(configured_stand_torque_limit) or configured_stand_torque_limit < 0.0:
+            raise ValueError("mit_parameters.stand_pd_torque_limit must be finite and >= 0")
         if self.pose_pd_torque_limit_override is None:
             self.startup_pd_torque_limit = configured_startup_torque_limit
             self.sit_pd_torque_limit = configured_sit_torque_limit

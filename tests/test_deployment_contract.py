@@ -459,6 +459,41 @@ def test_pose_torque_limit_preserves_synchronized_target_and_scales_impedance():
     assert np.all(np.diff(sent_targets) > 0.0)
 
 
+def test_configured_pose_path_matches_proven_e9a4a13_packet_behavior():
+    runner = PolicyRunner()
+    motor_ids = load_yaml(ROOT / "config" / "motor_ids.yaml")["motor_ids"]
+    joint_name = "FL_thigh_joint"
+    joint_index = runner.policy_order.index(joint_name)
+    layer = MotorCommandLayer(
+        runner.policy_order,
+        motor_ids,
+        active_joints=[joint_name],
+        joint_can_bus=resolve_joint_can_bus(runner.policy_order, 1),
+    )
+    q_target = np.zeros(12, dtype=np.float32)
+    q_target[joint_index] = 0.40
+    command = layer.build_mit_commands(
+        q_target,
+        phase="stand",
+        feedback_by_joint={
+            joint_name: {
+                "position_raw": 0.0,
+                "joint_position": 0.0,
+                "joint_velocity": 0.0,
+            }
+        },
+    )[0]
+
+    assert layer.pose_pd_torque_limits()["stand"] == pytest.approx(0.0)
+    assert command["command_encoding"] == "legacy_9b03a77"
+    assert command["q_des"] == pytest.approx(0.40)
+    assert not command["torque_limited"]
+    assert command["kp"] == pytest.approx(50.0)
+    assert command["kd"] == pytest.approx(1.8)
+    assert command["kp_effective"] == pytest.approx(500.0, abs=0.1)
+    assert command["kd_effective"] == pytest.approx(36.0, abs=0.1)
+
+
 def test_policy_torque_limit_still_limits_position_target():
     runner = PolicyRunner()
     motor_ids = load_yaml(ROOT / "config" / "motor_ids.yaml")["motor_ids"]
