@@ -527,6 +527,22 @@ class MotorCommandLayer:
             hi = self.mit_parameter_limits[f"{prefix}_max"]
             if lo > hi:
                 raise ValueError(f"Invalid MIT parameter limits for {prefix}: min > max")
+        if (
+            self.virtual_joint_stop_enabled
+            and self.virtual_joint_stop_max_preload_nm > 0.0
+            and self.mit_parameter_limits_enabled
+        ):
+            preload = self.virtual_joint_stop_max_preload_nm
+            if (
+                self.mit_parameter_limits["tau_ff_min"] > -preload
+                or self.mit_parameter_limits["tau_ff_max"] < preload
+            ):
+                raise ValueError(
+                    "MIT tau_ff limits would clip virtual joint-stop preload: "
+                    f"need at least [-{preload:.3f}, +{preload:.3f}] Nm, got "
+                    f"[{self.mit_parameter_limits['tau_ff_min']:.3f}, "
+                    f"{self.mit_parameter_limits['tau_ff_max']:.3f}] Nm"
+                )
 
         self.control_limit_mtime_ns = mtime_ns
         return True

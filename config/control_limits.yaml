@@ -92,8 +92,11 @@ mit_parameters:
   kp_max: 800.0
   kd_min: 0.0
   kd_max: 40.0
-  tau_ff_min: -1.0
-  tau_ff_max: 1.0
+  # Must accommodate virtual_joint_stop.max_preload_nm. Total estimated
+  # position + damping + feedforward torque remains bounded independently by
+  # the selected policy torque stage.
+  tau_ff_min: -8.0
+  tau_ff_max: 8.0
 
 telemetry:
   compact_only: true

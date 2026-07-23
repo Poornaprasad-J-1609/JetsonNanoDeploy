@@ -564,6 +564,10 @@ def test_virtual_joint_stop_preserves_bounded_policy_torque_at_physical_limit(
     assert command["joint_limit_preload_error"] == pytest.approx(actor_target)
     assert abs(command["joint_limit_preload_tau_ff"]) == pytest.approx(8.0)
     assert np.sign(command["joint_limit_preload_tau_ff"]) == expected_preload_sign
+    assert abs(command["tau_ff"]) == pytest.approx(8.0)
+    assert np.sign(command["tau_ff"]) == (
+        expected_preload_sign * layer.joint_directions[joint_name]
+    )
     assert abs(command["tau_pd_est"]) <= 14.05
 
 
