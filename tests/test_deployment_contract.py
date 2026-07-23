@@ -30,6 +30,7 @@ from main_controller import (
     requires_calf_endpoint_gate,
     shifted_safety_filter_with_diagnostics,
     stand_ready_for_walking,
+    torque_ramp_supervision_due,
     validate_required_policy_imu,
     validate_torque_profile,
     smoothstep,
@@ -387,12 +388,6 @@ def test_main_controller_safe_defaults_are_pinned():
     assert "if not bool(exact_policy_after_entry):" in source
 
 
-def test_policy_runner_uses_short_thread_handoff_for_can_concurrency():
-    runner = PolicyRunner()
-    assert runner.torch_thread_count >= 1
-    assert runner.python_gil_switch_interval_s == pytest.approx(0.001)
-
-
 def test_loaded_stand_readiness_is_separate_from_zero_calibration():
     # Values measured in the 2026-07-22 hardware log: the loaded back calves
     # settled near 0.20 rad while the complete synchronized stand target was 0.
@@ -400,6 +395,14 @@ def test_loaded_stand_readiness_is_separate_from_zero_calibration():
     assert stand_ready_for_walking(0.0, 0.1983, 3.64, 3.64, 0.25)
     assert not stand_ready_for_walking(0.0, 0.251, 3.64, 3.64, 0.25)
     assert not stand_ready_for_walking(0.0, 0.1983, 3.64, 3.64, 0.08)
+
+
+def test_torque_ramp_supervision_stays_off_entry_critical_path():
+    assert not torque_ramp_supervision_due(0.0, 0)
+    assert not torque_ramp_supervision_due(0.998, 100)
+    assert torque_ramp_supervision_due(1.0, 100)
+    assert not torque_ramp_supervision_due(1.0, 101)
+    assert torque_ramp_supervision_due(1.0, 105)
 
 
 def test_policy_and_pose_pd_torque_limits_are_separate():

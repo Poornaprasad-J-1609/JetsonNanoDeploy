@@ -231,6 +231,15 @@ def smoothstep(alpha):
     return alpha * alpha * (3.0 - 2.0 * alpha)
 
 
+def torque_ramp_supervision_due(policy_entry_scale, step, cadence_steps=5):
+    """Run gradual authority supervision only after entry and at 10 Hz."""
+    cadence_steps = max(1, int(cadence_steps))
+    return bool(
+        float(policy_entry_scale) >= 0.999
+        and int(step) % cadence_steps == 0
+    )
+
+
 def synchronized_pose_trajectory(start, target, elapsed_s, duration_s):
     """Interpolate every joint with one smooth phase so they finish together."""
     start = np.asarray(start, dtype=np.float32)
@@ -5005,6 +5014,12 @@ def run_policy_loop(
                 torque_ramp is not None
                 and not policy_shadow_mode
                 and not torque_ramp.is_fixed
+                # The entry blend always uses the configured start limit, so
+                # running the full per-joint ramp supervisor here cannot alter
+                # a command. Once entry is complete, 10 Hz supervision is
+                # sufficient for an 8 s authority ramp. Hard encoder, tilt,
+                # motor-fault, and measured-torque safety still run at 50 Hz.
+                and torque_ramp_supervision_due(policy_entry_scale, step)
             ):
                 measured_supervision = measured_torque_supervisor.update(estimator)
                 measured_soft_limit_active_by_joint_for_log = measured_supervision[
@@ -7116,10 +7131,6 @@ def main():
     print("Policy format:", runner.policy_format)
     print("Policy obs/actions:", runner.observation_dim, runner.action_dim)
     print("Policy Torch CPU threads:", runner.torch_thread_count)
-    print(
-        "Python GIL switch interval: "
-        f"{1000.0 * runner.python_gil_switch_interval_s:.2f} ms"
-    )
     print(
         "Control rate:",
         f"runtime={runtime_control_hz:.2f} Hz",

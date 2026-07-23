@@ -2,7 +2,6 @@
 import hashlib
 import os
 from pathlib import Path
-import sys
 import numpy as np
 import torch
 
@@ -40,19 +39,6 @@ def configure_torch_for_realtime():
         # PyTorch permits setting inter-op threads only before parallel work.
         pass
     return thread_count
-
-
-def configure_python_thread_scheduling():
-    """Bound GIL handoff latency between policy and CAN owner threads."""
-    interval_s = float(
-        os.environ.get("GRALLATOR_GIL_SWITCH_INTERVAL_S", "0.001")
-    )
-    if not np.isfinite(interval_s) or interval_s <= 0.0:
-        raise ValueError(
-            "GRALLATOR_GIL_SWITCH_INTERVAL_S must be finite and > 0"
-        )
-    sys.setswitchinterval(interval_s)
-    return float(sys.getswitchinterval())
 
 
 def load_yaml(path):
@@ -189,7 +175,6 @@ class PolicyRunner:
     ):
         self.root = ROOT
         self.torch_thread_count = configure_torch_for_realtime()
-        self.python_gil_switch_interval_s = configure_python_thread_scheduling()
 
         self.joint_cfg = load_yaml(self.root / "config" / "joint_map.yaml")
         self.pose_cfg = load_yaml(self.root / "config" / "default_pose.yaml")
