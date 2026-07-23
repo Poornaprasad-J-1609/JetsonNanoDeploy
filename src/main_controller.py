@@ -3188,6 +3188,59 @@ def stand_ready_for_walking(
     )
 
 
+def stand_state_ready_for_policy_entry(
+    q_current,
+    qd_current,
+    q_stand_target,
+    active_indices,
+    error_tolerance_rad,
+    velocity_tolerance_rad_s,
+):
+    """Validate the measured stand state immediately before policy entry."""
+    error_tolerance = float(error_tolerance_rad)
+    velocity_tolerance = float(velocity_tolerance_rad_s)
+    if (
+        not np.isfinite(error_tolerance)
+        or not np.isfinite(velocity_tolerance)
+        or error_tolerance <= 0.0
+        or velocity_tolerance <= 0.0
+    ):
+        return False, float("inf"), float("inf")
+    try:
+        q_current = np.asarray(q_current, dtype=np.float32)
+        qd_current = np.asarray(qd_current, dtype=np.float32)
+        q_stand_target = np.asarray(q_stand_target, dtype=np.float32)
+        indices = np.asarray(active_indices, dtype=np.int64)
+    except (TypeError, ValueError, OverflowError):
+        return False, float("inf"), float("inf")
+    if indices.size == 0:
+        return True, 0.0, 0.0
+    if (
+        q_current.ndim != 1
+        or qd_current.shape != q_current.shape
+        or q_stand_target.shape != q_current.shape
+        or np.any(indices < 0)
+        or np.any(indices >= q_current.size)
+    ):
+        return False, float("inf"), float("inf")
+    active_q = q_current[indices]
+    active_qd = qd_current[indices]
+    active_stand = q_stand_target[indices]
+    if not (
+        np.all(np.isfinite(active_q))
+        and np.all(np.isfinite(active_qd))
+        and np.all(np.isfinite(active_stand))
+    ):
+        return False, float("inf"), float("inf")
+    position_error = float(np.max(np.abs(active_q - active_stand)))
+    velocity = float(np.max(np.abs(active_qd)))
+    ready = (
+        position_error <= error_tolerance
+        and velocity <= velocity_tolerance
+    )
+    return bool(ready), position_error, velocity
+
+
 def constant_pose_like(runner, value):
     return np.full(len(runner.policy_order), float(value), dtype=np.float32)
 
@@ -3804,6 +3857,7 @@ def run_policy_loop(
     auto_sit_zero,
     stand_zero_error_rad,
     stand_ready_error_rad,
+    stand_ready_velocity_rad_s,
     stand_zero_settle_steps,
     pose_sync_error_rad,
     policy_command_gain,
@@ -4004,6 +4058,7 @@ def run_policy_loop(
     print("auto_sit_zero:", bool(auto_sit_zero))
     print("pose_sync_error_rad:", float(pose_sync_error_rad))
     print("stand_ready_error_rad:", float(stand_ready_error_rad))
+    print("stand_ready_velocity_rad_s:", float(stand_ready_velocity_rad_s))
     print("policy_command_gain:", float(policy_command_gain))
     print(
         "policy_command_caps:",
@@ -4675,6 +4730,36 @@ def run_policy_loop(
             walk_requested = False
             if step % max(1, print_every) == 0:
                 print("[POSE] walking blocked until STAND reaches its target.")
+        if walking_armed and walk_requested and control_mode == "stand":
+            q_stand_target = stand_pose_for_zero_frame(
+                runner,
+                zero_frame,
+                crouch_calibration_value,
+                stand_calibration_value,
+            )
+            stand_state_ready, stand_error, stand_velocity = (
+                stand_state_ready_for_policy_entry(
+                    q_current=q_current,
+                    qd_current=qd_current,
+                    q_stand_target=q_stand_target,
+                    active_indices=active_indices,
+                    error_tolerance_rad=stand_ready_error_rad,
+                    velocity_tolerance_rad_s=stand_ready_velocity_rad_s,
+                )
+            )
+            if not stand_state_ready:
+                walk_requested = False
+                policy_command = np.zeros(3, dtype=np.float32)
+                last_walk_command.fill(0.0)
+                last_walk_command_step = -10**9
+                walk_stop_candidate_step = -1
+                if step % max(1, print_every) == 0:
+                    print(
+                        "[POSE] walking blocked: measured stand state is not "
+                        f"ready (error={stand_error:.3f} rad, "
+                        f"speed={stand_velocity:.3f} rad/s). Press SPACE and "
+                        "let stand settle before walking."
+                    )
         if (
             walk_requested
             and not has_motion_target
@@ -5391,7 +5476,15 @@ def run_policy_loop(
             q_feedback = getattr(estimator, "q_current", q_safe_target)
             command_error = max_active_error(q_safe_target, q_stand_target, active_indices)
             feedback_error = max_active_error(q_feedback, q_stand_target, active_indices)
-            if stand_ready_for_walking(
+            measured_stand_ready, _, _ = stand_state_ready_for_policy_entry(
+                q_current=q_feedback,
+                qd_current=qd_current,
+                q_stand_target=q_stand_target,
+                active_indices=active_indices,
+                error_tolerance_rad=stand_ready_error_rad,
+                velocity_tolerance_rad_s=stand_ready_velocity_rad_s,
+            )
+            if measured_stand_ready and stand_ready_for_walking(
                 command_error=command_error,
                 feedback_error=feedback_error,
                 trajectory_elapsed_s=pose_transition_elapsed_s,
@@ -6209,6 +6302,15 @@ def main():
             "walking after the complete stand trajectory"
         ),
     )
+    parser.add_argument(
+        "--stand-ready-velocity-rad-s",
+        type=float,
+        default=0.15,
+        help=(
+            "maximum measured active-joint speed for arming or re-entering "
+            "policy walking from stand"
+        ),
+    )
     parser.add_argument("--stand-zero-settle-steps", type=int, default=15)
     parser.add_argument(
         "--pose-sync-error-rad",
@@ -6744,6 +6846,14 @@ def main():
         or args.stand_ready_error_rad > 0.50
     ):
         parser.error("--stand-ready-error-rad must be finite and within 0.0..0.50")
+    if (
+        not np.isfinite(args.stand_ready_velocity_rad_s)
+        or args.stand_ready_velocity_rad_s <= 0.0
+        or args.stand_ready_velocity_rad_s > 2.0
+    ):
+        parser.error(
+            "--stand-ready-velocity-rad-s must be finite and within 0.0..2.0"
+        )
     if (
         not np.isfinite(args.encoder_limit_tolerance_rad)
         or args.encoder_limit_tolerance_rad < 0.0
@@ -7639,6 +7749,7 @@ def main():
             auto_sit_zero=args.auto_sit_zero,
             stand_zero_error_rad=args.stand_zero_error_rad,
             stand_ready_error_rad=args.stand_ready_error_rad,
+            stand_ready_velocity_rad_s=args.stand_ready_velocity_rad_s,
             stand_zero_settle_steps=max(1, args.stand_zero_settle_steps),
             pose_sync_error_rad=max(0.0, args.pose_sync_error_rad),
             policy_command_gain=args.policy_command_gain,

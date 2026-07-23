@@ -22,18 +22,18 @@ from safety_monitor import SafetyMonitor
 
 
 COMMANDS = (
-    ("forward", (0.20, 0.00, 0.00)),
-    ("backward", (-0.20, 0.00, 0.00)),
-    ("left", (0.00, 0.12, 0.00)),
-    ("right", (0.00, -0.12, 0.00)),
-    ("forward_left", (0.18, 0.10, 0.00)),
-    ("forward_right", (0.18, -0.10, 0.00)),
-    ("backward_left", (-0.18, 0.10, 0.00)),
-    ("backward_right", (-0.18, -0.10, 0.00)),
-    ("yaw_left", (0.00, 0.00, 0.15)),
-    ("yaw_right", (0.00, 0.00, -0.15)),
-    ("forward_yaw_left", (0.16, 0.00, 0.12)),
-    ("backward_yaw_right", (-0.16, 0.00, -0.12)),
+    ("forward", (0.15, 0.00, 0.00)),
+    ("backward", (-0.15, 0.00, 0.00)),
+    ("left", (0.00, 0.10, 0.00)),
+    ("right", (0.00, -0.10, 0.00)),
+    ("forward_left", (0.14, 0.08, 0.00)),
+    ("forward_right", (0.14, -0.08, 0.00)),
+    ("backward_left", (-0.14, 0.08, 0.00)),
+    ("backward_right", (-0.14, -0.08, 0.00)),
+    ("yaw_left", (0.00, 0.00, 0.12)),
+    ("yaw_right", (0.00, 0.00, -0.12)),
+    ("forward_yaw_left", (0.13, 0.00, 0.10)),
+    ("backward_yaw_right", (-0.13, 0.00, -0.10)),
 )
 
 
@@ -190,6 +190,7 @@ def run_case(case_index, sample, command_name, command, runner, layer, safety, r
     nonfinite = False
     torque_limit_violation = False
     hard_limit_violation = False
+    command_rate_violation = False
 
     total_policy_steps = entry_steps + steady_steps
     for step in range(total_policy_steps + return_steps):
@@ -221,8 +222,8 @@ def run_case(case_index, sample, command_name, command, runner, layer, safety, r
             sent_action = filtered_policy_action(
                 raw_action=raw_action,
                 previous_action=previous_sent_action,
-                clip_abs=3.2,
-                smoothing=0.35,
+                clip_abs=2.5,
+                smoothing=0.15,
                 delta_limit_abs=0.20,
             )
             sent_action = (sent_action * float(alpha)).astype(np.float32)
@@ -304,6 +305,9 @@ def run_case(case_index, sample, command_name, command, runner, layer, safety, r
             np.any(q_sent < safety.q_min - 1.0e-6)
             or np.any(q_sent > safety.q_max + 1.0e-6)
         )
+        command_rate_violation = command_rate_violation or bool(
+            np.any(np.abs(q_sent - previous_q_sent) > safety.dq_max + 1.0e-5)
+        )
 
         # The source row is a loaded, stand-ready equilibrium. Preserve its
         # measured load deflection and respond to changes in transmitted
@@ -328,7 +332,7 @@ def run_case(case_index, sample, command_name, command, runner, layer, safety, r
         not nonfinite
         and not torque_limit_violation
         and not hard_limit_violation
-        and maximum_target_step <= float(np.max(safety.dq_max)) + 1.0e-5
+        and not command_rate_violation
         and float(takeover_target_step) <= 0.02
         and float(return_target_step) <= 0.02
         and float(takeover_torque_step) <= 8.0
@@ -367,6 +371,7 @@ def run_case(case_index, sample, command_name, command, runner, layer, safety, r
         "nonfinite": int(nonfinite),
         "torque_limit_violation": int(torque_limit_violation),
         "hard_limit_violation": int(hard_limit_violation),
+        "command_rate_violation": int(command_rate_violation),
     }
 
 

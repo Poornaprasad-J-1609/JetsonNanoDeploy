@@ -1,28 +1,28 @@
 joint_limits:
   FL_hip_joint:
-    min: -0.5
-    max: 0.5
-    policy_min: -0.90
-    policy_max: 0.90
-    dq_max_per_step: 0.08
+    min: -0.30
+    max: 0.30
+    policy_min: -0.30
+    policy_max: 0.30
+    dq_max_per_step: 0.04
   FR_hip_joint:
-    min: -0.5
-    max: 0.5
-    policy_min: -0.90
-    policy_max: 0.90
-    dq_max_per_step: 0.08
+    min: -0.30
+    max: 0.30
+    policy_min: -0.30
+    policy_max: 0.30
+    dq_max_per_step: 0.04
   BL_hip_joint:
-    min: -0.5
-    max: 0.5
-    policy_min: -0.90
-    policy_max: 0.90
-    dq_max_per_step: 0.08
+    min: -0.30
+    max: 0.30
+    policy_min: -0.30
+    policy_max: 0.30
+    dq_max_per_step: 0.04
   BR_hip_joint:
-    min: -0.5
-    max: 0.5
-    policy_min: -0.90
-    policy_max: 0.90
-    dq_max_per_step: 0.08
+    min: -0.30
+    max: 0.30
+    policy_min: -0.30
+    policy_max: 0.30
+    dq_max_per_step: 0.04
   FL_thigh_joint:
     min: -2.0
     max: 2.0

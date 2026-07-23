@@ -57,12 +57,12 @@ args=(
     --speed-scale-step 0.01
     --keyboard-command-timeout 0.20
     --walk-command-grace-seconds 0.20
-    --policy-command-gain 1.5
-    --policy-command-vx-max 0.20
-    --policy-command-vy-max 0.12
+    --policy-command-gain 1.0
+    --policy-command-vx-max 0.15
+    --policy-command-vy-max 0.10
     --policy-command-yaw-max 0
-    --policy-action-clip 3.2
-    --policy-action-smoothing 0.35
+    --policy-action-clip 2.5
+    --policy-action-smoothing 0.15
     --policy-action-delta-limit 0.20
     --policy-entry-ramp-seconds 2.0
     # Real feedback caused the unbounded actor to reach |action|=10.34 after
@@ -80,12 +80,13 @@ args=(
     --pose-transition-speed-rad-s 0.55
     --pose-transition-min-seconds 1.2
     --stand-ready-error-rad 0.25
+    --stand-ready-velocity-rad-s 0.15
     # Pose phases use the proven e9a4a13 legacy packet path; measured hardware
     # safety remains active while host-side pose torque rewriting is disabled.
     --feedback-timeout 0.05
     --fresh-feedback-max-age 0.08
     --policy-steps 0
-    --log-every 10
+    --log-every 20
     --no-auto-push-log
 )
 

@@ -32,6 +32,7 @@ from main_controller import (
     policy_entry_gain_blend_scale,
     shifted_safety_filter_with_diagnostics,
     stand_ready_for_walking,
+    stand_state_ready_for_policy_entry,
     torque_ramp_supervision_due,
     validate_required_policy_imu,
     validate_torque_profile,
@@ -399,6 +400,45 @@ def test_loaded_stand_readiness_is_separate_from_zero_calibration():
     assert not stand_ready_for_walking(0.0, 0.1983, 3.64, 3.64, 0.08)
 
 
+def test_policy_entry_revalidates_current_stand_position_and_velocity():
+    q_stand = np.zeros(12, dtype=np.float32)
+    active_indices = list(range(12))
+
+    ready, error, velocity = stand_state_ready_for_policy_entry(
+        q_current=np.full(12, 0.047, dtype=np.float32),
+        qd_current=np.full(12, 0.006, dtype=np.float32),
+        q_stand_target=q_stand,
+        active_indices=active_indices,
+        error_tolerance_rad=0.25,
+        velocity_tolerance_rad_s=0.15,
+    )
+    assert ready
+    assert error == pytest.approx(0.047)
+    assert velocity == pytest.approx(0.006)
+
+    ready, error, _ = stand_state_ready_for_policy_entry(
+        q_current=np.full(12, 0.436, dtype=np.float32),
+        qd_current=np.full(12, 0.006, dtype=np.float32),
+        q_stand_target=q_stand,
+        active_indices=active_indices,
+        error_tolerance_rad=0.25,
+        velocity_tolerance_rad_s=0.15,
+    )
+    assert not ready
+    assert error == pytest.approx(0.436)
+
+    ready, _, velocity = stand_state_ready_for_policy_entry(
+        q_current=np.full(12, 0.047, dtype=np.float32),
+        qd_current=np.full(12, 0.610, dtype=np.float32),
+        q_stand_target=q_stand,
+        active_indices=active_indices,
+        error_tolerance_rad=0.25,
+        velocity_tolerance_rad_s=0.15,
+    )
+    assert not ready
+    assert velocity == pytest.approx(0.610)
+
+
 def test_torque_ramp_supervision_stays_off_entry_critical_path():
     assert not torque_ramp_supervision_due(0.0, 0)
     assert not torque_ramp_supervision_due(0.998, 100)
@@ -566,7 +606,7 @@ def test_configured_pose_path_matches_proven_e9a4a13_packet_behavior():
     assert command["kd_effective"] == pytest.approx(36.0, abs=0.1)
 
 
-def test_policy_uses_official_80_2_gains_without_changing_pose_gains():
+def test_policy_uses_damped_official_gains_without_changing_pose_gains():
     runner = PolicyRunner()
     motor_ids = load_yaml(ROOT / "config" / "motor_ids.yaml")["motor_ids"]
     joint_name = "FR_calf_joint"
@@ -599,7 +639,7 @@ def test_policy_uses_official_80_2_gains_without_changing_pose_gains():
 
     assert policy_command["command_encoding"] == "official"
     assert policy_command["kp_effective"] == pytest.approx(80.0, abs=0.1)
-    assert policy_command["kd_effective"] == pytest.approx(2.0, abs=0.01)
+    assert policy_command["kd_effective"] == pytest.approx(4.0, abs=0.01)
     assert pose_command["command_encoding"] == "legacy_9b03a77"
     assert pose_command["kp_effective"] == pytest.approx(750.0, abs=0.1)
     assert pose_command["kd_effective"] == pytest.approx(36.0, abs=0.1)
@@ -653,10 +693,10 @@ def test_policy_entry_blends_effective_pose_gains_without_a_gain_step():
     assert entry_start["kp_effective"] == pytest.approx(750.0, abs=0.2)
     assert entry_start["kd_effective"] == pytest.approx(36.0, abs=0.02)
     assert entry_middle["kp_effective"] == pytest.approx(415.0, abs=0.2)
-    assert entry_middle["kd_effective"] == pytest.approx(19.0, abs=0.02)
+    assert entry_middle["kd_effective"] == pytest.approx(20.0, abs=0.02)
     assert entry_end["gain_blend_from_phase"] is None
     assert entry_end["kp_effective"] == pytest.approx(80.0, abs=0.2)
-    assert entry_end["kd_effective"] == pytest.approx(2.0, abs=0.02)
+    assert entry_end["kd_effective"] == pytest.approx(4.0, abs=0.02)
 
 
 def test_policy_entry_gain_blend_remains_inside_policy_torque_limit():
