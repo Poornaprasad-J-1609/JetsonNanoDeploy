@@ -943,6 +943,9 @@ class PolicyTorqueRamp:
         self.paused = False
         self.pause_reason = ""
         self.violation_count = 0
+        self.recovery_ceiling = 1.0
+        self.backoff_progress_step = 0.005
+        self.recovery_progress_step = 0.0025
         self._last_state = None
         self._last_print_time = -1.0e9
 
@@ -1044,22 +1047,56 @@ class PolicyTorqueRamp:
         if self.require_clean and not clean:
             self.paused = True
             self.pause_reason = reason
-            self.violation_count += 1
-            if self.violation_count >= 5:
+            if not entry_complete:
+                self.violation_count = 0
                 self.progress = 0.0
+                self.recovery_ceiling = 1.0
                 self.effective_by_joint = dict(self.start_by_joint)
+            elif reason.startswith("tracking error"):
+                # Tracking error means the current authority is not producing
+                # the requested motion. Lowering torque here creates a
+                # positive-feedback stall and a visible step in stiffness.
+                # Hold the present limit and resume upward only gradually.
+                self.violation_count = 0
+                self.recovery_ceiling = min(
+                    self.recovery_ceiling,
+                    self.progress,
+                )
+            else:
+                self.violation_count += 1
+                if self.violation_count >= 5:
+                    if self.violation_count == 5:
+                        self.recovery_ceiling = min(
+                            self.recovery_ceiling,
+                            self.progress,
+                        )
+                    self.recovery_ceiling = max(
+                        0.0,
+                        self.recovery_ceiling - self.backoff_progress_step,
+                    )
+                    self.progress = min(self.progress, self.recovery_ceiling)
+                    self.effective_by_joint = {
+                        joint_name: self.start_by_joint[joint_name]
+                        + self.progress
+                        * (self.final_by_joint[joint_name] - self.start_by_joint[joint_name])
+                        for joint_name in self.policy_order
+                    }
         else:
             self.paused = False
             self.pause_reason = ""
             self.violation_count = 0
-            alpha = smoothstep(
+            self.recovery_ceiling = min(
+                1.0,
+                self.recovery_ceiling + self.recovery_progress_step,
+            )
+            scheduled_progress = smoothstep(
                 np.clip(
                     (float(steady_policy_elapsed_s) - self.delay_s) / self.ramp_s,
                     0.0,
                     1.0,
                 )
             )
-            self.progress = float(alpha)
+            self.progress = min(float(scheduled_progress), self.recovery_ceiling)
             self.effective_by_joint = {
                 joint_name: self.start_by_joint[joint_name]
                 + self.progress
@@ -1077,8 +1114,9 @@ class PolicyTorqueRamp:
                 self._last_state = state
             if self.violation_count == 5:
                 print_fn(
-                    "[TORQUE RAMP REDUCED] "
-                    f"effective torque returned to {self.start_max:.1f} Nm"
+                    "[TORQUE RAMP BACKOFF] "
+                    "effective torque will decrease gradually while the "
+                    f"violation persists (current={self.effective_max:.1f} Nm)"
                 )
             if now - self._last_print_time >= self.print_interval_s and not self.paused:
                 self._last_print_time = now

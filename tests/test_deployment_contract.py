@@ -693,7 +693,7 @@ def test_calf_endpoint_gate_applies_only_to_active_nonlinear_transmission():
     assert requires_calf_endpoint_gate(True, nonlinear_stage18)
 
 
-def test_policy_torque_ramp_waits_for_clean_entry_and_resets_after_violations():
+def test_policy_torque_ramp_waits_for_clean_entry_and_backs_off_smoothly():
     runner = PolicyRunner()
     start = constant_joint_map(runner.policy_order, 14.0)
     final = constant_joint_map(runner.policy_order, 24.0)
@@ -747,15 +747,81 @@ def test_policy_torque_ramp_waits_for_clean_entry_and_resets_after_violations():
             feedback_count_expected=12,
             feedback_age_max_s=0.01,
             encoder_margin_rad=0.5,
-            tracking_error_max=0.35,
-            measured_torque_max=0.0,
+            tracking_error_max=0.0,
+            measured_torque_max=35.0,
             cycle_work_s=0.005,
             now=3.0 + step,
         )
     assert ramp.paused
     assert ramp.violation_count == 5
-    assert ramp.progress == pytest.approx(0.0)
-    assert max(effective.values()) == pytest.approx(14.0)
+    assert 0.0 < ramp.progress < smoothstep(0.5)
+    assert 14.0 < max(effective.values()) < 19.0
+
+    previous_max = max(effective.values())
+    effective = ramp.update(
+        steady_policy_elapsed_s=8.02,
+        entry_complete=True,
+        feedback_fresh_count=12,
+        feedback_count_expected=12,
+        feedback_age_max_s=0.01,
+        encoder_margin_rad=0.5,
+        tracking_error_max=0.0,
+        measured_torque_max=35.0,
+        cycle_work_s=0.005,
+        now=8.0,
+    )
+    assert 0.0 < previous_max - max(effective.values()) < 0.1
+
+    backed_off_max = max(effective.values())
+    effective = ramp.update(
+        steady_policy_elapsed_s=8.04,
+        entry_complete=True,
+        feedback_fresh_count=12,
+        feedback_count_expected=12,
+        feedback_age_max_s=0.01,
+        encoder_margin_rad=0.5,
+        tracking_error_max=0.0,
+        measured_torque_max=0.0,
+        cycle_work_s=0.005,
+        now=9.0,
+    )
+    assert 0.0 < max(effective.values()) - backed_off_max < 0.1
+
+
+def test_policy_torque_ramp_holds_instead_of_backing_off_for_tracking_error():
+    runner = PolicyRunner()
+    start = constant_joint_map(runner.policy_order, 14.0)
+    final = constant_joint_map(runner.policy_order, 20.0)
+    ramp = PolicyTorqueRamp(runner.policy_order, start, final)
+
+    effective = ramp.update(
+        steady_policy_elapsed_s=6.0,
+        entry_complete=True,
+        feedback_fresh_count=12,
+        feedback_count_expected=12,
+        feedback_age_max_s=0.01,
+        encoder_margin_rad=0.5,
+        tracking_error_max=0.0,
+        measured_torque_max=0.0,
+        cycle_work_s=0.005,
+    )
+    before = max(effective.values())
+    for _ in range(20):
+        effective = ramp.update(
+            steady_policy_elapsed_s=6.5,
+            entry_complete=True,
+            feedback_fresh_count=12,
+            feedback_count_expected=12,
+            feedback_age_max_s=0.01,
+            encoder_margin_rad=0.5,
+            tracking_error_max=0.35,
+            measured_torque_max=0.0,
+            cycle_work_s=0.005,
+        )
+
+    assert ramp.paused
+    assert ramp.violation_count == 0
+    assert max(effective.values()) == pytest.approx(before)
 
 
 def test_policy_torque_ramp_identifies_fixed_stage():

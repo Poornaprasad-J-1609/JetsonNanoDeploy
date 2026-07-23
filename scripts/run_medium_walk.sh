@@ -65,10 +65,10 @@ args=(
     --policy-action-smoothing 0.35
     --policy-action-delta-limit 0.20
     --policy-entry-ramp-seconds 2.0
-    # Stage18 improved motion, but the following July 23 runs still limited
-    # 38-59% of forward calf commands. Stage20 remains a gradual 14 Nm start
-    # and advances only while all ramp supervision checks remain clean.
-    --torque-profile-stage stage20
+    # Stage20 did not materially improve gait frequency and caused more ramp
+    # backoffs. Stage18 provides the better measured authority/smoothness
+    # balance; the controller now backs it off gradually instead of snapping.
+    --torque-profile-stage stage18
     --pose-transition-speed-rad-s 0.55
     --pose-transition-min-seconds 1.2
     --stand-ready-error-rad 0.25
