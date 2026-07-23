@@ -31,6 +31,7 @@ from main_controller import (
     runtime_stand_command_phase,
     policy_entry_gain_blend_scale,
     shifted_safety_filter_with_diagnostics,
+    stand_recovery_gain_blend_scale,
     stand_ready_for_walking,
     stand_state_ready_for_policy_entry,
     torque_ramp_supervision_due,
@@ -447,11 +448,11 @@ def test_torque_ramp_supervision_stays_off_entry_critical_path():
     assert torque_ramp_supervision_due(1.0, 105)
 
 
-def test_return_from_policy_to_stand_keeps_bounded_policy_impedance():
+def test_return_from_policy_to_stand_uses_loaded_stand_path():
     assert runtime_stand_command_phase(False, False) == "stand"
     assert runtime_stand_command_phase(False, True) == "stand"
     assert runtime_stand_command_phase(True, False) == "stand"
-    assert runtime_stand_command_phase(True, True) == "policy"
+    assert runtime_stand_command_phase(True, True) == "stand"
 
 
 def test_policy_and_pose_pd_torque_limits_are_separate():
@@ -699,6 +700,58 @@ def test_policy_entry_blends_effective_pose_gains_without_a_gain_step():
     assert entry_end["kd_effective"] == pytest.approx(4.0, abs=0.02)
 
 
+def test_stand_recovery_blends_effective_policy_gains_without_a_gain_step():
+    runner = PolicyRunner()
+    motor_ids = load_yaml(ROOT / "config" / "motor_ids.yaml")["motor_ids"]
+    joint_name = "FR_calf_joint"
+    layer = MotorCommandLayer(
+        runner.policy_order,
+        motor_ids,
+        active_joints=[joint_name],
+        joint_can_bus=resolve_joint_can_bus(runner.policy_order, 1),
+    )
+    q_target = np.zeros(12, dtype=np.float32)
+    feedback = {
+        joint_name: {
+            "position_raw": 0.0,
+            "joint_position": 0.0,
+            "joint_velocity": 0.0,
+        }
+    }
+
+    recovery_start = layer.build_mit_commands(
+        q_target,
+        phase="stand",
+        feedback_by_joint=feedback,
+        gain_blend_from_phase="policy",
+        gain_blend_alpha=0.0,
+    )[0]
+    recovery_middle = layer.build_mit_commands(
+        q_target,
+        phase="stand",
+        feedback_by_joint=feedback,
+        gain_blend_from_phase="policy",
+        gain_blend_alpha=0.5,
+    )[0]
+    recovery_end = layer.build_mit_commands(
+        q_target,
+        phase="stand",
+        feedback_by_joint=feedback,
+        gain_blend_from_phase="policy",
+        gain_blend_alpha=1.0,
+    )[0]
+
+    assert recovery_start["command_encoding"] == "legacy_9b03a77"
+    assert recovery_start["gain_blend_from_phase"] == "policy"
+    assert recovery_start["kp_effective"] == pytest.approx(80.0, abs=0.2)
+    assert recovery_start["kd_effective"] == pytest.approx(4.0, abs=0.02)
+    assert recovery_middle["kp_effective"] == pytest.approx(415.0, abs=0.2)
+    assert recovery_middle["kd_effective"] == pytest.approx(20.0, abs=0.02)
+    assert recovery_end["gain_blend_from_phase"] is None
+    assert recovery_end["kp_effective"] == pytest.approx(750.0, abs=0.2)
+    assert recovery_end["kd_effective"] == pytest.approx(36.0, abs=0.02)
+
+
 def test_policy_entry_gain_blend_remains_inside_policy_torque_limit():
     runner = PolicyRunner()
     motor_ids = load_yaml(ROOT / "config" / "motor_ids.yaml")["motor_ids"]
@@ -732,12 +785,22 @@ def test_policy_entry_gain_blend_remains_inside_policy_torque_limit():
         assert abs(command["tau_pd_est"]) <= 30.05
 
 
-def test_policy_entry_gain_handoff_finishes_halfway_through_target_ramp():
+def test_policy_entry_gain_handoff_spans_complete_target_ramp():
     assert policy_entry_gain_blend_scale(0.0, 2.0) == pytest.approx(0.0)
-    assert policy_entry_gain_blend_scale(0.5, 2.0) == pytest.approx(0.5)
-    assert policy_entry_gain_blend_scale(1.0, 2.0) == pytest.approx(1.0)
+    assert policy_entry_gain_blend_scale(0.5, 2.0) == pytest.approx(0.15625)
+    assert policy_entry_gain_blend_scale(1.0, 2.0) == pytest.approx(0.5)
     assert policy_entry_gain_blend_scale(2.0, 2.0) == pytest.approx(1.0)
     assert policy_entry_gain_blend_scale(0.0, 0.0) == pytest.approx(1.0)
+
+
+def test_stand_recovery_gain_handoff_is_continuous_from_policy_state():
+    assert stand_recovery_gain_blend_scale(1.0, 0.0, 2.0) == pytest.approx(0.0)
+    assert stand_recovery_gain_blend_scale(1.0, 1.0, 2.0) == pytest.approx(0.5)
+    assert stand_recovery_gain_blend_scale(1.0, 2.0, 2.0) == pytest.approx(1.0)
+    assert stand_recovery_gain_blend_scale(0.25, 0.0, 2.0) == pytest.approx(0.75)
+    assert stand_recovery_gain_blend_scale(0.25, 1.0, 2.0) == pytest.approx(0.875)
+    assert stand_recovery_gain_blend_scale(0.25, 2.0, 2.0) == pytest.approx(1.0)
+    assert stand_recovery_gain_blend_scale(1.0, 0.0, 0.0) == pytest.approx(1.0)
 
 
 def test_final_policy_packet_respects_position_rate_and_torque_limits():

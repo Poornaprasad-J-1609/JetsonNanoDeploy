@@ -396,6 +396,28 @@ class MotorCommandLayer:
             float(self.proto[f"{field}_max"]),
         )
 
+    def _configured_unsigned_value_for_effective(
+        self,
+        effective_value,
+        field,
+        command_proto=None,
+    ):
+        """Map a desired motor-side gain into the selected packet encoding."""
+        command_proto = self.command_proto if command_proto is None else command_proto
+        effective_min = float(self.proto[f"{field}_min"])
+        effective_max = float(self.proto[f"{field}_max"])
+        command_min = float(command_proto[f"{field}_min"])
+        command_max = float(command_proto[f"{field}_max"])
+        normalized = (
+            (float(effective_value) - effective_min)
+            / max(effective_max - effective_min, 1.0e-12)
+        )
+        return clip_scalar(
+            command_min + normalized * (command_max - command_min),
+            command_min,
+            command_max,
+        )
+
     def _joint_gains(self, phase, joint_name, group):
         phase_cfg = self.gains[phase]
         joint_cfg = phase_cfg.get("joints", {}).get(joint_name)
@@ -882,11 +904,6 @@ class MotorCommandLayer:
                     f"{gain_blend_from_phase}. Expected one of "
                     f"{list(self.gains.keys())}"
                 )
-            if bool(command_proto.get("use_float_to_uint", False)):
-                raise ValueError(
-                    "effective gain blending requires an official target "
-                    "command encoding"
-                )
 
         base_phase_torque_limit = 0.0
         if phase == "startup":
@@ -943,13 +960,23 @@ class MotorCommandLayer:
                 # values are the effective motor-side gains. Blend in that
                 # physical space to avoid an impedance step when the legacy
                 # loaded-stand packet path hands control to the policy.
-                kp = (
+                desired_kp_effective = (
                     (1.0 - gain_blend_alpha) * source_kp_effective
                     + gain_blend_alpha * target_kp_effective
                 )
-                kd = (
+                desired_kd_effective = (
                     (1.0 - gain_blend_alpha) * source_kd_effective
                     + gain_blend_alpha * target_kd_effective
+                )
+                kp = self._configured_unsigned_value_for_effective(
+                    desired_kp_effective,
+                    "kp",
+                    command_proto,
+                )
+                kd = self._configured_unsigned_value_for_effective(
+                    desired_kd_effective,
+                    "kd",
+                    command_proto,
                 )
             kp_effective = self._effective_unsigned_wire_value(
                 kp,

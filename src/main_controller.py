@@ -232,12 +232,31 @@ def smoothstep(alpha):
 
 
 def policy_entry_gain_blend_scale(elapsed_s, entry_ramp_s):
-    """Finish the impedance handoff before the actor reaches full amplitude."""
+    """Blend loaded-stand impedance over the complete actor target ramp."""
     elapsed_s = max(0.0, float(elapsed_s))
     entry_ramp_s = float(entry_ramp_s)
     if entry_ramp_s <= 0.0:
         return 1.0
-    return smoothstep(min(1.0, 2.0 * elapsed_s / entry_ramp_s))
+    return smoothstep(min(1.0, elapsed_s / entry_ramp_s))
+
+
+def stand_recovery_gain_blend_scale(
+    policy_gain_blend_alpha_at_stop,
+    elapsed_s,
+    recovery_ramp_s,
+):
+    """Reverse the current stand-to-policy gain blend without a gain step."""
+    policy_alpha = float(np.clip(policy_gain_blend_alpha_at_stop, 0.0, 1.0))
+    start_stand_alpha = 1.0 - policy_alpha
+    recovery_ramp_s = float(recovery_ramp_s)
+    if recovery_ramp_s <= 0.0:
+        return 1.0
+    progress = smoothstep(
+        min(1.0, max(0.0, float(elapsed_s)) / recovery_ramp_s)
+    )
+    return float(
+        start_stand_alpha + (1.0 - start_stand_alpha) * progress
+    )
 
 
 def torque_ramp_supervision_due(policy_entry_scale, step, cadence_steps=5):
@@ -250,12 +269,8 @@ def torque_ramp_supervision_due(policy_entry_scale, step, cadence_steps=5):
 
 
 def runtime_stand_command_phase(policy_has_started, walking_armed):
-    """Use bounded walking impedance when returning from gait to stand."""
-    return (
-        "policy"
-        if bool(policy_has_started) and bool(walking_armed)
-        else "stand"
-    )
+    """Stand always uses the loaded pose path; gains are blended on recovery."""
+    return "stand"
 
 
 def synchronized_pose_trajectory(start, target, elapsed_s, duration_s):
@@ -3927,6 +3942,10 @@ def run_policy_loop(
     policy_entry_q_start = np.asarray(q_previous_target, dtype=np.float32).copy()
     policy_entry_restart_count = 0
     policy_entry_restart_reason = ""
+    last_policy_gain_blend_alpha = 0.0
+    stand_recovery_gain_active = False
+    stand_recovery_gain_elapsed_s = 0.0
+    stand_recovery_policy_alpha_at_stop = 0.0
     previous_walk_requested = False
     last_walk_command = np.zeros(3, dtype=np.float32)
     last_walk_command_step = -10**9
@@ -4654,11 +4673,15 @@ def run_policy_loop(
                     walking_armed = False
                     stand_ready_pending = True
                     stand_ready_settle_count = 0
+                    stand_recovery_gain_active = False
+                    stand_recovery_gain_elapsed_s = 0.0
                     print("[POSE] walking remains blocked until the stand target settles.")
                 elif control_mode in ("sit", "hold"):
                     walking_armed = False
                     stand_ready_pending = False
                     stand_ready_settle_count = 0
+                    stand_recovery_gain_active = False
+                    stand_recovery_gain_elapsed_s = 0.0
                 if control_mode in ("stand", "sit", "hold"):
                     last_walk_command.fill(0.0)
                     last_walk_command_step = -10**9
@@ -4893,11 +4916,22 @@ def run_policy_loop(
         previous_walk_requested = bool(walk_requested)
 
         if walk_just_stopped and control_mode == "stand":
-            # A terminal movement key can briefly time out between key-repeat
-            # events. Restart the stand trajectory from the exact previously
-            # sent motor targets instead of snapping from a gait target to
-            # stand q=0 under the stronger startup impedance.
+            # Continue from the exact last transmitted target so releasing a
+            # movement key cannot step either position demand or supporting
+            # PD torque. Target and gains then recover smoothly to stand.
             begin_pose_transition("stand", q_previous_target, step)
+            walking_armed = False
+            stand_ready_pending = True
+            stand_ready_settle_count = 0
+            stand_recovery_gain_active = True
+            stand_recovery_gain_elapsed_s = 0.0
+            stand_recovery_policy_alpha_at_stop = float(
+                last_policy_gain_blend_alpha
+            )
+            print(
+                "[POSE] policy stopped; last target preserved and loaded stand "
+                "impedance recovery started."
+            )
 
         if active_control_mode == "idle":
             q_safe_target = q_previous_target.copy()
@@ -4919,13 +4953,25 @@ def run_policy_loop(
 
         elif active_control_mode == "stand":
             q_policy_target = current_pose_transition_target("stand", step)
-            # Initial crouch-to-stand lifting retains the proven startup
-            # impedance. Once gait has started, every return to stand uses the
-            # bounded policy impedance to avoid a gain-switch torque impulse.
             stand_command_phase = runtime_stand_command_phase(
                 policy_has_started,
                 walking_armed,
             )
+            stand_gain_blend_from_phase = None
+            stand_gain_blend_alpha = 1.0
+            if stand_recovery_gain_active:
+                stand_recovery_gain_elapsed_s += float(dt)
+                stand_gain_blend_from_phase = "policy"
+                stand_gain_blend_alpha = stand_recovery_gain_blend_scale(
+                    stand_recovery_policy_alpha_at_stop,
+                    stand_recovery_gain_elapsed_s,
+                    policy_entry_ramp_seconds,
+                )
+                if stand_gain_blend_alpha >= 1.0 - 1.0e-6:
+                    stand_recovery_gain_active = False
+                    stand_gain_blend_from_phase = None
+                    stand_gain_blend_alpha = 1.0
+                    print("[POSE] loaded stand impedance recovery completed.")
             learned_stand_stabilization_active = bool(
                 stand_policy_stabilization
                 and walking_armed
@@ -4994,6 +5040,8 @@ def run_policy_loop(
                 q_safe_target,
                 phase=stand_command_phase,
                 feedback_by_joint=fresh_feedback_for_commands,
+                gain_blend_from_phase=stand_gain_blend_from_phase,
+                gain_blend_alpha=stand_gain_blend_alpha,
             )
 
         elif active_control_mode == "sit":
@@ -5090,6 +5138,10 @@ def run_policy_loop(
                 (not bool(exact_policy_after_entry) and not policy_sim_match)
                 or float(policy_entry_scale) < 0.999
             )
+            last_policy_gain_blend_alpha = policy_entry_gain_blend_scale(
+                policy_entry_elapsed_s,
+                policy_entry_ramp_seconds,
+            )
             if policy_shadow_mode:
                 q_safe_target = q_actor_target.copy()
                 q_joint_limit_filtered_target_for_log = q_actor_target.copy()
@@ -5123,10 +5175,7 @@ def run_policy_loop(
                     feedback_by_joint=fresh_feedback_for_commands,
                     prelimit_q_target=q_policy_target,
                     gain_blend_from_phase="stand",
-                    gain_blend_alpha=policy_entry_gain_blend_scale(
-                        policy_entry_elapsed_s,
-                        policy_entry_ramp_seconds,
-                    ),
+                    gain_blend_alpha=last_policy_gain_blend_alpha,
                     previous_command_q=q_previous_target,
                     max_command_delta=safety.dq_max,
                 )
@@ -5246,10 +5295,7 @@ def run_policy_loop(
                         feedback_by_joint=fresh_feedback_for_commands,
                         prelimit_q_target=q_policy_target,
                         gain_blend_from_phase="stand",
-                        gain_blend_alpha=policy_entry_gain_blend_scale(
-                            policy_entry_elapsed_s,
-                            policy_entry_ramp_seconds,
-                        ),
+                        gain_blend_alpha=last_policy_gain_blend_alpha,
                         previous_command_q=q_previous_target,
                         max_command_delta=safety.dq_max,
                     )
@@ -5484,12 +5530,16 @@ def run_policy_loop(
                 error_tolerance_rad=stand_ready_error_rad,
                 velocity_tolerance_rad_s=stand_ready_velocity_rad_s,
             )
-            if measured_stand_ready and stand_ready_for_walking(
-                command_error=command_error,
-                feedback_error=feedback_error,
-                trajectory_elapsed_s=pose_transition_elapsed_s,
-                trajectory_duration_s=pose_transition_duration_s,
-                error_tolerance_rad=stand_ready_error_rad,
+            if (
+                not stand_recovery_gain_active
+                and measured_stand_ready
+                and stand_ready_for_walking(
+                    command_error=command_error,
+                    feedback_error=feedback_error,
+                    trajectory_elapsed_s=pose_transition_elapsed_s,
+                    trajectory_duration_s=pose_transition_duration_s,
+                    error_tolerance_rad=stand_ready_error_rad,
+                )
             ):
                 stand_ready_settle_count += 1
             else:
