@@ -62,28 +62,30 @@ communication:
   frame_gap_s: 0.0010
 
 gains:
-  # Uniform official RS04-unit gains. Pose and policy torque ceilings remain
-  # independent and bound total estimated command effort.
+  # Official RS04-unit gains. Loaded pose control needs enough stiffness to
+  # support 47 kg without several tenths of a radian of static sag; its total
+  # effort remains bounded by the independent 20/40 Nm pose torque ceilings.
+  # Policy walking and IMU leveling stay at the requested lower 80/2 gains.
   startup:
     hip:
-      kp: 80.0
+      kp: 160.0
       kd: 2.0
     thigh:
-      kp: 80.0
+      kp: 160.0
       kd: 2.0
     calf:
-      kp: 80.0
+      kp: 160.0
       kd: 2.0
 
   hold:
     hip:
-      kp: 80.0
+      kp: 160.0
       kd: 2.0
     thigh:
-      kp: 80.0
+      kp: 160.0
       kd: 2.0
     calf:
-      kp: 80.0
+      kp: 160.0
       kd: 2.0
 
   policy:
