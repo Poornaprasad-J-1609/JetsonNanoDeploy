@@ -762,6 +762,14 @@ TORQUE_PROFILE_STAGES = {
 }
 
 
+def requires_calf_endpoint_gate(four_bar_enabled, final_torque_limits):
+    """Require linkage calibration only for an active nonlinear transmission."""
+    return bool(four_bar_enabled) and max(
+        (float(value) for value in final_torque_limits.values()),
+        default=0.0,
+    ) > 14.0
+
+
 def constant_joint_map(policy_order, value):
     value = float(value)
     return {joint_name: value for joint_name in policy_order}
@@ -6741,6 +6749,10 @@ def main():
         active_joints=active_joints,
         joint_can_bus=joint_can_bus,
     )
+    four_bar_cfg = load_yaml(ROOT / "config" / "four_bar_transmission.yaml")
+    four_bar_enabled = bool(
+        (four_bar_cfg or {}).get("four_bar_transmission", {}).get("enabled", False)
+    )
     joint_mapping = AuthoritativeJointMapping(
         motor_ids=motor_ids,
         motor_directions=motor_layer.joint_directions,
@@ -6796,11 +6808,13 @@ def main():
                 joint_name: float(value) * float(args.policy_pd_torque_scale)
                 for joint_name, value in torque_final_by_joint.items()
             }
-    calibration_ok, calibration_reason = calf_calibration_gate(
-        args.calf_calibration_recommendation,
-        joint_name="FL_calf_joint",
-    )
-    if max(torque_final_by_joint.values(), default=0.0) > 14.0:
+    calibration_ok = True
+    calibration_reason = "not required for disabled nonlinear transmission"
+    if requires_calf_endpoint_gate(four_bar_enabled, torque_final_by_joint):
+        calibration_ok, calibration_reason = calf_calibration_gate(
+            args.calf_calibration_recommendation,
+            joint_name="FL_calf_joint",
+        )
         if not calibration_ok:
             print("ERROR: torque stages above stage14 are locked.")
             print("FL calf calibration gate:", calibration_reason)
@@ -6853,10 +6867,6 @@ def main():
     except ValueError as exc:
         print("ERROR:", exc)
         return 1
-    four_bar_cfg = load_yaml(ROOT / "config" / "four_bar_transmission.yaml")
-    four_bar_enabled = bool(
-        (four_bar_cfg or {}).get("four_bar_transmission", {}).get("enabled", False)
-    )
     if four_bar_enabled:
         print(
             "ERROR: four-bar transmission is enabled, but this deployment "

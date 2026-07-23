@@ -27,6 +27,7 @@ from main_controller import (
     action_equivalent_for_q_target,
     compact_telemetry_record,
     constant_joint_map,
+    requires_calf_endpoint_gate,
     shifted_safety_filter_with_diagnostics,
     stand_ready_for_walking,
     validate_required_policy_imu,
@@ -680,6 +681,16 @@ def test_policy_torque_profile_validation_rejects_unsafe_values():
     bad_start[runner.policy_order[0]] = 25.0
     with pytest.raises(ValueError, match="exceeds final"):
         validate_torque_profile(bad_start, final, runner.policy_order, ceiling=40.0)
+
+
+def test_calf_endpoint_gate_applies_only_to_active_nonlinear_transmission():
+    direct_stage18 = {"FL_calf_joint": 18.0}
+    nonlinear_stage14 = {"FL_calf_joint": 14.0}
+    nonlinear_stage18 = {"FL_calf_joint": 18.0}
+
+    assert not requires_calf_endpoint_gate(False, direct_stage18)
+    assert not requires_calf_endpoint_gate(True, nonlinear_stage14)
+    assert requires_calf_endpoint_gate(True, nonlinear_stage18)
 
 
 def test_policy_torque_ramp_waits_for_clean_entry_and_resets_after_violations():
