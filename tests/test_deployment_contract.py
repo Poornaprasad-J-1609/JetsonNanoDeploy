@@ -315,6 +315,24 @@ def test_safety_filter_reports_intermediate_limit_and_rate_targets():
     assert np.any(diag["target_rate_limited"])
 
 
+def test_all_hip_hard_and_policy_limits_are_half_radian():
+    runner = PolicyRunner()
+    safety = SafetyMonitor(runner.policy_order, control_dt=runner.control_dt)
+
+    for joint_name in (
+        "BL_hip_joint",
+        "BR_hip_joint",
+        "FL_hip_joint",
+        "FR_hip_joint",
+    ):
+        index = runner.policy_order.index(joint_name)
+        assert safety.q_min[index] == pytest.approx(-0.5)
+        assert safety.q_max[index] == pytest.approx(0.5)
+        assert safety.policy_q_min[index] == pytest.approx(-0.5)
+        assert safety.policy_q_max[index] == pytest.approx(0.5)
+        assert safety.dq_max[index] == pytest.approx(0.04)
+
+
 def test_exact_policy_entry_blend_preserves_raw_action_after_entry():
     runner = PolicyRunner()
     raw_action = np.linspace(-0.75, 0.75, 12, dtype=np.float32)
