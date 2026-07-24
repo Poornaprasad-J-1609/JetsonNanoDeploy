@@ -58,6 +58,7 @@ from can_topology import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
+CAN_FEEDBACK_RECEIVE_EVERY_N_CYCLES = 2
 
 TELEMETRY_PORT_DEFAULT = 57543
 
@@ -7819,10 +7820,11 @@ def main():
                     clear_latest_can_snapshot if args.mode == "mit-signal" else None
                 ),
                 send_only_on_change=(args.mode == "mit-signal"),
-                # Motor responses are policy state, not diagnostics. Drain
-                # SocketCAN on every 5 ms worker cycle so the 50 Hz actor does
-                # not consume feedback that is two or three policy frames old.
-                receive_every_n_cycles=1,
+                # The 0c17450 hardware logs show this 100 Hz receive cadence
+                # keeps policy work near 9 ms and feedback near 9 ms. Receiving
+                # every 5 ms contends for the CAN lock, doubles policy work,
+                # and paradoxically makes the actor consume older feedback.
+                receive_every_n_cycles=CAN_FEEDBACK_RECEIVE_EVERY_N_CYCLES,
                 initial_stale_timeout_s=max(
                     0.250,
                     float(args.can_command_stale_timeout),

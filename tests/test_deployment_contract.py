@@ -21,6 +21,7 @@ from can_topology import (
 from imu_interface import ImuReading, XsensBackgroundReader, imu_reading_quality
 from joystick_interface import CommandSource
 from main_controller import (
+    CAN_FEEDBACK_RECEIVE_EVERY_N_CYCLES,
     CsvRunLogger,
     MeasuredTorqueSupervisor,
     PolicyTorqueRamp,
@@ -1457,6 +1458,17 @@ def test_stage40_guard_is_present_in_main_controller_source():
     assert "--acknowledge-40nm-suspension-test" in source
     assert 'args.torque_profile_stage == "stage40"' in source
     assert "stage40 requires --acknowledge-40nm-suspension-test" in source
+
+
+def test_medium_walk_restores_measured_good_0c17450_profile():
+    launcher = (ROOT / "scripts" / "run_medium_walk.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "--joint-velocity-source finite-difference" in launcher
+    assert "--exact-policy-after-entry" in launcher
+    assert "--no-exact-policy-after-entry" not in launcher
+    assert "--torque-profile-stage stage20" in launcher
+    assert CAN_FEEDBACK_RECEIVE_EVERY_N_CYCLES == 2
 
 
 def test_four_bar_transmission_is_inactive():

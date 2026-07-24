@@ -29,11 +29,9 @@ args=(
     --can-backend socketcan
     --can-bitrate 1000000
     --feedback-source mit
-    # The policy was trained with current simulator joint velocity. RobStride
-    # MIT velocity is well behaved in the loaded-ground logs, while the
-    # finite-difference low-pass path attenuates thigh/calf velocity by up to
-    # roughly 50% and adds phase lag to obs[24:36].
-    --joint-velocity-source mit
+    # Restore the 0c17450 observation path. Its loaded runs held 50 Hz and
+    # produced a more balanced gait than direct MIT velocity feedback.
+    --joint-velocity-source finite-difference
     --command-source keyboard
     --imu-source xsens
     --imu-port "$IMU_PORT"
@@ -65,32 +63,22 @@ args=(
     --keyboard-control-mode latched
     --keyboard-command-timeout 0.20
     --walk-command-grace-seconds 0.20
-    # Restore the command envelope from 0c17450. The actor still passes
-    # through the current clip, EMA, delta, and entry-ramp safety pipeline.
+    # Restore the command envelope from 0c17450.
     --policy-command-gain 1.5
     --policy-command-vx-max 0.20
     --policy-command-vy-max 0.12
     --policy-command-yaw-max 0
     --policy-action-clip 3.2
-    # Real hip actions reached |8.33| and repeatedly collided with the 0.50-rad
-    # hard envelope. At action_scale=0.25 this caps hip contribution at 0.40 rad
-    # while preserving the existing thigh/calf gait range.
-    --policy-hip-action-clip 1.6
     --policy-action-smoothing 0.35
     --policy-action-delta-limit 0.20
     --policy-entry-ramp-seconds 2.0
-    # Real feedback caused the unbounded actor to reach |action|=10.34 after
-    # entry. Keep the trained 0.25 action scale, but activate the configured
-    # clip/smoothing/delta pipeline before targets reach loaded hardware.
-    --no-exact-policy-after-entry
-    # Loaded ground profile. The successful stand log needs 23-26 Nm steady
-    # rear-leg support and reached 50.8 Nm transiently. Enter policy at 30 Nm
-    # and ramp toward the bounded 40 Nm software ceiling only while clean.
-    --torque-profile-stage stage40
-    --policy-pd-torque-limit-start 30
-    --policy-pd-torque-limit-final 40
-    --policy-torque-ramp-max-measured-torque 40
-    --acknowledge-40nm-suspension-test
+    # Blend safely for two seconds, then match Isaac/MuJoCo by sending the raw
+    # actor target. Physical joint, encoder, tilt, fault, and torque safety
+    # remain active after the blend.
+    --exact-policy-after-entry
+    # The July 23 stage20 run preserved loaded support without the aggressive
+    # 30-to-40 Nm profile used by the degraded July 24 runs.
+    --torque-profile-stage stage20
     --pose-transition-speed-rad-s 0.55
     --pose-transition-min-seconds 1.2
     --stand-ready-error-rad 0.25
@@ -100,7 +88,7 @@ args=(
     --feedback-timeout 0.05
     --fresh-feedback-max-age 0.08
     --policy-steps 0
-    --log-every 20
+    --log-every 5
     --no-auto-push-log
 )
 
