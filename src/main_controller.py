@@ -543,107 +543,13 @@ def stand_policy_imu_correction(
     )
 
 
-def joint_pose_sign(reference_pose_value):
-    sign = float(np.sign(reference_pose_value))
-    return sign if abs(sign) > 0.0 else 1.0
-
-
-def apply_gait_assist(
-    q_target,
-    command,
-    elapsed_time,
-    runner,
-    cfg,
-    blend_scale=1.0,
-):
-    gait_cfg = cfg.get("gait_assist", {})
-    if not bool(gait_cfg.get("enabled", False)):
-        return q_target
-
-    command = np.asarray(command, dtype=np.float32)
-    command_mag = float(max(np.linalg.norm(command[:2]), abs(command[2])))
-    min_command = float(gait_cfg.get("min_command", 0.03))
-    if command_mag < min_command:
-        return q_target
-
-    full_scale_command = max(min_command + 1e-6, float(gait_cfg.get("full_scale_command", 0.15)))
-    command_scale = float(
-        np.clip(
-            (command_mag - min_command) / (full_scale_command - min_command),
-            0.0,
-            1.0,
-        )
-    )
-    blend_scale = float(np.clip(blend_scale, 0.0, 1.0))
-    scale = command_scale * blend_scale
-    frequency_hz = float(gait_cfg.get("frequency_hz", 1.0))
-    thigh_amp = float(gait_cfg.get("thigh_amplitude", 0.0)) * scale
-    calf_amp = float(gait_cfg.get("calf_amplitude", 0.0)) * scale
-    hip_amp = float(gait_cfg.get("hip_amplitude", 0.0)) * scale
-
-    suspension_preview = bool(gait_cfg.get("suspension_preview", False))
-    q_target = (
-        np.asarray(runner.q_stand, dtype=np.float32).copy()
-        if suspension_preview
-        else np.asarray(q_target, dtype=np.float32).copy()
-    )
-    index_by_joint = {joint_name: i for i, joint_name in enumerate(runner.policy_order)}
-    phase_by_leg = {
-        "FL": 0.0,
-        "BR": 0.0,
-        "FR": np.pi,
-        "BL": np.pi,
-    }
-    reverse_phase = np.pi if command[0] < -min_command else 0.0
-
-    for leg, leg_phase in phase_by_leg.items():
-        phase = 2.0 * np.pi * frequency_hz * float(elapsed_time) + leg_phase + reverse_phase
-        swing = float(np.sin(phase))
-        lift = max(0.0, swing)
-
-        hip_name = f"{leg}_hip_joint"
-        thigh_name = f"{leg}_thigh_joint"
-        calf_name = f"{leg}_calf_joint"
-
-        if hip_name in index_by_joint:
-            lateral = float(command[1]) + 0.5 * float(command[2])
-            q_target[index_by_joint[hip_name]] += hip_amp * np.sign(lateral) * swing if abs(lateral) > min_command else 0.0
-        if thigh_name in index_by_joint:
-            i = index_by_joint[thigh_name]
-            q_target[i] += joint_pose_sign(runner.q_crouch[i]) * thigh_amp * swing
-        if calf_name in index_by_joint:
-            i = index_by_joint[calf_name]
-            q_target[i] += joint_pose_sign(runner.q_crouch[i]) * calf_amp * lift
-
-    return q_target
-
-
-def apply_motion_assists(
-    q_target,
-    command,
-    elapsed_time,
-    projected_gravity_b,
-    runner,
-    cfg,
-    use_gait,
-    gait_blend_scale=1.0,
-):
-    q = apply_imu_posture_stabilization(
+def apply_motion_assists(q_target, projected_gravity_b, runner, cfg):
+    return apply_imu_posture_stabilization(
         q_target=q_target,
         projected_gravity_b=projected_gravity_b,
         policy_order=runner.policy_order,
         cfg=cfg,
     )
-    if use_gait:
-        q = apply_gait_assist(
-            q_target=q,
-            command=command,
-            elapsed_time=elapsed_time,
-            runner=runner,
-            cfg=cfg,
-            blend_scale=gait_blend_scale,
-        )
-    return q
 
 
 def command_speed_scale(command_source):
@@ -4197,21 +4103,7 @@ def run_policy_loop(
     if sit_zero_pending:
         print("[ZERO CAL] initial sit/crouch target will auto-zero when settled.")
     print("imu_stabilization:", bool(motion_assist_cfg.get("imu_posture", {}).get("enabled", False)))
-    print("gait_assist:", bool(motion_assist_cfg.get("gait_assist", {}).get("enabled", False)))
-    if bool(
-        (motion_assist_cfg.get("gait_assist", {}) or {}).get(
-            "suspension_preview",
-            False,
-        )
-        and (motion_assist_cfg.get("gait_assist", {}) or {}).get(
-            "enabled",
-            False,
-        )
-    ):
-        print(
-            "WARNING: SUSPENSION GAIT PREVIEW overrides actor motor targets "
-            "with a bounded diagonal trot. Use only while fully suspended."
-        )
+    print("gait_assist: unavailable (walking targets are policy-only)")
     if steps is None:
         print("policy_steps: unlimited, running until emergency stop or Ctrl+C")
     else:
@@ -5223,21 +5115,11 @@ def run_policy_loop(
             imu_correction_abs_max = float(np.max(np.abs(imu_correction)))
             if not bool(exact_policy_after_entry):
                 if not policy_shadow_mode:
-                    gait_cfg = motion_assist_cfg.get("gait_assist", {}) or {}
-                    gait_elapsed_time = (
-                        policy_entry_elapsed_s
-                        if bool(gait_cfg.get("suspension_preview", False))
-                        else step * dt
-                    )
                     q_policy_target = apply_motion_assists(
                         q_target=q_policy_target,
-                        command=policy_command,
-                        elapsed_time=gait_elapsed_time,
                         projected_gravity_b=projected_gravity_b,
                         runner=runner,
                         cfg=motion_assist_cfg,
-                        use_gait=True,
-                        gait_blend_scale=policy_entry_scale,
                     )
             policy_target_conversion_s += time.monotonic() - target_conversion_start
             policy_entry_rate_limit_active = bool(
@@ -6677,7 +6559,10 @@ def main():
         "--gait-assist",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="enable/disable walking-style sinusoidal leg overlay for suspended tests",
+        help=(
+            "deprecated compatibility flag; --no-gait-assist is accepted, "
+            "but enabling hard-coded gait substitution is rejected"
+        ),
     )
     parser.add_argument(
         "--policy-command-gain",
@@ -7140,19 +7025,11 @@ def main():
     motion_assist_cfg = motion_assist_defaults
     if args.imu_stabilization is not None:
         motion_assist_cfg.setdefault("imu_posture", {})["enabled"] = bool(args.imu_stabilization)
-    if args.gait_assist is not None:
-        motion_assist_cfg.setdefault("gait_assist", {})["enabled"] = bool(args.gait_assist)
-    gait_cfg = motion_assist_cfg.get("gait_assist", {}) or {}
-    suspension_gait_preview = bool(
-        gait_cfg.get("enabled", False)
-        and gait_cfg.get("suspension_preview", False)
-    )
-    if suspension_gait_preview and args.exact_policy_after_entry:
+    if args.gait_assist:
         parser.error(
-            "suspension gait preview requires --no-exact-policy-after-entry"
+            "--gait-assist was removed: walking motor targets must come from "
+            "the loaded policy"
         )
-    if suspension_gait_preview and args.policy_sim_match:
-        parser.error("suspension gait preview cannot use --policy-sim-match")
 
     safety = SafetyMonitor(
         runner.policy_order,
@@ -7227,15 +7104,6 @@ def main():
                 joint_name: float(value) * float(args.policy_pd_torque_scale)
                 for joint_name, value in torque_final_by_joint.items()
             }
-    if (
-        suspension_gait_preview
-        and max(torque_final_by_joint.values(), default=0.0) > 14.0
-    ):
-        print(
-            "ERROR: suspension gait preview is limited to a 14 Nm final "
-            "policy torque ceiling."
-        )
-        return 1
     calibration_required = requires_calf_endpoint_gate(
         four_bar_enabled,
         torque_final_by_joint,

@@ -50,17 +50,3 @@ stand_policy_imu:
   # differential actor response into its correction cap.
   use_live_gyro: false
   use_live_joint_state: false
-
-gait_assist:
-  # Off by default. With --gait-assist this deliberately replaces contact-
-  # dependent actor motor targets with a bounded diagonal-trot preview. It is
-  # only for a fully suspended robot and is rejected above a 14 Nm policy
-  # torque ceiling. Ground walking must keep this disabled.
-  enabled: false
-  suspension_preview: true
-  frequency_hz: 0.55
-  min_command: 0.03
-  full_scale_command: 0.10
-  thigh_amplitude: 0.30
-  calf_amplitude: 0.50
-  hip_amplitude: 0.03
