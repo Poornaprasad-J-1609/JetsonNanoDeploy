@@ -27,6 +27,7 @@ from main_controller import (
     MeasuredTorqueSupervisor,
     PolicyTorqueRamp,
     action_equivalent_for_q_target,
+    apply_gait_assist,
     clip_policy_hip_actions,
     compact_telemetry_record,
     constant_joint_map,
@@ -67,6 +68,67 @@ def load_yaml(path):
 def test_all_yaml_files_parse():
     for path in sorted((ROOT / "config").glob("*.yaml")):
         assert load_yaml(path) is not None, path
+
+
+def test_suspension_gait_preview_replaces_stop_bound_actor_targets():
+    runner = PolicyRunner()
+    cfg = load_yaml(ROOT / "config" / "motion_assist.yaml")
+    cfg["gait_assist"]["enabled"] = True
+    frequency_hz = float(cfg["gait_assist"]["frequency_hz"])
+    quarter_cycle_s = 0.25 / frequency_hz
+    unsafe_actor_target = np.asarray(
+        [0.4] * 4 + [0.9] * 4 + [-1.0, 1.0, -1.0, 1.0],
+        dtype=np.float32,
+    )
+
+    first_diagonal = apply_gait_assist(
+        q_target=unsafe_actor_target,
+        command=np.array([0.12, 0.0, 0.0], dtype=np.float32),
+        elapsed_time=quarter_cycle_s,
+        runner=runner,
+        cfg=cfg,
+        blend_scale=1.0,
+    )
+    second_diagonal = apply_gait_assist(
+        q_target=unsafe_actor_target,
+        command=np.array([0.12, 0.0, 0.0], dtype=np.float32),
+        elapsed_time=quarter_cycle_s + 0.5 / frequency_hz,
+        runner=runner,
+        cfg=cfg,
+        blend_scale=1.0,
+    )
+    index = {name: i for i, name in enumerate(runner.policy_order)}
+
+    assert first_diagonal[index["FL_calf_joint"]] == pytest.approx(0.50)
+    assert first_diagonal[index["BR_calf_joint"]] == pytest.approx(-0.50)
+    assert first_diagonal[index["FR_calf_joint"]] == pytest.approx(0.0, abs=1e-6)
+    assert first_diagonal[index["BL_calf_joint"]] == pytest.approx(0.0, abs=1e-6)
+    assert second_diagonal[index["FR_calf_joint"]] == pytest.approx(-0.50)
+    assert second_diagonal[index["BL_calf_joint"]] == pytest.approx(0.50)
+    assert second_diagonal[index["FL_calf_joint"]] == pytest.approx(0.0, abs=1e-6)
+    assert second_diagonal[index["BR_calf_joint"]] == pytest.approx(0.0, abs=1e-6)
+    assert np.allclose(first_diagonal[:4], runner.q_stand[:4])
+    assert np.allclose(second_diagonal[:4], runner.q_stand[:4])
+
+    safety = SafetyMonitor(runner.policy_order, control_dt=runner.control_dt)
+    for target in (first_diagonal, second_diagonal):
+        assert np.all(target >= safety.q_min)
+        assert np.all(target <= safety.q_max)
+
+
+def test_suspension_gait_preview_entry_blend_starts_at_stand():
+    runner = PolicyRunner()
+    cfg = load_yaml(ROOT / "config" / "motion_assist.yaml")
+    cfg["gait_assist"]["enabled"] = True
+    result = apply_gait_assist(
+        q_target=np.ones(12, dtype=np.float32),
+        command=np.array([0.12, 0.0, 0.0], dtype=np.float32),
+        elapsed_time=1.0,
+        runner=runner,
+        cfg=cfg,
+        blend_scale=0.0,
+    )
+    assert np.allclose(result, runner.q_stand)
 
 
 def test_python_files_compile():
