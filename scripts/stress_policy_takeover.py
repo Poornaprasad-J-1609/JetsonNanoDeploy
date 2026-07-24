@@ -152,6 +152,10 @@ def command_arrays(layer, commands, fallback):
 
 def run_case(case_index, sample, command_name, command, runner, layer, safety, rng):
     dt = float(runner.control_dt)
+    policy_torque_limit = max(
+        layer.policy_pd_torque_limit_for_joint(name)
+        for name in layer.policy_order
+    )
     entry_steps = int(round(2.0 / dt))
     steady_steps = int(round(1.5 / dt))
     return_steps = int(round(2.0 / dt))
@@ -161,6 +165,7 @@ def run_case(case_index, sample, command_name, command, runner, layer, safety, r
     q_noise_std = float(rng.uniform(0.0, 0.0015))
     qd_noise_std = float(rng.uniform(0.0, 0.05))
     process_noise_std = float(rng.uniform(0.0, 0.0005))
+    load_scale = float(rng.uniform(0.85, 1.15))
 
     q = np.clip(sample["q"], safety.q_min, safety.q_max).astype(np.float32)
     qd = np.asarray(sample["qd"], dtype=np.float32).copy()
@@ -179,6 +184,10 @@ def run_case(case_index, sample, command_name, command, runner, layer, safety, r
     previous_q_sent, previous_tau, previous_kp, previous_kd = command_arrays(
         layer, stand_commands, runner.q_stand
     )
+    # At the measured stand equilibrium, motor PD torque balances body load.
+    # Preserve that signed load while policy gains and targets change so the
+    # dry plant can expose support loss instead of assuming a weightless body.
+    external_load_torque = (-previous_tau * load_scale).astype(np.float32)
 
     maximum_target_step = 0.0
     maximum_torque = 0.0
@@ -191,6 +200,18 @@ def run_case(case_index, sample, command_name, command, runner, layer, safety, r
     maximum_torque_step_after = 0.0
     maximum_kp_step = 0.0
     maximum_kd_step = 0.0
+    maximum_policy_tracking_error = 0.0
+    maximum_steady_tracking_error = 0.0
+    terminal_policy_tracking_error = 0.0
+    maximum_policy_speed = 0.0
+    maximum_policy_load_deficit = 0.0
+    terminal_policy_load_deficit = 0.0
+    maximum_raw_action = 0.0
+    maximum_sent_action = 0.0
+    maximum_requested_target_excursion = 0.0
+    maximum_sent_target_excursion = 0.0
+    steady_sent_targets = []
+    steady_policy_torques = []
     takeover_target_step = None
     takeover_torque_step = None
     return_target_step = None
@@ -238,6 +259,18 @@ def run_case(case_index, sample, command_name, command, runner, layer, safety, r
             )
             sent_action = (sent_action * float(alpha)).astype(np.float32)
             q_requested = runner.action_to_q_target(sent_action)
+            maximum_raw_action = max(
+                maximum_raw_action,
+                float(np.max(np.abs(raw_action))),
+            )
+            maximum_sent_action = max(
+                maximum_sent_action,
+                float(np.max(np.abs(sent_action))),
+            )
+            maximum_requested_target_excursion = max(
+                maximum_requested_target_excursion,
+                float(np.max(np.abs(q_requested - runner.q_stand))),
+            )
             q_safe = shifted_safety_filter(
                 safety,
                 q_requested,
@@ -321,6 +354,36 @@ def run_case(case_index, sample, command_name, command, runner, layer, safety, r
             maximum_torque_step_after = float(tau[torque_step_index])
         maximum_kp_step = max(maximum_kp_step, kp_step)
         maximum_kd_step = max(maximum_kd_step, kd_step)
+        tracking_error = float(np.max(np.abs(q_sent - q_measured)))
+        load_deficit = float(np.max(np.abs(tau + external_load_torque)))
+        if step < total_policy_steps:
+            maximum_sent_target_excursion = max(
+                maximum_sent_target_excursion,
+                float(np.max(np.abs(q_sent - runner.q_stand))),
+            )
+            if step >= entry_steps:
+                steady_sent_targets.append(q_sent.copy())
+                steady_policy_torques.append(tau.copy())
+            maximum_policy_tracking_error = max(
+                maximum_policy_tracking_error,
+                tracking_error,
+            )
+            maximum_policy_speed = max(
+                maximum_policy_speed,
+                float(np.max(np.abs(qd_measured))),
+            )
+            maximum_policy_load_deficit = max(
+                maximum_policy_load_deficit,
+                load_deficit,
+            )
+            if step >= entry_steps:
+                maximum_steady_tracking_error = max(
+                    maximum_steady_tracking_error,
+                    tracking_error,
+                )
+            if step == total_policy_steps - 1:
+                terminal_policy_tracking_error = tracking_error
+                terminal_policy_load_deficit = load_deficit
         if step == 0:
             takeover_target_step = target_step
             takeover_torque_step = torque_step
@@ -332,7 +395,7 @@ def run_case(case_index, sample, command_name, command, runner, layer, safety, r
         nonfinite = nonfinite or not bool(np.all(np.isfinite(values)))
         if step < total_policy_steps:
             torque_limit_violation = torque_limit_violation or bool(
-                np.max(np.abs(tau)) > 30.05
+                np.max(np.abs(tau)) > policy_torque_limit + 0.05
             )
         hard_limit_violation = hard_limit_violation or bool(
             np.any(q_sent < safety.q_min - 1.0e-6)
@@ -342,14 +405,14 @@ def run_case(case_index, sample, command_name, command, runner, layer, safety, r
             np.any(np.abs(q_sent - previous_q_sent) > safety.dq_max + 1.0e-5)
         )
 
-        # The source row is a loaded, stand-ready equilibrium. Preserve its
-        # measured load deflection and respond to changes in transmitted
-        # target; pulling q directly toward absolute zero would invent a large
-        # release velocity on the first dry-run cycle that the real log never
-        # contained.
+        # First-order loaded-joint model. Net motor-plus-body torque changes
+        # joint position relative to the commanded impedance. It is deliberately
+        # conservative: policy torque clipping cannot hide a support deficit.
+        net_torque = tau + external_load_torque
+        effective_stiffness = np.maximum(np.abs(kp), 20.0)
         q_next = (
             q
-            + plant_response * (q_sent - previous_q_sent)
+            + plant_response * net_torque / effective_stiffness
             + rng.normal(0.0, process_noise_std, 12).astype(np.float32)
         )
         q_next = np.clip(q_next, safety.q_min, safety.q_max).astype(np.float32)
@@ -361,17 +424,43 @@ def run_case(case_index, sample, command_name, command, runner, layer, safety, r
         previous_kp = kp
         previous_kd = kd
 
-    # The actor can legitimately reverse a bounded policy torque between
-    # mid-gait samples. Transition acceptance therefore checks the first
-    # takeover/return steps explicitly; the global peak remains diagnostic.
-    passed = (
+    if steady_sent_targets:
+        steady_target_range = np.ptp(
+            np.asarray(steady_sent_targets, dtype=np.float32),
+            axis=0,
+        )
+    else:
+        steady_target_range = np.zeros(12, dtype=np.float32)
+    if steady_policy_torques:
+        steady_torque_range = np.ptp(
+            np.asarray(steady_policy_torques, dtype=np.float32),
+            axis=0,
+        )
+    else:
+        steady_torque_range = np.zeros(12, dtype=np.float32)
+    sagittal_indices = [
+        index
+        for index, name in enumerate(runner.policy_order)
+        if "_thigh_" in name or "_calf_" in name
+    ]
+    sagittal_ranges = steady_target_range[sagittal_indices]
+    common_pass = (
         not nonfinite
         and not torque_limit_violation
         and not hard_limit_violation
         and not command_rate_violation
+    )
+    takeover_passed = (
+        common_pass
         and float(takeover_target_step) <= 0.02
-        and float(return_target_step) <= 0.02
         and float(takeover_torque_step) <= 8.0
+    )
+    # The actor can legitimately reverse a bounded policy torque between
+    # mid-gait samples. Return remains a separate result because the loaded
+    # first-order plant can move appreciably during the cycle before release.
+    return_passed = (
+        common_pass
+        and float(return_target_step) <= 0.02
         and float(return_torque_step) <= 12.0
         # The loaded legacy stand path reached about 71 Nm transiently in the
         # real logs. Keep synthetic noisy recovery below a 90 Nm diagnostic
@@ -380,9 +469,12 @@ def run_case(case_index, sample, command_name, command, runner, layer, safety, r
         and maximum_kp_step <= 21.0
         and maximum_kd_step <= 1.10
     )
-    return {
+    passed = takeover_passed and return_passed
+    result = {
         "case": case_index,
         "passed": int(passed),
+        "takeover_passed": int(takeover_passed),
+        "return_passed": int(return_passed),
         "source_log": sample["source"],
         "source_step": sample["step"],
         "command": command_name,
@@ -390,6 +482,10 @@ def run_case(case_index, sample, command_name, command, runner, layer, safety, r
         "command_vy": command[1],
         "command_yaw": command[2],
         "plant_response": plant_response,
+        "load_scale": load_scale,
+        "external_load_torque_abs_max_nm": float(
+            np.max(np.abs(external_load_torque))
+        ),
         "gyro_noise_std": gyro_noise_std,
         "gravity_noise_std": gravity_noise_std,
         "q_noise_std": q_noise_std,
@@ -409,11 +505,47 @@ def run_case(case_index, sample, command_name, command, runner, layer, safety, r
         "return_torque_step_nm": return_torque_step,
         "maximum_kp_step": maximum_kp_step,
         "maximum_kd_step": maximum_kd_step,
+        "maximum_policy_tracking_error_rad": maximum_policy_tracking_error,
+        "maximum_steady_tracking_error_rad": maximum_steady_tracking_error,
+        "terminal_policy_tracking_error_rad": terminal_policy_tracking_error,
+        "maximum_policy_speed_rad_s": maximum_policy_speed,
+        "maximum_policy_load_deficit_nm": maximum_policy_load_deficit,
+        "terminal_policy_load_deficit_nm": terminal_policy_load_deficit,
+        "maximum_raw_action": maximum_raw_action,
+        "maximum_sent_action": maximum_sent_action,
+        "maximum_requested_target_excursion_rad": maximum_requested_target_excursion,
+        "maximum_sent_target_excursion_rad": maximum_sent_target_excursion,
+        "minimum_steady_sagittal_target_range_rad": float(
+            np.min(sagittal_ranges)
+        ),
+        "mean_steady_sagittal_target_range_rad": float(
+            np.mean(sagittal_ranges)
+        ),
+        "maximum_steady_sagittal_target_range_rad": float(
+            np.max(sagittal_ranges)
+        ),
+        "minimum_steady_sagittal_torque_range_nm": float(
+            np.min(steady_torque_range[sagittal_indices])
+        ),
+        "mean_steady_sagittal_torque_range_nm": float(
+            np.mean(steady_torque_range[sagittal_indices])
+        ),
+        "maximum_steady_sagittal_torque_range_nm": float(
+            np.max(steady_torque_range[sagittal_indices])
+        ),
         "nonfinite": int(nonfinite),
         "torque_limit_violation": int(torque_limit_violation),
         "hard_limit_violation": int(hard_limit_violation),
         "command_rate_violation": int(command_rate_violation),
     }
+    for index, joint_name in enumerate(runner.policy_order):
+        result[f"{joint_name}_steady_target_range_rad"] = float(
+            steady_target_range[index]
+        )
+        result[f"{joint_name}_steady_torque_range_nm"] = float(
+            steady_torque_range[index]
+        )
+    return result
 
 
 def main():
@@ -421,6 +553,9 @@ def main():
     parser.add_argument("--real-log", action="append", required=True)
     parser.add_argument("--cases", type=int, default=100)
     parser.add_argument("--seed", type=int, default=8675)
+    parser.add_argument("--policy-kp-scale", type=float, default=1.0)
+    parser.add_argument("--policy-kd-scale", type=float, default=1.0)
+    parser.add_argument("--policy-torque-limit", type=float, default=30.0)
     parser.add_argument(
         "--summary-csv",
         default=str(ROOT / "logs" / "policy_takeover_stress_summary.csv"),
@@ -429,6 +564,12 @@ def main():
     args = parser.parse_args()
     if args.cases < 1:
         parser.error("--cases must be >= 1")
+    if not np.isfinite(args.policy_kp_scale) or args.policy_kp_scale <= 0.0:
+        parser.error("--policy-kp-scale must be finite and > 0")
+    if not np.isfinite(args.policy_kd_scale) or args.policy_kd_scale <= 0.0:
+        parser.error("--policy-kd-scale must be finite and > 0")
+    if not np.isfinite(args.policy_torque_limit) or args.policy_torque_limit <= 0.0:
+        parser.error("--policy-torque-limit must be finite and > 0")
 
     runner = PolicyRunner(
         allow_policy_hash_mismatch=args.allow_policy_hash_mismatch
@@ -445,7 +586,13 @@ def main():
         active_joints=[],
         joint_can_bus=resolve_joint_can_bus(runner.policy_order, 2),
     )
-    layer.set_policy_pd_torque_limit(30.0)
+    for group in ("hip", "thigh", "calf"):
+        layer.gains["policy"][group]["kp"] *= float(args.policy_kp_scale)
+        layer.gains["policy"][group]["kd"] *= float(args.policy_kd_scale)
+    for joint_cfg in layer.gains["policy"].get("joints", {}).values():
+        joint_cfg["kp"] *= float(args.policy_kp_scale)
+        joint_cfg["kd"] *= float(args.policy_kd_scale)
+    layer.set_policy_pd_torque_limit(args.policy_torque_limit)
     safety = SafetyMonitor(runner.policy_order, control_dt=runner.control_dt)
     rng = np.random.default_rng(args.seed)
 
@@ -474,10 +621,19 @@ def main():
         writer.writerows(rows)
 
     passed = sum(row["passed"] for row in rows)
+    takeover_passed = sum(row["takeover_passed"] for row in rows)
+    return_passed = sum(row["return_passed"] for row in rows)
     print("POLICY TAKEOVER STRESS SUMMARY")
     print(f"policy_sha256: {runner.policy_sha256}")
+    print(f"policy_kp_scale: {args.policy_kp_scale:.3f}")
+    print(f"policy_kd_scale: {args.policy_kd_scale:.3f}")
+    print(f"policy_torque_limit_nm: {args.policy_torque_limit:.3f}")
     print(f"real_policy_samples: {len(samples)}")
     print(f"cases: {len(rows)}")
+    print(f"takeover_passed: {takeover_passed}")
+    print(f"takeover_failed: {len(rows) - takeover_passed}")
+    print(f"return_passed: {return_passed}")
+    print(f"return_failed: {len(rows) - return_passed}")
     print(f"passed: {passed}")
     print(f"failed: {len(rows) - passed}")
     for field in (
@@ -492,6 +648,23 @@ def main():
         "return_torque_step_nm",
         "maximum_kp_step",
         "maximum_kd_step",
+        "external_load_torque_abs_max_nm",
+        "maximum_policy_tracking_error_rad",
+        "maximum_steady_tracking_error_rad",
+        "terminal_policy_tracking_error_rad",
+        "maximum_policy_speed_rad_s",
+        "maximum_policy_load_deficit_nm",
+        "terminal_policy_load_deficit_nm",
+        "maximum_raw_action",
+        "maximum_sent_action",
+        "maximum_requested_target_excursion_rad",
+        "maximum_sent_target_excursion_rad",
+        "minimum_steady_sagittal_target_range_rad",
+        "mean_steady_sagittal_target_range_rad",
+        "maximum_steady_sagittal_target_range_rad",
+        "minimum_steady_sagittal_torque_range_nm",
+        "mean_steady_sagittal_torque_range_nm",
+        "maximum_steady_sagittal_torque_range_nm",
     ):
         print(f"{field}: {max(float(row[field]) for row in rows):.6f}")
     print(f"summary_csv: {output}")
