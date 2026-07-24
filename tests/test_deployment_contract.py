@@ -607,7 +607,7 @@ def test_configured_pose_path_matches_proven_e9a4a13_packet_behavior():
     assert command["kd_effective"] == pytest.approx(36.0, abs=0.1)
 
 
-def test_policy_uses_damped_official_gains_without_changing_pose_gains():
+def test_policy_restores_0c17450_gains_without_changing_pose_gains():
     runner = PolicyRunner()
     motor_ids = load_yaml(ROOT / "config" / "motor_ids.yaml")["motor_ids"]
     joint_name = "FR_calf_joint"
@@ -639,11 +639,31 @@ def test_policy_uses_damped_official_gains_without_changing_pose_gains():
     )[0]
 
     assert policy_command["command_encoding"] == "official"
-    assert policy_command["kp_effective"] == pytest.approx(80.0, abs=0.1)
-    assert policy_command["kd_effective"] == pytest.approx(4.0, abs=0.01)
+    assert policy_command["kp_effective"] == pytest.approx(110.0, abs=0.1)
+    assert policy_command["kd_effective"] == pytest.approx(6.5, abs=0.01)
     assert pose_command["command_encoding"] == "legacy_9b03a77"
     assert pose_command["kp_effective"] == pytest.approx(750.0, abs=0.1)
     assert pose_command["kd_effective"] == pytest.approx(36.0, abs=0.1)
+
+    back_joint = "BL_calf_joint"
+    back_command = MotorCommandLayer(
+        runner.policy_order,
+        motor_ids,
+        active_joints=[back_joint],
+        joint_can_bus=resolve_joint_can_bus(runner.policy_order, 1),
+    ).build_mit_commands(
+        q_target,
+        phase="policy",
+        feedback_by_joint={
+            back_joint: {
+                "position_raw": 0.0,
+                "joint_position": 0.0,
+                "joint_velocity": 0.0,
+            }
+        },
+    )[0]
+    assert back_command["kp_effective"] == pytest.approx(130.0, abs=0.1)
+    assert back_command["kd_effective"] == pytest.approx(8.0, abs=0.01)
 
 
 def test_policy_entry_blends_effective_pose_gains_without_a_gain_step():
@@ -693,11 +713,11 @@ def test_policy_entry_blends_effective_pose_gains_without_a_gain_step():
     assert entry_start["gain_blend_alpha"] == pytest.approx(0.0)
     assert entry_start["kp_effective"] == pytest.approx(750.0, abs=0.2)
     assert entry_start["kd_effective"] == pytest.approx(36.0, abs=0.02)
-    assert entry_middle["kp_effective"] == pytest.approx(415.0, abs=0.2)
-    assert entry_middle["kd_effective"] == pytest.approx(20.0, abs=0.02)
+    assert entry_middle["kp_effective"] == pytest.approx(430.0, abs=0.2)
+    assert entry_middle["kd_effective"] == pytest.approx(21.25, abs=0.02)
     assert entry_end["gain_blend_from_phase"] is None
-    assert entry_end["kp_effective"] == pytest.approx(80.0, abs=0.2)
-    assert entry_end["kd_effective"] == pytest.approx(4.0, abs=0.02)
+    assert entry_end["kp_effective"] == pytest.approx(110.0, abs=0.2)
+    assert entry_end["kd_effective"] == pytest.approx(6.5, abs=0.02)
 
 
 def test_stand_recovery_blends_effective_policy_gains_without_a_gain_step():
@@ -743,10 +763,10 @@ def test_stand_recovery_blends_effective_policy_gains_without_a_gain_step():
 
     assert recovery_start["command_encoding"] == "legacy_9b03a77"
     assert recovery_start["gain_blend_from_phase"] == "policy"
-    assert recovery_start["kp_effective"] == pytest.approx(80.0, abs=0.2)
-    assert recovery_start["kd_effective"] == pytest.approx(4.0, abs=0.02)
-    assert recovery_middle["kp_effective"] == pytest.approx(415.0, abs=0.2)
-    assert recovery_middle["kd_effective"] == pytest.approx(20.0, abs=0.02)
+    assert recovery_start["kp_effective"] == pytest.approx(110.0, abs=0.2)
+    assert recovery_start["kd_effective"] == pytest.approx(6.5, abs=0.02)
+    assert recovery_middle["kp_effective"] == pytest.approx(430.0, abs=0.2)
+    assert recovery_middle["kd_effective"] == pytest.approx(21.25, abs=0.02)
     assert recovery_end["gain_blend_from_phase"] is None
     assert recovery_end["kp_effective"] == pytest.approx(750.0, abs=0.2)
     assert recovery_end["kd_effective"] == pytest.approx(36.0, abs=0.02)

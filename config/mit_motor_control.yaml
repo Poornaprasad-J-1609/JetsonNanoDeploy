@@ -85,27 +85,29 @@ gains:
 
   policy:
     hip:
+      # Restore the actuator impedance used by the comparatively successful
+      # 0c17450 hardware run. Policy packets remain in official RS04 units.
       kp: 80.0
       kd: 5.0
     thigh:
-      kp: 80.0
-      kd: 4.0
+      kp: 110.0
+      kd: 6.5
     calf:
-      kp: 80.0
-      kd: 4.0
+      kp: 110.0
+      kd: 6.5
     joints:
       BL_hip_joint: {kp: 80.0, kd: 5.0}
       BR_hip_joint: {kp: 80.0, kd: 5.0}
       FL_hip_joint: {kp: 80.0, kd: 5.0}
       FR_hip_joint: {kp: 80.0, kd: 5.0}
-      BL_thigh_joint: {kp: 80.0, kd: 4.0}
-      BR_thigh_joint: {kp: 80.0, kd: 4.0}
-      FL_thigh_joint: {kp: 80.0, kd: 4.0}
-      FR_thigh_joint: {kp: 80.0, kd: 4.0}
-      BL_calf_joint: {kp: 80.0, kd: 4.0}
-      BR_calf_joint: {kp: 80.0, kd: 4.0}
-      FL_calf_joint: {kp: 80.0, kd: 4.0}
-      FR_calf_joint: {kp: 80.0, kd: 4.0}
+      BL_thigh_joint: {kp: 130.0, kd: 8.0}
+      BR_thigh_joint: {kp: 130.0, kd: 8.0}
+      FL_thigh_joint: {kp: 110.0, kd: 6.5}
+      FR_thigh_joint: {kp: 110.0, kd: 6.5}
+      BL_calf_joint: {kp: 130.0, kd: 8.0}
+      BR_calf_joint: {kp: 130.0, kd: 8.0}
+      FL_calf_joint: {kp: 110.0, kd: 6.5}
+      FR_calf_joint: {kp: 110.0, kd: 6.5}
 
   # These take over only after stand has settled and direct IMU stabilization
   # is explicitly enabled.

@@ -28,14 +28,14 @@ from safety_monitor import SafetyMonitor
 
 
 COMMANDS = (
-    ("forward", (0.15, 0.00, 0.00)),
-    ("backward", (-0.15, 0.00, 0.00)),
-    ("left", (0.00, 0.10, 0.00)),
-    ("right", (0.00, -0.10, 0.00)),
-    ("forward_left", (0.14, 0.08, 0.00)),
-    ("forward_right", (0.14, -0.08, 0.00)),
-    ("backward_left", (-0.14, 0.08, 0.00)),
-    ("backward_right", (-0.14, -0.08, 0.00)),
+    ("forward", (0.20, 0.00, 0.00)),
+    ("backward", (-0.20, 0.00, 0.00)),
+    ("left", (0.00, 0.12, 0.00)),
+    ("right", (0.00, -0.12, 0.00)),
+    ("forward_left", (0.18, 0.10, 0.00)),
+    ("forward_right", (0.18, -0.10, 0.00)),
+    ("backward_left", (-0.18, 0.10, 0.00)),
+    ("backward_right", (-0.18, -0.10, 0.00)),
     ("yaw_left", (0.00, 0.00, 0.12)),
     ("yaw_right", (0.00, 0.00, -0.12)),
     ("forward_yaw_left", (0.13, 0.00, 0.10)),
@@ -232,8 +232,8 @@ def run_case(case_index, sample, command_name, command, runner, layer, safety, r
             sent_action = filtered_policy_action(
                 raw_action=raw_action,
                 previous_action=previous_sent_action,
-                clip_abs=2.5,
-                smoothing=0.15,
+                clip_abs=3.2,
+                smoothing=0.35,
                 delta_limit_abs=0.20,
             )
             sent_action = (sent_action * float(alpha)).astype(np.float32)

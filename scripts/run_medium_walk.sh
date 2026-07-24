@@ -57,12 +57,14 @@ args=(
     --speed-scale-step 0.01
     --keyboard-command-timeout 0.20
     --walk-command-grace-seconds 0.20
-    --policy-command-gain 1.0
-    --policy-command-vx-max 0.15
-    --policy-command-vy-max 0.10
+    # Restore the command envelope from 0c17450. The actor still passes
+    # through the current clip, EMA, delta, and entry-ramp safety pipeline.
+    --policy-command-gain 1.5
+    --policy-command-vx-max 0.20
+    --policy-command-vy-max 0.12
     --policy-command-yaw-max 0
-    --policy-action-clip 2.5
-    --policy-action-smoothing 0.15
+    --policy-action-clip 3.2
+    --policy-action-smoothing 0.35
     --policy-action-delta-limit 0.20
     --policy-entry-ramp-seconds 2.0
     # Real feedback caused the unbounded actor to reach |action|=10.34 after
