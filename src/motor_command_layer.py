@@ -1001,6 +1001,11 @@ class MotorCommandLayer:
                 if prelimit_q_target is None
                 else float(prelimit_q_target[i])
             )
+            q_prelimit_hard_limited = self.apply_hard_joint_limit(
+                joint_name,
+                q_prelimit_requested,
+                phase=phase,
+            )
             feedback = feedback_by_joint.get(joint_name, {})
             feedback_position = feedback.get("position_raw") if isinstance(feedback, dict) else None
             feedback_joint_position = feedback.get("joint_position") if isinstance(feedback, dict) else None
@@ -1026,7 +1031,14 @@ class MotorCommandLayer:
                 and phase_torque_limit > 0.0
                 and preload_feedback_valid
             ):
-                joint_limit_preload_error = q_prelimit_requested - q_des
+                # Reproduce only target error discarded by the physical joint
+                # boundary. q_des can also differ because of target slew or
+                # estimated-torque limiting; turning those differences into
+                # feedforward torque bypasses the very limits intended to
+                # smooth and bound the command.
+                joint_limit_preload_error = (
+                    q_prelimit_requested - q_prelimit_hard_limited
+                )
                 if abs(joint_limit_preload_error) > 1.0e-7:
                     joint_limit_preload_tau_ff_requested = (
                         kp_effective * joint_limit_preload_error
@@ -1295,6 +1307,7 @@ class MotorCommandLayer:
                 "q_des": q_des_sent,
                 "q_requested": q_requested,
                 "q_prelimit_requested": q_prelimit_requested,
+                "q_prelimit_hard_limited": q_prelimit_hard_limited,
                 "q_before_torque_limit": q_before_torque_limit,
                 "q_before_command_rate_limit": q_before_command_rate_limit,
                 "command_rate_limited": command_rate_limited,

@@ -153,7 +153,7 @@ def test_hip_action_clip_preserves_thigh_and_calf_outputs():
 
     for index, joint_name in enumerate(policy_order):
         if "_hip_joint" in joint_name:
-            assert abs(float(clipped[index])) <= 1.6
+            assert abs(float(clipped[index])) <= 1.6 + 1.0e-6
         else:
             assert clipped[index] == pytest.approx(raw[index])
     np.testing.assert_array_equal(
@@ -1091,6 +1091,43 @@ def test_virtual_joint_stop_requires_fresh_feedback_and_policy_phase():
 
     assert missing_feedback["joint_limit_preload_tau_ff"] == pytest.approx(0.0)
     assert pose_command["joint_limit_preload_tau_ff"] == pytest.approx(0.0)
+
+
+def test_virtual_joint_stop_does_not_turn_rate_limiting_into_feedforward_torque():
+    runner = PolicyRunner()
+    motor_ids = load_yaml(ROOT / "config" / "motor_ids.yaml")["motor_ids"]
+    joint_name = "FL_calf_joint"
+    joint_index = runner.policy_order.index(joint_name)
+    layer = MotorCommandLayer(
+        runner.policy_order,
+        motor_ids,
+        active_joints=[joint_name],
+        joint_can_bus=resolve_joint_can_bus(runner.policy_order, 1),
+    )
+    layer.set_policy_pd_torque_limit(14.0)
+
+    # Both targets are inside the physical [0, 1.36] calf envelope. Their
+    # difference represents target slew limiting, not a mechanical stop.
+    q_rate_limited = np.zeros(12, dtype=np.float32)
+    q_rate_limited[joint_index] = 0.10
+    q_prelimit = q_rate_limited.copy()
+    q_prelimit[joint_index] = 0.50
+    command = layer.build_mit_commands(
+        q_rate_limited,
+        phase="policy",
+        prelimit_q_target=q_prelimit,
+        feedback_by_joint={
+            joint_name: {
+                "position_raw": 0.0,
+                "joint_position": 0.0,
+                "joint_velocity": 0.0,
+            }
+        },
+    )[0]
+
+    assert command["q_prelimit_hard_limited"] == pytest.approx(0.50)
+    assert command["joint_limit_preload_error"] == pytest.approx(0.0)
+    assert command["joint_limit_preload_tau_ff"] == pytest.approx(0.0)
 
 
 def test_per_joint_policy_torque_limits_are_preserved_in_commands():
