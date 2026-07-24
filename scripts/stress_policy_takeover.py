@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 import numpy as np
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
@@ -16,6 +17,7 @@ if str(SRC) not in sys.path:
 
 from can_topology import resolve_joint_can_bus
 from main_controller import (
+    clip_policy_hip_actions,
     filtered_policy_action,
     policy_entry_gain_blend_scale,
     shifted_safety_filter,
@@ -150,7 +152,21 @@ def command_arrays(layer, commands, fallback):
     return q_sent, tau, kp, kd
 
 
-def run_case(case_index, sample, command_name, command, runner, layer, safety, rng):
+def run_case(
+    case_index,
+    sample,
+    command_name,
+    command,
+    runner,
+    layer,
+    safety,
+    rng,
+    policy_action_clip,
+    policy_hip_action_clip,
+    policy_hip_action_scale,
+    policy_action_smoothing,
+    policy_action_delta_limit,
+):
     dt = float(runner.control_dt)
     policy_torque_limit = max(
         layer.policy_pd_torque_limit_for_joint(name)
@@ -208,10 +224,13 @@ def run_case(case_index, sample, command_name, command, runner, layer, safety, r
     terminal_policy_load_deficit = 0.0
     maximum_raw_action = 0.0
     maximum_sent_action = 0.0
+    maximum_raw_hip_action = 0.0
+    maximum_sent_hip_action = 0.0
     maximum_requested_target_excursion = 0.0
     maximum_sent_target_excursion = 0.0
     steady_sent_targets = []
     steady_policy_torques = []
+    steady_measured_positions = []
     takeover_target_step = None
     takeover_torque_step = None
     return_target_step = None
@@ -250,12 +269,18 @@ def run_case(case_index, sample, command_name, command, runner, layer, safety, r
                 previous_action=previous_raw_action,
             )
             raw_action = runner.infer_action(obs)
+            control_action = clip_policy_hip_actions(
+                raw_action,
+                runner.policy_order,
+                hip_clip_abs=policy_hip_action_clip,
+                hip_scale=policy_hip_action_scale,
+            )
             sent_action = filtered_policy_action(
-                raw_action=raw_action,
+                raw_action=control_action,
                 previous_action=previous_sent_action,
-                clip_abs=3.2,
-                smoothing=0.35,
-                delta_limit_abs=0.20,
+                clip_abs=policy_action_clip,
+                smoothing=policy_action_smoothing,
+                delta_limit_abs=policy_action_delta_limit,
             )
             sent_action = (sent_action * float(alpha)).astype(np.float32)
             q_requested = runner.action_to_q_target(sent_action)
@@ -266,6 +291,19 @@ def run_case(case_index, sample, command_name, command, runner, layer, safety, r
             maximum_sent_action = max(
                 maximum_sent_action,
                 float(np.max(np.abs(sent_action))),
+            )
+            hip_indices = [
+                index
+                for index, joint_name in enumerate(runner.policy_order)
+                if "_hip_joint" in joint_name
+            ]
+            maximum_raw_hip_action = max(
+                maximum_raw_hip_action,
+                float(np.max(np.abs(raw_action[hip_indices]))),
+            )
+            maximum_sent_hip_action = max(
+                maximum_sent_hip_action,
+                float(np.max(np.abs(sent_action[hip_indices]))),
             )
             maximum_requested_target_excursion = max(
                 maximum_requested_target_excursion,
@@ -364,6 +402,7 @@ def run_case(case_index, sample, command_name, command, runner, layer, safety, r
             if step >= entry_steps:
                 steady_sent_targets.append(q_sent.copy())
                 steady_policy_torques.append(tau.copy())
+                steady_measured_positions.append(q_measured.copy())
             maximum_policy_tracking_error = max(
                 maximum_policy_tracking_error,
                 tracking_error,
@@ -438,6 +477,18 @@ def run_case(case_index, sample, command_name, command, runner, layer, safety, r
         )
     else:
         steady_torque_range = np.zeros(12, dtype=np.float32)
+    if steady_measured_positions:
+        steady_measured_range = np.ptp(
+            np.asarray(steady_measured_positions, dtype=np.float32),
+            axis=0,
+        )
+    else:
+        steady_measured_range = np.zeros(12, dtype=np.float32)
+    hip_indices = [
+        index
+        for index, name in enumerate(runner.policy_order)
+        if "_hip_joint" in name
+    ]
     sagittal_indices = [
         index
         for index, name in enumerate(runner.policy_order)
@@ -513,8 +564,22 @@ def run_case(case_index, sample, command_name, command, runner, layer, safety, r
         "terminal_policy_load_deficit_nm": terminal_policy_load_deficit,
         "maximum_raw_action": maximum_raw_action,
         "maximum_sent_action": maximum_sent_action,
+        "maximum_raw_hip_action": maximum_raw_hip_action,
+        "maximum_sent_hip_action": maximum_sent_hip_action,
         "maximum_requested_target_excursion_rad": maximum_requested_target_excursion,
         "maximum_sent_target_excursion_rad": maximum_sent_target_excursion,
+        "maximum_steady_hip_target_range_rad": float(
+            np.max(steady_target_range[hip_indices])
+        ),
+        "mean_steady_hip_target_range_rad": float(
+            np.mean(steady_target_range[hip_indices])
+        ),
+        "maximum_steady_hip_measured_range_rad": float(
+            np.max(steady_measured_range[hip_indices])
+        ),
+        "mean_steady_hip_measured_range_rad": float(
+            np.mean(steady_measured_range[hip_indices])
+        ),
         "minimum_steady_sagittal_target_range_rad": float(
             np.min(sagittal_ranges)
         ),
@@ -549,6 +614,10 @@ def run_case(case_index, sample, command_name, command, runner, layer, safety, r
 
 
 def main():
+    with (ROOT / "config" / "control_limits.yaml").open(encoding="utf-8") as stream:
+        deployment_defaults = (
+            yaml.safe_load(stream).get("policy_deployment", {}) or {}
+        )
     parser = argparse.ArgumentParser()
     parser.add_argument("--real-log", action="append", required=True)
     parser.add_argument("--cases", type=int, default=100)
@@ -556,6 +625,31 @@ def main():
     parser.add_argument("--policy-kp-scale", type=float, default=1.0)
     parser.add_argument("--policy-kd-scale", type=float, default=1.0)
     parser.add_argument("--policy-torque-limit", type=float, default=30.0)
+    parser.add_argument(
+        "--policy-action-clip",
+        type=float,
+        default=float(deployment_defaults.get("action_clip_abs", 0.0)),
+    )
+    parser.add_argument(
+        "--policy-hip-action-clip",
+        type=float,
+        default=float(deployment_defaults.get("hip_action_clip_abs", 0.0)),
+    )
+    parser.add_argument(
+        "--policy-hip-action-scale",
+        type=float,
+        default=float(deployment_defaults.get("hip_action_scale", 1.0)),
+    )
+    parser.add_argument(
+        "--policy-action-smoothing",
+        type=float,
+        default=float(deployment_defaults.get("action_smoothing", 0.0)),
+    )
+    parser.add_argument(
+        "--policy-action-delta-limit",
+        type=float,
+        default=float(deployment_defaults.get("action_delta_limit_abs", 0.0)),
+    )
     parser.add_argument(
         "--summary-csv",
         default=str(ROOT / "logs" / "policy_takeover_stress_summary.csv"),
@@ -570,13 +664,35 @@ def main():
         parser.error("--policy-kd-scale must be finite and > 0")
     if not np.isfinite(args.policy_torque_limit) or args.policy_torque_limit <= 0.0:
         parser.error("--policy-torque-limit must be finite and > 0")
+    if not np.isfinite(args.policy_action_clip) or args.policy_action_clip < 0.0:
+        parser.error("--policy-action-clip must be finite and >= 0")
+    if (
+        not np.isfinite(args.policy_hip_action_clip)
+        or args.policy_hip_action_clip < 0.0
+    ):
+        parser.error("--policy-hip-action-clip must be finite and >= 0")
+    if (
+        not np.isfinite(args.policy_hip_action_scale)
+        or args.policy_hip_action_scale < 0.0
+    ):
+        parser.error("--policy-hip-action-scale must be finite and >= 0")
+    if (
+        not np.isfinite(args.policy_action_smoothing)
+        or args.policy_action_smoothing < 0.0
+        or args.policy_action_smoothing >= 0.98
+    ):
+        parser.error("--policy-action-smoothing must be in [0, 0.98)")
+    if (
+        not np.isfinite(args.policy_action_delta_limit)
+        or args.policy_action_delta_limit < 0.0
+    ):
+        parser.error("--policy-action-delta-limit must be finite and >= 0")
 
     runner = PolicyRunner(
         allow_policy_hash_mismatch=args.allow_policy_hash_mismatch
     )
     samples = load_real_policy_samples(args.real_log)
     motor_ids_path = ROOT / "config" / "motor_ids.yaml"
-    import yaml
 
     with motor_ids_path.open(encoding="utf-8") as stream:
         motor_ids = yaml.safe_load(stream)["motor_ids"]
@@ -610,6 +726,11 @@ def main():
                 layer,
                 safety,
                 rng,
+                args.policy_action_clip,
+                args.policy_hip_action_clip,
+                args.policy_hip_action_scale,
+                args.policy_action_smoothing,
+                args.policy_action_delta_limit,
             )
         )
 
@@ -628,6 +749,11 @@ def main():
     print(f"policy_kp_scale: {args.policy_kp_scale:.3f}")
     print(f"policy_kd_scale: {args.policy_kd_scale:.3f}")
     print(f"policy_torque_limit_nm: {args.policy_torque_limit:.3f}")
+    print(f"policy_action_clip: {args.policy_action_clip:.3f}")
+    print(f"policy_hip_action_clip: {args.policy_hip_action_clip:.3f}")
+    print(f"policy_hip_action_scale: {args.policy_hip_action_scale:.3f}")
+    print(f"policy_action_smoothing: {args.policy_action_smoothing:.3f}")
+    print(f"policy_action_delta_limit: {args.policy_action_delta_limit:.3f}")
     print(f"real_policy_samples: {len(samples)}")
     print(f"cases: {len(rows)}")
     print(f"takeover_passed: {takeover_passed}")
@@ -657,8 +783,14 @@ def main():
         "terminal_policy_load_deficit_nm",
         "maximum_raw_action",
         "maximum_sent_action",
+        "maximum_raw_hip_action",
+        "maximum_sent_hip_action",
         "maximum_requested_target_excursion_rad",
         "maximum_sent_target_excursion_rad",
+        "maximum_steady_hip_target_range_rad",
+        "mean_steady_hip_target_range_rad",
+        "maximum_steady_hip_measured_range_rad",
+        "mean_steady_hip_measured_range_rad",
         "minimum_steady_sagittal_target_range_rad",
         "mean_steady_sagittal_target_range_rad",
         "maximum_steady_sagittal_target_range_rad",

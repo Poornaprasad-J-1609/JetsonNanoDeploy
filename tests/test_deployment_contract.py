@@ -162,6 +162,21 @@ def test_hip_action_clip_preserves_thigh_and_calf_outputs():
     )
 
 
+def test_hip_action_scale_applies_after_clip():
+    policy_order = list(EXPECTED_POLICY_JOINT_ORDER)
+    raw = np.full(len(policy_order), 2.0, dtype=np.float32)
+    conditioned = clip_policy_hip_actions(
+        raw,
+        policy_order,
+        hip_clip_abs=1.6,
+        hip_scale=0.65,
+    )
+
+    for index, joint_name in enumerate(policy_order):
+        expected = 1.04 if "_hip_joint" in joint_name else 2.0
+        assert conditioned[index] == pytest.approx(expected)
+
+
 def test_live_imu_populates_policy_slots_without_base_velocity():
     runner = PolicyRunner()
     gyro = np.array([0.11, -0.22, 0.33], dtype=np.float32)

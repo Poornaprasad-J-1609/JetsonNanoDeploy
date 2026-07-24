@@ -382,8 +382,13 @@ def filtered_policy_action(
     return action.astype(np.float32)
 
 
-def clip_policy_hip_actions(raw_action, policy_order, hip_clip_abs=0.0):
-    """Bound hip actor outputs without reducing thigh/calf gait authority."""
+def clip_policy_hip_actions(
+    raw_action,
+    policy_order,
+    hip_clip_abs=0.0,
+    hip_scale=1.0,
+):
+    """Condition hip motor actions without changing thigh/calf authority."""
     action = np.asarray(raw_action, dtype=np.float32).copy()
     if action.shape != (len(policy_order),):
         raise ValueError(
@@ -391,13 +396,16 @@ def clip_policy_hip_actions(raw_action, policy_order, hip_clip_abs=0.0):
             f"expected [{len(policy_order)}]"
         )
     hip_clip_abs = float(hip_clip_abs)
-    if hip_clip_abs <= 0.0:
-        return action
+    hip_scale = float(hip_scale)
+    if not np.isfinite(hip_scale) or hip_scale < 0.0:
+        raise ValueError("hip_scale must be finite and >= 0")
     for index, joint_name in enumerate(policy_order):
         if "_hip_joint" in str(joint_name):
-            action[index] = float(
-                np.clip(action[index], -hip_clip_abs, hip_clip_abs)
-            )
+            if hip_clip_abs > 0.0:
+                action[index] = float(
+                    np.clip(action[index], -hip_clip_abs, hip_clip_abs)
+                )
+            action[index] *= hip_scale
     return action
 
 
@@ -3917,6 +3925,7 @@ def run_policy_loop(
     policy_command_yaw_max,
     policy_action_clip,
     policy_hip_action_clip,
+    policy_hip_action_scale,
     policy_action_smoothing,
     policy_action_delta_limit,
     policy_entry_ramp_seconds,
@@ -4129,6 +4138,7 @@ def run_policy_loop(
         float(policy_hip_action_clip),
         "(0 disables)",
     )
+    print("policy_hip_action_scale:", float(policy_hip_action_scale))
     print("policy_action_smoothing:", float(policy_action_smoothing), "(0 disables)")
     print("policy_action_delta_limit:", float(policy_action_delta_limit), "(0 disables)")
     print("policy_entry_ramp_seconds:", float(policy_entry_ramp_seconds))
@@ -5156,6 +5166,7 @@ def run_policy_loop(
                     raw_action,
                     runner.policy_order,
                     hip_clip_abs=policy_hip_action_clip,
+                    hip_scale=policy_hip_action_scale,
                 )
                 action = filtered_policy_action(
                     raw_action=control_action,
@@ -6666,6 +6677,15 @@ def main():
         ),
     )
     parser.add_argument(
+        "--policy-hip-action-scale",
+        type=float,
+        default=float(policy_deploy_defaults.get("hip_action_scale", 1.0)),
+        help=(
+            "motor-side scale applied to clipped hip actor outputs only; "
+            "does not alter raw previous_action observations or thigh/calf actions"
+        ),
+    )
+    parser.add_argument(
         "--policy-action-smoothing",
         type=float,
         default=float(policy_deploy_defaults.get("action_smoothing", 0.0)),
@@ -6848,6 +6868,11 @@ def main():
     args.policy_command_yaw_max = max(0.0, float(args.policy_command_yaw_max))
     args.policy_action_clip = max(0.0, float(args.policy_action_clip))
     args.policy_hip_action_clip = max(0.0, float(args.policy_hip_action_clip))
+    if (
+        not np.isfinite(args.policy_hip_action_scale)
+        or args.policy_hip_action_scale < 0.0
+    ):
+        parser.error("--policy-hip-action-scale must be finite and >= 0")
     args.policy_action_smoothing = float(np.clip(args.policy_action_smoothing, 0.0, 0.98))
     args.policy_action_delta_limit = max(0.0, float(args.policy_action_delta_limit))
     if not np.isfinite(args.policy_entry_ramp_seconds) or args.policy_entry_ramp_seconds < 0.0:
@@ -7315,6 +7340,7 @@ def main():
     )
     print("Policy action clip:", f"{args.policy_action_clip:.3f}")
     print("Policy hip action clip:", f"{args.policy_hip_action_clip:.3f}")
+    print("Policy hip action scale:", f"{args.policy_hip_action_scale:.3f}")
     print("Policy action smoothing:", f"{args.policy_action_smoothing:.2f}")
     print("Policy action delta limit:", f"{args.policy_action_delta_limit:.3f}")
     print("Policy entry ramp:", f"{args.policy_entry_ramp_seconds:.2f} s")
@@ -7481,6 +7507,7 @@ def main():
                 "runtime_control_hz": f"{runtime_control_hz:.6f}",
                 "policy_action_scale": f"{runner.action_scale:.6f}",
                 "policy_hip_action_clip": f"{args.policy_hip_action_clip:.6f}",
+                "policy_hip_action_scale": f"{args.policy_hip_action_scale:.6f}",
                 "exact_policy_after_entry": str(bool(args.exact_policy_after_entry)),
                 "can_topology": "; ".join(topology_lines(args.can_count, port_by_bus)),
                 "can_backend": str(args.can_backend),
@@ -7875,6 +7902,7 @@ def main():
             policy_command_yaw_max=args.policy_command_yaw_max,
             policy_action_clip=args.policy_action_clip,
             policy_hip_action_clip=args.policy_hip_action_clip,
+            policy_hip_action_scale=args.policy_hip_action_scale,
             policy_action_smoothing=args.policy_action_smoothing,
             policy_action_delta_limit=args.policy_action_delta_limit,
             policy_entry_ramp_seconds=args.policy_entry_ramp_seconds,

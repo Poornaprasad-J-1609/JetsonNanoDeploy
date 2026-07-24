@@ -46,6 +46,10 @@ policy_deployment:
   # matching MuJoCo run stayed near |3.23| maximum. Keep hip target
   # contributions inside +/-0.40 rad without reducing thigh/calf gait range.
   hip_action_clip_abs: 1.6
+  # Loaded hardware logs show 1.3x to 2.4x the simulated hip RMS despite
+  # smaller targets. Apply this after the hip clip at the motor boundary; the
+  # raw actor action still feeds obs[36:48] exactly as it did during training.
+  hip_action_scale: 0.65
   action_smoothing: 0.20
   action_delta_limit_abs: 0.15
   policy_entry_ramp_seconds: 2.0
