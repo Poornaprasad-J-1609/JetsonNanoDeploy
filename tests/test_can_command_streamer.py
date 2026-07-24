@@ -131,3 +131,28 @@ def test_streamer_collects_feedback_for_the_policy_thread():
         assert not streamer.has_active_commands
     finally:
         streamer.stop()
+
+
+def test_streamer_can_collect_feedback_on_every_worker_cycle():
+    receive_count = 0
+
+    def receive():
+        nonlocal receive_count
+        receive_count += 1
+        return []
+
+    streamer = CanCommandStreamer(
+        send_callback=lambda _commands: None,
+        receive_callback=receive,
+        send_only_on_change=True,
+        receive_every_n_cycles=1,
+        command_dt_s=0.005,
+        stale_timeout_s=0.100,
+    )
+    streamer.start()
+    try:
+        streamer.submit([{"target": 1.0}])
+        assert wait_until(lambda: receive_count >= 3)
+        assert streamer.fault_reason is None
+    finally:
+        streamer.stop()

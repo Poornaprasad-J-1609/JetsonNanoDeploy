@@ -7790,7 +7790,10 @@ def main():
                     clear_latest_can_snapshot if args.mode == "mit-signal" else None
                 ),
                 send_only_on_change=(args.mode == "mit-signal"),
-                receive_every_n_cycles=(2 if args.mode == "mit-signal" else 1),
+                # Motor responses are policy state, not diagnostics. Drain
+                # SocketCAN on every 5 ms worker cycle so the 50 Hz actor does
+                # not consume feedback that is two or three policy frames old.
+                receive_every_n_cycles=1,
                 initial_stale_timeout_s=max(
                     0.250,
                     float(args.can_command_stale_timeout),

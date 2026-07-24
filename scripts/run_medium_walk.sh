@@ -29,7 +29,11 @@ args=(
     --can-backend socketcan
     --can-bitrate 1000000
     --feedback-source mit
-    --joint-velocity-source finite-difference
+    # The policy was trained with current simulator joint velocity. RobStride
+    # MIT velocity is well behaved in the loaded-ground logs, while the
+    # finite-difference low-pass path attenuates thigh/calf velocity by up to
+    # roughly 50% and adds phase lag to obs[24:36].
+    --joint-velocity-source mit
     --command-source keyboard
     --imu-source xsens
     --imu-port "$IMU_PORT"
