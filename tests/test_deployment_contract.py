@@ -3,6 +3,7 @@ import contextlib
 import io
 import queue
 import py_compile
+import threading
 import time
 from pathlib import Path
 
@@ -559,14 +560,15 @@ def test_policy_and_pose_pd_torque_limits_are_separate():
     assert layer.policy_pd_torque_limit_for_joint(runner.policy_order[0]) == pytest.approx(21.0)
 
 
-def test_periodic_commands_update_independent_can_adapters_in_parallel():
-    class SlowPeriodicBus:
+def test_periodic_commands_update_independent_can_adapters_in_can_owner_thread():
+    class PeriodicBus:
         def __init__(self):
             self.calls = []
 
         def update_periodic_sequence(self, frames, period_s):
-            time.sleep(0.030)
-            self.calls.append((list(frames), float(period_s)))
+            self.calls.append(
+                (list(frames), float(period_s), threading.get_ident())
+            )
             return len(frames)
 
     runner = PolicyRunner()
@@ -579,8 +581,8 @@ def test_periodic_commands_update_independent_can_adapters_in_parallel():
         active_joints=[front_joint, back_joint],
         joint_can_bus={front_joint: "front", back_joint: "back"},
     )
-    front_bus = SlowPeriodicBus()
-    back_bus = SlowPeriodicBus()
+    front_bus = PeriodicBus()
+    back_bus = PeriodicBus()
     commands = [
         {
             "joint_name": front_joint,
@@ -597,20 +599,18 @@ def test_periodic_commands_update_independent_can_adapters_in_parallel():
     ]
 
     try:
-        started = time.monotonic()
+        caller_thread = threading.get_ident()
         count = layer.update_periodic_commands(
             {"front": front_bus, "back": back_bus},
             commands,
             period_s=0.005,
         )
-        elapsed = time.monotonic() - started
     finally:
         layer.close()
 
     assert count == 2
-    assert elapsed < 0.050
-    assert front_bus.calls == [([(1, bytes(8))], 0.005)]
-    assert back_bus.calls == [([(7, bytes(8))], 0.005)]
+    assert front_bus.calls == [([(1, bytes(8))], 0.005, caller_thread)]
+    assert back_bus.calls == [([(7, bytes(8))], 0.005, caller_thread)]
 
 
 def test_pose_torque_limit_preserves_synchronized_target_and_scales_impedance():
