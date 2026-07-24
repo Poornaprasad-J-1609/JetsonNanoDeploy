@@ -42,6 +42,10 @@ policy_deployment:
   # but do not let the first walking key press jump straight from stand to a
   # full actor output. Use --policy-sim-match only for controlled comparisons.
   action_clip_abs: 2.8
+  # The latest loaded-ground log drove raw hip actions to |8.33| while the
+  # matching MuJoCo run stayed near |3.23| maximum. Keep hip target
+  # contributions inside +/-0.40 rad without reducing thigh/calf gait range.
+  hip_action_clip_abs: 1.6
   action_smoothing: 0.20
   action_delta_limit_abs: 0.15
   policy_entry_ramp_seconds: 2.0

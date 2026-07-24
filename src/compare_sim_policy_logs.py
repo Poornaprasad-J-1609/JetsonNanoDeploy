@@ -12,7 +12,7 @@ import yaml
 from policy_runner import PolicyRunner
 from safety_monitor import SafetyMonitor
 from joystick_interface import clip_command, load_command_limits
-from main_controller import filtered_policy_action
+from main_controller import clip_policy_hip_actions, filtered_policy_action
 from motor_command_layer import MotorCommandLayer, joint_group
 
 
@@ -253,10 +253,12 @@ def main():
     with control_cfg.open("r") as config_file:
         deployment_cfg = yaml.safe_load(config_file)["policy_deployment"]
     action_clip = float(deployment_cfg.get("action_clip_abs", 0.0))
+    hip_action_clip = float(deployment_cfg.get("hip_action_clip_abs", 0.0))
     action_smoothing = float(deployment_cfg.get("action_smoothing", 0.0))
     action_delta_limit = float(deployment_cfg.get("action_delta_limit_abs", 0.0))
     if args.policy_sim_match:
         action_clip = 0.0
+        hip_action_clip = 0.0
         action_smoothing = 0.0
         action_delta_limit = 0.0
 
@@ -265,15 +267,25 @@ def main():
     previous_shaped = np.zeros(replay_actions.shape[1], dtype=np.float32)
     previous_logged_shaped = np.zeros(sim_actions.shape[1], dtype=np.float32)
     for index in range(len(rows)):
-        shaped_actions[index] = filtered_policy_action(
+        replay_control_action = clip_policy_hip_actions(
             replay_actions[index],
+            runner.policy_order,
+            hip_clip_abs=hip_action_clip,
+        )
+        logged_control_action = clip_policy_hip_actions(
+            sim_actions[index],
+            runner.policy_order,
+            hip_clip_abs=hip_action_clip,
+        )
+        shaped_actions[index] = filtered_policy_action(
+            replay_control_action,
             previous_shaped,
             clip_abs=action_clip,
             smoothing=action_smoothing,
             delta_limit_abs=action_delta_limit,
         )
         shaped_logged_actions[index] = filtered_policy_action(
-            sim_actions[index],
+            logged_control_action,
             previous_logged_shaped,
             clip_abs=action_clip,
             smoothing=action_smoothing,
@@ -499,6 +511,7 @@ def main():
     print("  missing final motor rows:", int(np.count_nonzero(~np.isfinite(sim_targets))))
     print("Deployment shaping (always-policy dry replay):")
     print("  configured action clip:", action_clip)
+    print("  configured hip action clip:", hip_action_clip)
     print("  configured action smoothing:", action_smoothing)
     print("  configured action delta limit:", action_delta_limit)
     print(

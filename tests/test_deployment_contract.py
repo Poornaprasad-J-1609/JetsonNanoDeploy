@@ -25,6 +25,7 @@ from main_controller import (
     MeasuredTorqueSupervisor,
     PolicyTorqueRamp,
     action_equivalent_for_q_target,
+    clip_policy_hip_actions,
     compact_telemetry_record,
     constant_joint_map,
     requires_calf_endpoint_gate,
@@ -143,6 +144,22 @@ def test_policy_contract_observation_and_action():
     assert np.all(np.isfinite(action))
     with pytest.raises(ValueError):
         runner.infer_action(np.zeros(45, dtype=np.float32))
+
+
+def test_hip_action_clip_preserves_thigh_and_calf_outputs():
+    policy_order = list(EXPECTED_POLICY_JOINT_ORDER)
+    raw = np.linspace(-6.0, 6.0, len(policy_order), dtype=np.float32)
+    clipped = clip_policy_hip_actions(raw, policy_order, hip_clip_abs=1.6)
+
+    for index, joint_name in enumerate(policy_order):
+        if "_hip_joint" in joint_name:
+            assert abs(float(clipped[index])) <= 1.6
+        else:
+            assert clipped[index] == pytest.approx(raw[index])
+    np.testing.assert_array_equal(
+        clip_policy_hip_actions(raw, policy_order, hip_clip_abs=0.0),
+        raw,
+    )
 
 
 def test_live_imu_populates_policy_slots_without_base_velocity():

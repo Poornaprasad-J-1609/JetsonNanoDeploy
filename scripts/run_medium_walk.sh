@@ -68,6 +68,10 @@ args=(
     --policy-command-vy-max 0.12
     --policy-command-yaw-max 0
     --policy-action-clip 3.2
+    # Real hip actions reached |8.33| and repeatedly collided with the 0.50-rad
+    # hard envelope. At action_scale=0.25 this caps hip contribution at 0.40 rad
+    # while preserving the existing thigh/calf gait range.
+    --policy-hip-action-clip 1.6
     --policy-action-smoothing 0.35
     --policy-action-delta-limit 0.20
     --policy-entry-ramp-seconds 2.0
