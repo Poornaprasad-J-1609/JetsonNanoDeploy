@@ -19,7 +19,6 @@ from can_topology import resolve_joint_can_bus
 from main_controller import (
     clip_policy_hip_actions,
     filtered_policy_action,
-    policy_entry_gain_blend_scale,
     shifted_safety_filter,
     smoothstep,
     stand_recovery_gain_blend_scale,
@@ -317,17 +316,12 @@ def run_case(
                 apply_rate_limit=True,
                 use_policy_limits=False,
             )
-            last_policy_gain_alpha = policy_entry_gain_blend_scale(
-                float(step + 1) * dt,
-                2.0,
-            )
+            last_policy_gain_alpha = 1.0
             commands = layer.build_mit_commands(
                 q_safe,
                 phase="policy",
                 feedback_by_joint=feedback,
                 prelimit_q_target=q_requested,
-                gain_blend_from_phase="stand",
-                gain_blend_alpha=last_policy_gain_alpha,
                 previous_command_q=q_previous_target,
                 max_command_delta=safety.dq_max,
             )

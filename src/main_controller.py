@@ -232,15 +232,6 @@ def smoothstep(alpha):
     return alpha * alpha * (3.0 - 2.0 * alpha)
 
 
-def policy_entry_gain_blend_scale(elapsed_s, entry_ramp_s):
-    """Blend loaded-stand impedance over the complete actor target ramp."""
-    elapsed_s = max(0.0, float(elapsed_s))
-    entry_ramp_s = float(entry_ramp_s)
-    if entry_ramp_s <= 0.0:
-        return 1.0
-    return smoothstep(min(1.0, elapsed_s / entry_ramp_s))
-
-
 def stand_recovery_gain_blend_scale(
     policy_gain_blend_alpha_at_stop,
     elapsed_s,
@@ -3989,7 +3980,7 @@ def run_policy_loop(
     policy_entry_q_start = np.asarray(q_previous_target, dtype=np.float32).copy()
     policy_entry_restart_count = 0
     policy_entry_restart_reason = ""
-    last_policy_gain_blend_alpha = 0.0
+    last_policy_gain_blend_alpha = 1.0
     stand_recovery_gain_active = False
     stand_recovery_gain_elapsed_s = 0.0
     stand_recovery_policy_alpha_at_stop = 0.0
@@ -5202,10 +5193,13 @@ def run_policy_loop(
                 (not bool(exact_policy_after_entry) and not policy_sim_match)
                 or float(policy_entry_scale) < 0.999
             )
-            last_policy_gain_blend_alpha = policy_entry_gain_blend_scale(
-                policy_entry_elapsed_s,
-                policy_entry_ramp_seconds,
-            )
+            # Blend only the position target during policy entry. Pose packets
+            # use a legacy gain encoding whose effective values are far above
+            # the official policy gains. Mixing those encodings produced
+            # roughly Kp=500-750 and Kd=20-36 during the first two seconds,
+            # while the known-good controller used policy impedance from the
+            # first actor packet.
+            last_policy_gain_blend_alpha = 1.0
             if policy_shadow_mode:
                 q_safe_target = q_actor_target.copy()
                 q_joint_limit_filtered_target_for_log = q_actor_target.copy()
@@ -5238,8 +5232,6 @@ def run_policy_loop(
                     phase="policy",
                     feedback_by_joint=fresh_feedback_for_commands,
                     prelimit_q_target=q_policy_target,
-                    gain_blend_from_phase="stand",
-                    gain_blend_alpha=last_policy_gain_blend_alpha,
                     previous_command_q=q_previous_target,
                     max_command_delta=safety.dq_max,
                 )
@@ -5358,8 +5350,6 @@ def run_policy_loop(
                         phase="policy",
                         feedback_by_joint=fresh_feedback_for_commands,
                         prelimit_q_target=q_policy_target,
-                        gain_blend_from_phase="stand",
-                        gain_blend_alpha=last_policy_gain_blend_alpha,
                         previous_command_q=q_previous_target,
                         max_command_delta=safety.dq_max,
                     )
