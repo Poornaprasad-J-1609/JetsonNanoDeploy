@@ -55,6 +55,10 @@ args=(
     --speed-scale-min 0.04
     --speed-scale-max 0.12
     --speed-scale-step 0.01
+    # A terminal cannot report key release. Latch one movement command until
+    # H, Space, C, X, or another movement key is pressed so SSH key-repeat
+    # gaps cannot repeatedly drop policy control back into loaded stand.
+    --keyboard-control-mode latched
     --keyboard-command-timeout 0.20
     --walk-command-grace-seconds 0.20
     # Restore the command envelope from 0c17450. The actor still passes

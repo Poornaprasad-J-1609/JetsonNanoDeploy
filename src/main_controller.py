@@ -3256,6 +3256,21 @@ def stand_state_ready_for_policy_entry(
     return bool(ready), position_error, velocity
 
 
+def should_validate_stand_state_for_policy_entry(
+    walking_armed,
+    walk_requested,
+    control_mode,
+    previous_walk_requested,
+):
+    """Run the stand-state gate once, immediately before policy takeover."""
+    return bool(
+        walking_armed
+        and walk_requested
+        and control_mode == "stand"
+        and not previous_walk_requested
+    )
+
+
 def constant_pose_like(runner, value):
     return np.full(len(runner.policy_order), float(value), dtype=np.float32)
 
@@ -4753,7 +4768,12 @@ def run_policy_loop(
             walk_requested = False
             if step % max(1, print_every) == 0:
                 print("[POSE] walking blocked until STAND reaches its target.")
-        if walking_armed and walk_requested and control_mode == "stand":
+        if should_validate_stand_state_for_policy_entry(
+            walking_armed=walking_armed,
+            walk_requested=walk_requested,
+            control_mode=control_mode,
+            previous_walk_requested=previous_walk_requested,
+        ):
             q_stand_target = stand_pose_for_zero_frame(
                 runner,
                 zero_frame,

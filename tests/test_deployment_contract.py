@@ -34,6 +34,7 @@ from main_controller import (
     stand_recovery_gain_blend_scale,
     stand_ready_for_walking,
     stand_state_ready_for_policy_entry,
+    should_validate_stand_state_for_policy_entry,
     torque_ramp_supervision_due,
     validate_required_policy_imu,
     validate_torque_profile,
@@ -401,6 +402,13 @@ def test_keyboard_repeat_release_and_emergency_behavior():
     source.close()
 
 
+def test_medium_walk_launcher_latches_terminal_movement_commands():
+    launcher = (ROOT / "scripts" / "run_medium_walk.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "--keyboard-control-mode latched" in launcher
+
+
 def test_main_controller_safe_defaults_are_pinned():
     source = (ROOT / "src" / "main_controller.py").read_text(encoding="utf-8")
     assert "--auto-push-log" in source
@@ -456,6 +464,27 @@ def test_policy_entry_revalidates_current_stand_position_and_velocity():
     )
     assert not ready
     assert velocity == pytest.approx(0.610)
+
+
+def test_stand_state_gate_runs_only_before_policy_takeover():
+    assert should_validate_stand_state_for_policy_entry(
+        walking_armed=True,
+        walk_requested=True,
+        control_mode="stand",
+        previous_walk_requested=False,
+    )
+    assert not should_validate_stand_state_for_policy_entry(
+        walking_armed=True,
+        walk_requested=True,
+        control_mode="stand",
+        previous_walk_requested=True,
+    )
+    assert not should_validate_stand_state_for_policy_entry(
+        walking_armed=False,
+        walk_requested=True,
+        control_mode="stand",
+        previous_walk_requested=False,
+    )
 
 
 def test_torque_ramp_supervision_stays_off_entry_critical_path():
