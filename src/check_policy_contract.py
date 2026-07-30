@@ -33,6 +33,14 @@ def main():
         action="store_true",
         help="allow an unrecognized policy SHA256 after explicit artifact verification",
     )
+    parser.add_argument(
+        "--artifact-only",
+        action="store_true",
+        help=(
+            "verify only the pinned deterministic actor artifact; this does "
+            "not authorize hardware motion"
+        ),
+    )
     args = parser.parse_args()
 
     runner = PolicyRunner(
@@ -72,7 +80,7 @@ def main():
         np.isfinite(replay_action)
     ):
         failures.append("nonzero-clock actor replay did not return finite [12]")
-    if not readiness.policy_ready:
+    if not readiness.policy_ready and not args.artifact_only:
         failures.append("model_12357 semantic contract is not qualified")
 
     print("Policy:", runner.policy_path)
@@ -96,7 +104,11 @@ def main():
             print(" -", failure)
         return 1
 
-    print("\nPOLICY CONTRACT OK")
+    if args.artifact_only:
+        print("\nPOLICY ARTIFACT OK")
+        print("Hardware policy motion remains gated by deployment readiness.")
+    else:
+        print("\nPOLICY CONTRACT OK")
     return 0
 
 

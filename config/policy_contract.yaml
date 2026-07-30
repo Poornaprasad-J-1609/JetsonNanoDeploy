@@ -2,11 +2,18 @@ policy_contract:
   schema_version: 1
 
   artifact:
-    source_checkpoint: model_12357.pt
-    sha256: 48b3d7c7e10fd0d27a053fdf3af56bcd9190481c35798b585f0a0ff0478cf8b3
+    source_checkpoint: policy/policy.pt
+    source_checkpoint_sha256: 48b3d7c7e10fd0d27a053fdf3af56bcd9190481c35798b585f0a0ff0478cf8b3
+    deployment_actor: policy/model_12357_actor.pt
+    sha256: 139dc25e7ad44628cebfea12e96095781d8fc8e070d4419487dfb88a240f79d3
+    format: torchscript
     observation_dim: 48
     action_dim: 12
     deterministic_actor_only: true
+    actor_export_verified: true
+    export_comparison_cases: 2048
+    export_maximum_absolute_error: 0.0
+    invalid_observation_widths_rejected: [34, 45]
     dtype: float32
 
   # The checkpoint contains tensor shapes and weights, but no observation

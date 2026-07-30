@@ -13,7 +13,10 @@ from deployment_readiness import evaluate_deployment_readiness  # noqa: E402
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--policy-path", default=str(ROOT / "policy" / "policy.pt"))
+    parser.add_argument(
+        "--policy-path",
+        default=str(ROOT / "policy" / "model_12357_actor.pt"),
+    )
     args = parser.parse_args()
 
     report = evaluate_deployment_readiness(ROOT, Path(args.policy_path))

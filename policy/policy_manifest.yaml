@@ -1,10 +1,18 @@
 artifact:
   name: model_12357
   checkpoint_iteration: 12357
-  sha256: 48b3d7c7e10fd0d27a053fdf3af56bcd9190481c35798b585f0a0ff0478cf8b3
-  format: checkpoint_actor
+  path: policy/model_12357_actor.pt
+  sha256: 139dc25e7ad44628cebfea12e96095781d8fc8e070d4419487dfb88a240f79d3
+  format: torchscript
   activation: elu
+  deterministic_actor_only: true
+  source_checkpoint: policy/policy.pt
+  source_checkpoint_sha256: 48b3d7c7e10fd0d27a053fdf3af56bcd9190481c35798b585f0a0ff0478cf8b3
   checkpoint_contains_normalizer: false
+  export_verification:
+    comparison_cases: 2048
+    maximum_absolute_error: 0.0
+    invalid_observation_widths_rejected: [34, 45]
 
 network:
   observation_dim: 48

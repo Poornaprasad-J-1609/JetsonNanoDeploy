@@ -8,15 +8,23 @@ names, action scales, default pose, or previous-action semantics. Those values
 must come from the exact Isaac environment/export source and must pass an
 independent golden-vector comparison.
 
-The policy artifact is:
+The training checkpoint and deployable policy artifact are:
 
 ```text
-policy/policy.pt
-SHA256 48b3d7c7e10fd0d27a053fdf3af56bcd9190481c35798b585f0a0ff0478cf8b3
+source checkpoint: policy/policy.pt
+source SHA256: 48b3d7c7e10fd0d27a053fdf3af56bcd9190481c35798b585f0a0ff0478cf8b3
 checkpoint iteration 12357
+
+deterministic TorchScript actor: policy/model_12357_actor.pt
+actor SHA256: 139dc25e7ad44628cebfea12e96095781d8fc8e070d4419487dfb88a240f79d3
 input [N, 48]
 output [N, 12]
 ```
+
+The actor-only export matches the checkpoint actor exactly across 2,048
+seeded inputs (`max_abs_error=0`), is deterministic, and rejects observation
+widths 34 and 45. This verifies extraction and execution only; it does not
+verify the unknown observation/action semantics listed below.
 
 ## Mismatch Table
 
@@ -123,9 +131,12 @@ joint IDs are exported.
 
 ## Code Structure
 
-- `src/policy_runner.py`: deterministic checkpoint actor loading and raw
+- `src/policy_runner.py`: deterministic actor-only TorchScript loading and raw
   `[48] -> [12]` inference. It accepts exact nonzero clock vectors for replay.
   Generated observations require an explicit `marching_clock[3]`.
+- `scripts/export_policy_actor.py`: reproducibly extracts the actor from the
+  pinned source checkpoint and verifies checkpoint/export equivalence before
+  atomically writing the deployment artifact.
 - `src/deployment_readiness.py`: policy and hardware qualification gates.
 - `src/main_controller.py`: keyboard input, 50 Hz orchestration, pose modes,
   policy target pipeline, watchdogs, telemetry, and CAN lifecycle.

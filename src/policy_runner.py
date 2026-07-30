@@ -14,7 +14,7 @@ except ImportError as exc:
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_POLICY_SHA256 = "48b3d7c7e10fd0d27a053fdf3af56bcd9190481c35798b585f0a0ff0478cf8b3"
+EXPECTED_POLICY_SHA256 = "139dc25e7ad44628cebfea12e96095781d8fc8e070d4419487dfb88a240f79d3"
 EXPECTED_OBSERVATION_DIM = 48
 EXPECTED_ACTION_DIM = 12
 EXPECTED_POLICY_JOINT_ORDER = list(POLICY_JOINT_ORDER)
@@ -71,7 +71,7 @@ def resolve_policy_path(root, policy_path=None):
     if policy_path is not None:
         return Path(policy_path)
 
-    preferred = root / "policy" / "policy.pt"
+    preferred = root / "policy" / "model_12357_actor.pt"
     if preferred.exists():
         return preferred
 

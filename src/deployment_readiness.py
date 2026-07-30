@@ -113,9 +113,31 @@ def evaluate_deployment_readiness(
     action = semantic.get("action", {}) or {}
     hardware = contract.get("hardware_contract", {}) or {}
 
-    policy_path = Path(policy_path or root / "policy" / "policy.pt")
+    policy_path = Path(
+        policy_path or root / "policy" / "model_12357_actor.pt"
+    )
     expected_hash = str(artifact.get("sha256", "")).lower()
     actual_hash = _sha256(policy_path) if policy_path.is_file() else ""
+    actor_loaded = False
+    actor_detail = "deployment actor is missing"
+    actor_runner = None
+    if policy_path.is_file():
+        try:
+            actor_runner = PolicyRunner(policy_path=policy_path)
+            actor_loaded = bool(
+                actor_runner.policy_format == "torchscript"
+                and actor_runner.observation_dim == 48
+                and actor_runner.action_dim == 12
+                and artifact.get("deterministic_actor_only", False)
+                and artifact.get("actor_export_verified", False)
+            )
+            actor_detail = (
+                f"format={actor_runner.policy_format} "
+                f"dimensions={actor_runner.observation_dim}->{actor_runner.action_dim} "
+                f"export_verified={bool(artifact.get('actor_export_verified', False))}"
+            )
+        except Exception as exc:
+            actor_detail = f"actor validation failed: {exc}"
     training_source = semantic.get("training_source_path")
     training_source_path = (
         root / str(training_source) if training_source else None
@@ -126,11 +148,15 @@ def evaluate_deployment_readiness(
     golden_detail = (
         str(golden_path) if golden_path else "golden_vectors_path is missing"
     )
-    if golden_path and golden_path.is_file() and policy_path.is_file():
+    if (
+        golden_path
+        and golden_path.is_file()
+        and policy_path.is_file()
+        and actor_runner is not None
+    ):
         try:
-            runner = PolicyRunner(policy_path=policy_path)
             result = check_golden_vectors(
-                runner,
+                actor_runner,
                 golden_path,
                 tolerance=1.0e-5,
             )
@@ -149,6 +175,11 @@ def evaluate_deployment_readiness(
             "policy artifact SHA256",
             bool(expected_hash and actual_hash == expected_hash),
             f"expected={expected_hash or 'missing'} actual={actual_hash or 'missing'}",
+        ),
+        ReadinessCheck(
+            "deterministic actor-only export",
+            actor_loaded,
+            actor_detail,
         ),
         ReadinessCheck(
             "exact Isaac training source",

@@ -155,12 +155,27 @@ def test_policy_contract_observation_and_action():
     assert obs.shape == (48,)
     np.testing.assert_array_equal(obs[0:3], clock)
     np.testing.assert_allclose(obs[36:48], previous)
-
     action = runner.infer_action(obs)
     assert action.shape == (12,)
     assert np.all(np.isfinite(action))
     with pytest.raises(ValueError):
         runner.infer_action(np.zeros(45, dtype=np.float32))
+
+
+def test_model_12357_deploys_actor_only_torchscript_artifact():
+    runner = PolicyRunner()
+    contract = load_yaml(ROOT / "config" / "policy_contract.yaml")[
+        "policy_contract"
+    ]["artifact"]
+    manifest = load_yaml(ROOT / "policy" / "policy_manifest.yaml")["artifact"]
+
+    assert runner.policy_path.name == "model_12357_actor.pt"
+    assert runner.policy_format == "torchscript"
+    assert runner.policy_hash_matches
+    assert runner.policy_sha256 == contract["sha256"] == manifest["sha256"]
+    assert contract["deterministic_actor_only"] is True
+    assert contract["actor_export_verified"] is True
+    assert manifest["deterministic_actor_only"] is True
 
 
 def test_hip_action_clip_preserves_thigh_and_calf_outputs():
