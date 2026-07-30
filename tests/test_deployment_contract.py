@@ -43,6 +43,10 @@ from main_controller import (
     validate_torque_profile,
     smoothstep,
 )
+from marching_clock import (
+    MarchingClock,
+    MarchingClockConfigurationError,
+)
 from deployment_readiness import evaluate_deployment_readiness
 from motor_command_layer import (
     MotorCommandLayer,
@@ -250,6 +254,43 @@ def test_actor_replay_accepts_nonzero_marching_clock_slots():
     action = runner.infer_action(obs)
     assert action.shape == (12,)
     assert np.all(np.isfinite(action))
+
+
+def test_unverified_marching_clock_is_deterministic_and_periodic():
+    clock = MarchingClock.unverified_shadow("sin-cos-zero", 2.0)
+    np.testing.assert_allclose(clock.sample_elapsed(0.0), [0.0, 1.0, 0.0])
+    np.testing.assert_allclose(
+        clock.sample_elapsed(0.125),
+        [1.0, 0.0, 0.0],
+        atol=1.0e-6,
+    )
+    np.testing.assert_allclose(
+        clock.sample_elapsed(0.5),
+        clock.sample_elapsed(0.0),
+        atol=1.0e-6,
+    )
+
+
+def test_unverified_marching_clock_can_never_enter_a_motor_mode():
+    clock = MarchingClock.unverified_shadow("three-phase-sine", 1.5)
+    clock.require_runtime_mode(policy_shadow_mode=True, mode="print")
+    with pytest.raises(MarchingClockConfigurationError, match="can never drive motors"):
+        clock.require_runtime_mode(policy_shadow_mode=True, mode="mit-signal")
+    with pytest.raises(MarchingClockConfigurationError, match="can never drive motors"):
+        clock.require_runtime_mode(policy_shadow_mode=False, mode="print")
+
+
+def test_verified_clock_provider_rejects_incomplete_policy_contract():
+    with pytest.raises(
+        MarchingClockConfigurationError,
+        match="does not verify",
+    ):
+        MarchingClock.from_verified_contract(
+            {
+                "clock_formula_verified": False,
+                "clock_provider_implemented": False,
+            }
+        )
 
 
 def test_hardware_gain_scales_only_offset_from_nonzero_default():

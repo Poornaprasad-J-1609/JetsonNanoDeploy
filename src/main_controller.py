@@ -45,6 +45,11 @@ from policy_qualification import (
     root_cause_report_lines,
 )
 from deployment_readiness import evaluate_deployment_readiness
+from marching_clock import (
+    DIAGNOSTIC_CLOCK_FORMULAS,
+    MarchingClock,
+    MarchingClockConfigurationError,
+)
 from can_topology import (
     add_can_topology_args,
     backend_for_port,
@@ -504,6 +509,7 @@ def stand_policy_imu_correction(
     q_current,
     qd_current,
     cfg,
+    marching_clock,
 ):
     """Return only the actor response caused by live IMU state.
 
@@ -533,6 +539,7 @@ def stand_policy_imu_correction(
         q_current=policy_q,
         qd_current=policy_qd,
         previous_action=previous_action,
+        marching_clock=marching_clock,
     )
     upright_obs = runner.build_observation(
         base_ang_vel_b=np.zeros(3, dtype=np.float32),
@@ -541,6 +548,7 @@ def stand_policy_imu_correction(
         q_current=policy_q,
         qd_current=policy_qd,
         previous_action=previous_action,
+        marching_clock=marching_clock,
     )
     live_action = runner.infer_action(live_obs)
     upright_action = runner.infer_action(upright_obs)
@@ -3896,6 +3904,7 @@ def run_policy_loop(
     deadline_resync_s,
     timing_fault_consecutive,
     policy_shadow_mode=False,
+    marching_clock_provider=None,
     encoder_calibration_required=True,
     encoder_calibration_passed=False,
     torque_ramp=None,
@@ -3950,6 +3959,12 @@ def run_policy_loop(
     direct_imu_stabilization_enabled = bool(
         motion_assist_cfg.get("imu_posture", {}).get("enabled", False)
     )
+    if marching_clock_provider is not None:
+        marching_clock_provider.require_runtime_mode(
+            policy_shadow_mode=policy_shadow_mode,
+            mode=mode,
+        )
+        marching_clock_provider.reset()
 
     control_mode = "policy" if policy_shadow_mode else start_control_mode
     zero_frame = str(initial_zero_frame).lower()
@@ -4042,6 +4057,20 @@ def run_policy_loop(
     print("policy_shadow_mode:", bool(policy_shadow_mode))
     if policy_shadow_mode:
         print("[SHADOW] Motors remain passive; no MIT movement command is transmitted.")
+    if marching_clock_provider is None:
+        print("marching_clock: unavailable")
+    else:
+        clock_label = (
+            "UNVERIFIED SHADOW DIAGNOSTIC"
+            if marching_clock_provider.diagnostic_only
+            else "verified training contract"
+        )
+        print(
+            "marching_clock:",
+            f"{clock_label}; formula={marching_clock_provider.formula}",
+            f"frequency={marching_clock_provider.frequency_hz:.6g} Hz",
+            f"reset={marching_clock_provider.reset_rule}",
+        )
     print("Joystick buttons:")
     print("  button 4    -> STOP walking and SIT/CROUCH pose")
     print("  button 5    -> STAND pose")
@@ -4196,6 +4225,11 @@ def run_policy_loop(
 
     while steps is None or step < steps:
         cycle_start = time.monotonic()
+        marching_clock = (
+            None
+            if marching_clock_provider is None
+            else marching_clock_provider.sample_elapsed(float(step) * float(dt))
+        )
         if can_streamer is not None and can_streamer.fault_reason is not None:
             print("\nEMERGENCY STOP:", can_streamer.fault_reason)
             can_streamer.clear()
@@ -5013,6 +5047,7 @@ def run_policy_loop(
                     q_current=q_current,
                     qd_current=qd_current,
                     cfg=motion_assist_cfg,
+                    marching_clock=marching_clock,
                 )
                 q_policy_target = q_policy_target + imu_correction
                 imu_correction_abs_max = float(np.max(np.abs(imu_correction)))
@@ -5096,6 +5131,7 @@ def run_policy_loop(
                 q_current=q_current,
                 qd_current=qd_current,
                 previous_action=previous_raw_action,
+                marching_clock=marching_clock,
             )
             observation_build_s += time.monotonic() - observation_build_start
 
@@ -6308,6 +6344,24 @@ def main():
         ),
     )
     parser.add_argument(
+        "--unverified-shadow-clock",
+        choices=DIAGNOSTIC_CLOCK_FORMULAS,
+        default=None,
+        help=(
+            "explicitly select a candidate model_12357 marching clock for "
+            "passive diagnostics only; requires --policy-shadow-mode --mode print"
+        ),
+    )
+    parser.add_argument(
+        "--unverified-shadow-clock-hz",
+        type=float,
+        default=1.5,
+        help=(
+            "candidate marching-clock frequency used only by "
+            "--unverified-shadow-clock (default 1.5 Hz)"
+        ),
+    )
+    parser.add_argument(
         "--policy-replay-csv",
         default=None,
         help="offline replay of logged obs_000..047; opens no IMU, CAN, or motor",
@@ -7110,12 +7164,45 @@ def main():
                 "must contain three finite values"
             )
     calibration_only = bool(args.joint_routing_test or args.calf_range_check)
-    if args.policy_shadow_mode and not readiness.policy_ready:
+    marching_clock_provider = None
+    if args.unverified_shadow_clock is not None:
+        if not args.policy_shadow_mode or args.mode != "print":
+            parser.error(
+                "--unverified-shadow-clock requires "
+                "--policy-shadow-mode --mode print"
+            )
+        try:
+            marching_clock_provider = MarchingClock.unverified_shadow(
+                args.unverified_shadow_clock,
+                args.unverified_shadow_clock_hz,
+            )
+        except MarchingClockConfigurationError as exc:
+            parser.error(str(exc))
+        print(
+            "WARNING: using an UNVERIFIED marching-clock candidate for a "
+            "passive actor diagnostic. CAN is not opened and motors are not enabled."
+        )
+    elif readiness.policy_ready:
+        try:
+            marching_clock_provider = MarchingClock.from_verified_contract(
+                policy_observation_contract
+            )
+        except MarchingClockConfigurationError as exc:
+            print("ERROR: verified policy contract has no usable clock provider:", exc)
+            return 1
+
+    if (
+        args.policy_shadow_mode
+        and not readiness.policy_ready
+        and marching_clock_provider is None
+    ):
         print("\n".join(readiness.lines()))
         print(
             "ERROR: generated policy observations are blocked until the exact "
             "model_12357 Isaac semantic contract is verified. Exact CSV replay "
-            "remains available through --policy-replay-csv."
+            "remains available through --policy-replay-csv. A candidate clock "
+            "may be inspected without CAN or motor enable using "
+            "--mode print --unverified-shadow-clock."
         )
         return 1
     if (
@@ -7981,6 +8068,7 @@ def main():
             deadline_resync_s=0.001 * float(args.deadline_resync_ms),
             timing_fault_consecutive=int(args.timing_fault_consecutive),
             policy_shadow_mode=bool(args.policy_shadow_mode),
+            marching_clock_provider=marching_clock_provider,
             encoder_calibration_required=bool(calibration_required),
             encoder_calibration_passed=bool(calibration_ok),
             torque_ramp=torque_ramp,
