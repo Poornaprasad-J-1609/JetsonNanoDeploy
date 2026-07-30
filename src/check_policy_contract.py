@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Hardware-free verification of the fixed 48-observation policy contract."""
+"""Hardware-free artifact and semantic-readiness verification."""
 
 import argparse
 
@@ -13,6 +13,7 @@ from policy_runner import (
     EXPECTED_POLICY_SHA256,
     PolicyRunner,
 )
+from deployment_readiness import evaluate_deployment_readiness
 
 
 def model_accepts_shape(model, width):
@@ -44,14 +45,11 @@ def main():
             torch.zeros(1, EXPECTED_OBSERVATION_DIM, dtype=torch.float32)
         )
 
-    obs = runner.build_observation(
-        base_ang_vel_b=np.zeros(3, dtype=np.float32),
-        projected_gravity_b=np.array([0.0, 0.0, -1.0], dtype=np.float32),
-        command=np.zeros(3, dtype=np.float32),
-        q_current=runner.q_default.copy(),
-        qd_current=np.zeros(EXPECTED_ACTION_DIM, dtype=np.float32),
-        previous_action=np.zeros(EXPECTED_ACTION_DIM, dtype=np.float32),
-    )
+    replay_observation = np.zeros(EXPECTED_OBSERVATION_DIM, dtype=np.float32)
+    replay_observation[0:3] = [0.2, -0.4, 0.6]
+    replay_observation[8] = -1.0
+    replay_action = runner.infer_action(replay_observation)
+    readiness = evaluate_deployment_readiness(runner.root, runner.policy_path)
 
     failures = []
     if runner.policy_sha256 != EXPECTED_POLICY_SHA256:
@@ -61,7 +59,7 @@ def main():
     if runner.action_dim != EXPECTED_ACTION_DIM:
         failures.append("runner action dimension is not 12")
     if list(runner.policy_order) != EXPECTED_POLICY_JOINT_ORDER:
-        failures.append("policy joint order does not match the verified IsaacLab order")
+        failures.append("configured policy joint order is internally inconsistent")
     if tuple(output.shape) != (1, EXPECTED_ACTION_DIM):
         failures.append(f"zero [1,48] output shape is {list(output.shape)}, expected [1,12]")
     if not bool(torch.isfinite(output).all()):
@@ -70,8 +68,12 @@ def main():
         failures.append("policy unexpectedly accepted [1,34]")
     if model_accepts_shape(runner.policy, 45):
         failures.append("policy unexpectedly accepted [1,45]")
-    if not np.array_equal(obs[0:3], np.zeros(3, dtype=np.float32)):
-        failures.append("build_observation did not force obs[0:3] to exact zeros")
+    if replay_action.shape != (EXPECTED_ACTION_DIM,) or not np.all(
+        np.isfinite(replay_action)
+    ):
+        failures.append("nonzero-clock actor replay did not return finite [12]")
+    if not readiness.policy_ready:
+        failures.append("model_12357 semantic contract is not qualified")
 
     print("Policy:", runner.policy_path)
     print("SHA256:", runner.policy_sha256)
@@ -83,7 +85,10 @@ def main():
     print("[1,48] output:", list(output.shape), "finite=", bool(torch.isfinite(output).all()))
     print("[1,34] rejected:", not model_accepts_shape(runner.policy, 34))
     print("[1,45] rejected:", not model_accepts_shape(runner.policy, 45))
-    print("obs[0:3]:", obs[0:3].tolist())
+    print("Nonzero clock replay:", replay_observation[0:3].tolist())
+    print("Semantic policy readiness:", readiness.policy_ready)
+    if not readiness.policy_ready:
+        print("\n".join(readiness.lines()))
 
     if failures:
         print("\nPOLICY CONTRACT FAILED:")

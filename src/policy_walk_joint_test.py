@@ -22,6 +22,7 @@ from imu_interface import create_imu_sensor, load_imu_config
 from joystick_interface import CommandSource, load_joystick_defaults, load_speed_scale_defaults
 from motor_command_layer import MotorCommandLayer, print_mit_commands
 from policy_runner import PolicyRunner
+from deployment_readiness import evaluate_deployment_readiness
 from safety_monitor import SafetyMonitor
 from state_estimator import FakeStateEstimator, MitFeedbackStateEstimator
 from can_topology import (
@@ -351,6 +352,14 @@ def main():
         policy_activation=args.policy_activation,
         allow_policy_hash_mismatch=args.allow_policy_hash_mismatch,
     )
+    readiness = evaluate_deployment_readiness(ROOT, runner.policy_path)
+    if not readiness.hardware_ready:
+        print("\n".join(readiness.lines()))
+        print(
+            "ERROR: this legacy partial-hardware policy test cannot enable "
+            "model_12357 until the full policy and hardware contract passes."
+        )
+        return 1
     safety = SafetyMonitor(runner.policy_order)
     motor_ids = load_motor_ids()
     joint_can_bus = resolve_joint_can_bus(runner.policy_order, args.can_count)

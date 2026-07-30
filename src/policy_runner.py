@@ -19,7 +19,7 @@ EXPECTED_OBSERVATION_DIM = 48
 EXPECTED_ACTION_DIM = 12
 EXPECTED_POLICY_JOINT_ORDER = list(POLICY_JOINT_ORDER)
 EXPECTED_OBSERVATION_LAYOUT = {
-    "base_lin_vel": list(range(0, 3)),
+    "marching_clock": list(range(0, 3)),
     "base_ang_vel": list(range(3, 6)),
     "projected_gravity": list(range(6, 9)),
     "command": list(range(9, 12)),
@@ -319,12 +319,18 @@ class PolicyRunner:
         q_current,
         qd_current,
         previous_action,
+        marching_clock=None,
     ):
+        if marching_clock is None:
+            raise ValueError(
+                "model_12357 requires an explicit marching_clock[3]. Its "
+                "formula, frequency, and reset rule must come from the exact "
+                "Isaac training source; deployment will not guess them."
+            )
         obs = np.zeros(EXPECTED_OBSERVATION_DIM, dtype=np.float32)
 
         fields = {
-            # These slots exist in training but are always literal zeros.
-            "base_lin_vel": np.zeros(3, dtype=np.float32),
+            "marching_clock": np.asarray(marching_clock, dtype=np.float32),
             "base_ang_vel": np.asarray(base_ang_vel_b, dtype=np.float32),
             "projected_gravity": np.asarray(projected_gravity_b, dtype=np.float32),
             "command": np.asarray(command, dtype=np.float32),
@@ -354,8 +360,6 @@ class PolicyRunner:
                 )
             obs[indices] = values
 
-        if not np.array_equal(obs[0:3], np.zeros(3, dtype=np.float32)):
-            raise RuntimeError("Policy base linear velocity observation must remain exactly zero")
         return obs
 
     def infer_action(self, obs):
@@ -367,9 +371,6 @@ class PolicyRunner:
             )
         if not np.all(np.isfinite(obs)):
             raise ValueError("Policy observation contains NaN or Inf")
-        if not np.array_equal(obs[0:3], np.zeros(3, dtype=np.float32)):
-            raise ValueError("Policy observation indices 0:3 must be exactly [0, 0, 0]")
-
         obs_t = torch.from_numpy(obs).unsqueeze(0)
         with torch.inference_mode():
             action = self.policy(obs_t).squeeze(0).cpu().numpy()

@@ -1,0 +1,13 @@
+policy_index,policy_joint,motor_id,encoder_sign,target_sign,encoder_offset_rad,four_bar_global_enabled,virtual_joint_conversion,minimum_rad,maximum_rad,q_default_rad,verification
+0,BL_hip_joint,10,-1,-1,0.0,False,identity,-0.5,0.5,0.0,UNVERIFIED_FROM_MODEL_12357_TRAINING_SOURCE
+1,BR_hip_joint,7,-1,-1,0.0,False,identity,-0.5,0.5,0.0,UNVERIFIED_FROM_MODEL_12357_TRAINING_SOURCE
+2,FL_hip_joint,4,-1,-1,0.0,False,identity,-0.5,0.5,0.0,UNVERIFIED_FROM_MODEL_12357_TRAINING_SOURCE
+3,FR_hip_joint,1,-1,-1,0.0,False,identity,-0.5,0.5,0.0,UNVERIFIED_FROM_MODEL_12357_TRAINING_SOURCE
+4,BL_thigh_joint,11,-1,-1,0.0,False,identity,-2.0,2.0,0.0,UNVERIFIED_FROM_MODEL_12357_TRAINING_SOURCE
+5,BR_thigh_joint,8,-1,-1,0.0,False,identity,-2.0,2.0,0.0,UNVERIFIED_FROM_MODEL_12357_TRAINING_SOURCE
+6,FL_thigh_joint,5,-1,-1,0.0,False,identity,-2.0,2.0,0.0,UNVERIFIED_FROM_MODEL_12357_TRAINING_SOURCE
+7,FR_thigh_joint,2,-1,-1,0.0,False,identity,-2.0,2.0,0.0,UNVERIFIED_FROM_MODEL_12357_TRAINING_SOURCE
+8,BL_calf_joint,12,1,1,0.0,False,BL_calf,0.0,1.36,0.0,UNVERIFIED_FROM_MODEL_12357_TRAINING_SOURCE
+9,BR_calf_joint,9,1,1,0.0,False,BR_calf,-1.36,0.0,0.0,UNVERIFIED_FROM_MODEL_12357_TRAINING_SOURCE
+10,FL_calf_joint,6,1,1,0.0,False,FL_calf,0.0,1.36,0.0,UNVERIFIED_FROM_MODEL_12357_TRAINING_SOURCE
+11,FR_calf_joint,3,1,1,0.0,False,FR_calf,-1.36,0.0,0.0,UNVERIFIED_FROM_MODEL_12357_TRAINING_SOURCE

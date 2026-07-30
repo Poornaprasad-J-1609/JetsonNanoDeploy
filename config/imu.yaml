@@ -13,11 +13,12 @@ imu:
   port: /dev/ttyUSB0
   baud: 115200
   timeout: 0.001
-  stale_timeout: 0.25
+  stale_timeout: 0.10
   require_live: true
 
-  # Fixed 48-slot policy contract: indices 0:3 are always [0, 0, 0].
-  # Deployment does not estimate velocity or copy it from commands.
+  # Legacy compatibility setting. model_12357 uses these slots for a marching
+  # clock whose exact formula/reset behavior still requires the Isaac source.
+  # Hardware policy enable remains blocked until that semantic contract passes.
   base_linear_velocity_source: zero
 
   # Retained for compatibility; deployment code enforces true.

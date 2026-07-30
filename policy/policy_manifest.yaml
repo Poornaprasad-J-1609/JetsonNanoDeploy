@@ -12,18 +12,26 @@ network:
   action_dim: 12
 
 deployment_contract:
+  status: blocked_pending_training_source
+  hardware_enable_permitted: false
   # The checkpoint proves tensor dimensions, but it does not embed semantic
-  # observation names. These slots retain the verified Grallator 48D contract.
+  # observation names. The attached Phase-2 specification says 0:3 is a
+  # marching clock, contradicting the previous zero-base-velocity deployment.
   control_dt: 0.02
-  action_scale: 0.25
   deployment_normalizer: identity
   observation_layout:
-    base_lin_vel: [0, 1, 2]
+    marching_clock: [0, 1, 2]
     base_ang_vel: [3, 4, 5]
     projected_gravity: [6, 7, 8]
     command: [9, 10, 11]
     joint_pos_relative: [12, 23]
     joint_vel: [24, 35]
     previous_action: [36, 47]
-  base_lin_vel_value: [0.0, 0.0, 0.0]
+  missing_required_verification:
+    - exact marching-clock formula, frequency, and reset rule
+    - exact policy joint order and position/velocity signs
+    - exact previous-action convention
+    - exact per-index action scale and clipping
+    - exact q_default
+    - independent Isaac golden observation/action vectors
   keyboard_trot_trigger: w

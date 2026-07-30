@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PYTHON_BIN="${PYTHON_BIN:-/usr/bin/python3}"
 POLICY_PATH="$ROOT_DIR/policy/policy.pt"
 EXPECTED_SHA256="48b3d7c7e10fd0d27a053fdf3af56bcd9190481c35798b585f0a0ff0478cf8b3"
 
@@ -15,6 +16,13 @@ if [[ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]]; then
     echo "ERROR: trot policy SHA256 mismatch." >&2
     echo "  expected: $EXPECTED_SHA256" >&2
     echo "  actual:   $ACTUAL_SHA256" >&2
+    exit 1
+fi
+
+if ! "$PYTHON_BIN" "$ROOT_DIR/scripts/check_deployment_readiness.py" \
+    --policy-path "$POLICY_PATH"; then
+    echo "ERROR: model_12357 hardware deployment is not qualified." >&2
+    echo "Provide the exact Isaac training/export source and independent golden vectors." >&2
     exit 1
 fi
 

@@ -35,7 +35,7 @@ args=(
     --command-source keyboard
     --imu-source xsens
     --imu-port "$IMU_PORT"
-    --imu-stale-timeout 0.25
+    --imu-stale-timeout 0.10
     --control-hz 50
     --can-command-hz 200
     --can-command-stale-timeout 0.25

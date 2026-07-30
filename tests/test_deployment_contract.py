@@ -32,6 +32,7 @@ from main_controller import (
     constant_joint_map,
     requires_calf_endpoint_gate,
     runtime_stand_command_phase,
+    scale_policy_target_offset,
     shifted_safety_filter_with_diagnostics,
     stand_recovery_gain_blend_scale,
     stand_ready_for_walking,
@@ -42,6 +43,7 @@ from main_controller import (
     validate_torque_profile,
     smoothstep,
 )
+from deployment_readiness import evaluate_deployment_readiness
 from motor_command_layer import (
     MotorCommandLayer,
     decode_mit_feedback_frame,
@@ -140,6 +142,7 @@ def test_policy_contract_observation_and_action():
     assert runner.action_scale == pytest.approx(0.25)
 
     previous = np.linspace(-0.5, 0.5, 12, dtype=np.float32)
+    clock = np.array([0.25, -0.5, 0.75], dtype=np.float32)
     obs = runner.build_observation(
         base_ang_vel_b=np.array([0.1, -0.2, 0.3], dtype=np.float32),
         projected_gravity_b=np.array([0.0, 0.0, -1.0], dtype=np.float32),
@@ -147,9 +150,10 @@ def test_policy_contract_observation_and_action():
         q_current=runner.q_default.copy(),
         qd_current=np.zeros(12, dtype=np.float32),
         previous_action=previous,
+        marching_clock=clock,
     )
     assert obs.shape == (48,)
-    np.testing.assert_array_equal(obs[0:3], np.zeros(3, dtype=np.float32))
+    np.testing.assert_array_equal(obs[0:3], clock)
     np.testing.assert_allclose(obs[36:48], previous)
 
     action = runner.infer_action(obs)
@@ -202,11 +206,61 @@ def test_live_imu_populates_policy_slots_without_base_velocity():
         q_current=runner.q_default.copy(),
         qd_current=np.zeros(12, dtype=np.float32),
         previous_action=previous,
+        marching_clock=np.array([0.1, 0.2, 0.3], dtype=np.float32),
     )
-    np.testing.assert_array_equal(obs[0:3], np.zeros(3, dtype=np.float32))
+    np.testing.assert_allclose(obs[0:3], [0.1, 0.2, 0.3])
     np.testing.assert_allclose(obs[3:6], gyro)
     np.testing.assert_allclose(obs[6:9], gravity)
     np.testing.assert_allclose(obs[36:48], previous)
+
+
+def test_model_12357_generated_observation_requires_explicit_clock():
+    runner = PolicyRunner()
+    with pytest.raises(ValueError, match="explicit marching_clock"):
+        runner.build_observation(
+            base_ang_vel_b=np.zeros(3, dtype=np.float32),
+            projected_gravity_b=np.array([0.0, 0.0, -1.0], dtype=np.float32),
+            command=np.zeros(3, dtype=np.float32),
+            q_current=runner.q_default.copy(),
+            qd_current=np.zeros(12, dtype=np.float32),
+            previous_action=np.zeros(12, dtype=np.float32),
+        )
+
+
+def test_actor_replay_accepts_nonzero_marching_clock_slots():
+    runner = PolicyRunner()
+    obs = np.zeros(48, dtype=np.float32)
+    obs[0:3] = [0.2, -0.4, 0.6]
+    obs[8] = -1.0
+    action = runner.infer_action(obs)
+    assert action.shape == (12,)
+    assert np.all(np.isfinite(action))
+
+
+def test_hardware_gain_scales_only_offset_from_nonzero_default():
+    q_default = np.linspace(-0.6, 0.6, 12, dtype=np.float32)
+    q_actor = q_default + np.linspace(-0.4, 0.4, 12, dtype=np.float32)
+    scaled = scale_policy_target_offset(q_default, q_actor, 0.05)
+    np.testing.assert_allclose(
+        scaled,
+        q_default + 0.05 * (q_actor - q_default),
+        atol=1.0e-7,
+    )
+    assert not np.allclose(scaled, 0.05 * q_actor)
+    with pytest.raises(ValueError):
+        scale_policy_target_offset(q_default, q_actor, 1.01)
+
+
+def test_model_12357_hardware_enable_is_fail_closed():
+    report = evaluate_deployment_readiness(ROOT)
+    assert not report.policy_ready
+    assert not report.hardware_ready
+    failed_names = {check.name for check in report.failed()}
+    assert "marching clock formula/frequency/reset" in failed_names
+    assert "policy joint order" in failed_names
+    assert "per-index action scale" in failed_names
+    assert "independent Isaac golden vectors" in failed_names
+    assert "required four-bar path enabled" in failed_names
 
 
 def test_imu_reading_quality_accepts_valid_and_rejects_bad_vectors():
