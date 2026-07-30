@@ -1,0 +1,29 @@
+artifact:
+  name: model_12357
+  checkpoint_iteration: 12357
+  sha256: 48b3d7c7e10fd0d27a053fdf3af56bcd9190481c35798b585f0a0ff0478cf8b3
+  format: checkpoint_actor
+  activation: elu
+  checkpoint_contains_normalizer: false
+
+network:
+  observation_dim: 48
+  hidden_dims: [512, 256, 128]
+  action_dim: 12
+
+deployment_contract:
+  # The checkpoint proves tensor dimensions, but it does not embed semantic
+  # observation names. These slots retain the verified Grallator 48D contract.
+  control_dt: 0.02
+  action_scale: 0.25
+  deployment_normalizer: identity
+  observation_layout:
+    base_lin_vel: [0, 1, 2]
+    base_ang_vel: [3, 4, 5]
+    projected_gravity: [6, 7, 8]
+    command: [9, 10, 11]
+    joint_pos_relative: [12, 23]
+    joint_vel: [24, 35]
+    previous_action: [36, 47]
+  base_lin_vel_value: [0.0, 0.0, 0.0]
+  keyboard_trot_trigger: w

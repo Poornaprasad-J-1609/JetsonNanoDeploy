@@ -454,6 +454,20 @@ def test_medium_walk_launcher_latches_terminal_movement_commands():
     assert "--keyboard-control-mode latched" in launcher
 
 
+def test_trot_launcher_uses_verified_actor_and_w_only_translation():
+    launcher = (ROOT / "scripts" / "run_trot_policy.sh").read_text(
+        encoding="utf-8"
+    )
+    runner = PolicyRunner()
+    assert runner.policy_sha256 in launcher
+    assert "--policy-path" in launcher
+    assert "--max-vx 1.80" in launcher
+    assert "--max-vy 0.00" in launcher
+    assert "--max-yaw 0.00" in launcher
+    assert "--no-gait-assist" in launcher
+    assert "run_medium_walk.sh" in launcher
+
+
 def test_main_controller_safe_defaults_are_pinned():
     source = (ROOT / "src" / "main_controller.py").read_text(encoding="utf-8")
     assert "--auto-push-log" in source
