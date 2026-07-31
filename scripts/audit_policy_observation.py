@@ -18,7 +18,7 @@ from joint_mapping import POLICY_JOINT_ORDER  # noqa: E402
 
 
 FIELDS = (
-    (0, 3, "marching_clock", "sin,cos,mode"),
+    (0, 3, "base_lin_vel", "m/s; required zero"),
     (3, 6, "base_ang_vel", "rad/s"),
     (6, 9, "projected_gravity", "unit vector"),
     (9, 12, "command", "m/s,m/s,rad/s"),
@@ -152,13 +152,8 @@ def audit_rows(rows):
             warnings.append("previous action does not match previous raw policy output")
 
     gravity_norm = np.linalg.norm(obs[:, 6:9], axis=1)
-    clock_norm = np.sum(obs[:, 0:2] ** 2, axis=1)
-    if np.nanmax(np.abs(clock_norm - 1.0)) > 1.0e-4:
-        warnings.append("marching clock sin/cos magnitude is not one")
-    if np.nanmax(np.abs(obs[:, 2] - 1.0)) > 1.0e-6:
-        warnings.append("marching clock mode slot is not continuously one")
-    if np.nanmax(np.abs(obs[:, 9:12])) > 1.0e-7:
-        warnings.append("autonomous marching command slots are not zero")
+    if np.nanmax(np.abs(obs[:, 0:3])) > 1.0e-7:
+        warnings.append("base linear velocity slots are not exactly zero")
     if np.nanmax(np.abs(gravity_norm - 1.0)) > 0.08:
         warnings.append("projected gravity norm is not near one")
     if np.nanmedian(obs[:, 8]) > -0.5:
@@ -190,11 +185,8 @@ def audit_rows(rows):
                 joint_name = POLICY_JOINT_ORDER[obs_index - start]
             values = obs[:, obs_index]
             passed = bool(np.all(np.isfinite(values)))
-            if semantic == "marching_clock":
-                passed = passed and bool(
-                    np.nanmax(np.abs(clock_norm - 1.0)) <= 1.0e-4
-                    and np.nanmax(np.abs(obs[:, 2] - 1.0)) <= 1.0e-6
-                )
+            if semantic == "base_lin_vel":
+                passed = passed and bool(np.nanmax(np.abs(obs[:, 0:3])) <= 1.0e-7)
             elif semantic == "projected_gravity":
                 passed = passed and bool(np.nanmax(np.abs(gravity_norm - 1.0)) <= 0.08)
             elif semantic == "command":

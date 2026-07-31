@@ -411,11 +411,7 @@ def action_equivalent_for_q_target(runner, q_target):
         )
     if not np.all(np.isfinite(q_target)):
         raise ValueError("q_target contains NaN or Inf")
-    return (
-        runner.policy_joint_signs
-        * (q_target - runner.q_default)
-        / runner.action_scale_by_joint
-    ).astype(np.float32)
+    return ((q_target - runner.q_default) / runner.action_scale).astype(np.float32)
 
 
 def projected_gravity_to_roll_pitch(projected_gravity_b):
@@ -516,7 +512,6 @@ def stand_policy_imu_correction(
         q_current=policy_q,
         qd_current=policy_qd,
         previous_action=previous_action,
-        marching_clock=runner.marching_clock(0.0, march_enabled=False),
     )
     upright_obs = runner.build_observation(
         base_ang_vel_b=np.zeros(3, dtype=np.float32),
@@ -525,7 +520,6 @@ def stand_policy_imu_correction(
         q_current=policy_q,
         qd_current=policy_qd,
         previous_action=previous_action,
-        marching_clock=runner.marching_clock(0.0, march_enabled=False),
     )
     live_action = runner.infer_action(live_obs)
     upright_action = runner.infer_action(upright_obs)
@@ -533,7 +527,7 @@ def stand_policy_imu_correction(
 
     gain = max(0.0, float(policy_cfg.get("gain", 1.0)))
     max_correction = max(0.0, float(policy_cfg.get("max_correction", 0.12)))
-    correction = runner.action_scale_by_joint * gain * delta_action
+    correction = runner.action_scale * gain * delta_action
     if max_correction > 0.0:
         correction = np.clip(correction, -max_correction, max_correction)
 
@@ -2046,7 +2040,7 @@ class CsvRunLogger:
         "command_line",
         "runtime_control_hz",
         "policy_action_scale",
-        "policy_action_scales",
+        "policy_action_formula",
         "exact_policy_after_entry",
         "can_topology",
         "can_backend",
@@ -3928,7 +3922,6 @@ def run_policy_loop(
     last_walk_command_step = -10**9
     walk_stop_candidate_step = -1
     policy_has_started = False
-    march_start_time_s = None
     direct_imu_stabilization_enabled = bool(
         motion_assist_cfg.get("imu_posture", {}).get("enabled", False)
     )
@@ -4034,12 +4027,8 @@ def run_policy_loop(
     print("  left stick X  -> left/right vy")
     print("  right stick X -> turn/yaw")
     print("Terminal keys:")
-    if runner.autonomous_march:
-        print("  autonomous marching starts after STAND settles")
-        print("  movement keys are ignored by the policy command slots")
-    else:
-        print("  w/s -> straight vx, a/d -> lateral vy, combine for xy diagonal")
-        print("  q/e -> positive/negative yaw; combine with translation if needed")
+    print("  w/s -> straight vx, a/d -> lateral vy, combine for xy diagonal")
+    print("  q/e -> positive/negative yaw; combine with translation if needed")
     print("  c -> SIT/CROUCH, space -> STAND")
     print("  up/down arrows -> increase/decrease speed scale")
     print("  h -> HOLD current position, x -> EMERGENCY STOP")
@@ -4048,12 +4037,7 @@ def run_policy_loop(
     print("walk_command_grace_seconds:", float(walk_command_grace_seconds))
     print("walk_stop_confirm_seconds:", float(walk_stop_confirm_seconds))
     print("base_lin_vel_source:", base_lin_vel_source, "(state estimate remains zero)")
-    print(
-        "autonomous_march:",
-        bool(runner.autonomous_march),
-        f"clock={runner.marching_clock_frequency_hz:.3f}Hz",
-        "policy_command=" + np.array2string(runner.policy_command, precision=3),
-    )
+    print("policy_contract: velocity-command locomotion; obs[0:3]=[0,0,0]")
     print("zero_frame:", zero_frame)
     print("zero_calibrated:", bool(zero_calibrated))
     if has_motion_target and control_mode == "hold" and zero_frame == "crouch":
@@ -4691,14 +4675,8 @@ def run_policy_loop(
         command_input_s += time.monotonic() - command_input_start
         if step < calibration_hold_until_step:
             command = np.zeros(3, dtype=np.float32)
-        autonomous_walk_requested = bool(
-            runner.autonomous_march
-            and walking_armed
-            and control_mode == "stand"
-        )
         raw_walk_requested = bool(
             policy_shadow_mode
-            or autonomous_walk_requested
             or joystick_walk_requested(command, walk_command_threshold)
         )
         walk_requested = raw_walk_requested
@@ -4748,8 +4726,6 @@ def run_policy_loop(
             vy_abs_max=policy_command_vy_max,
             yaw_abs_max=policy_command_yaw_max,
         )
-        if runner.autonomous_march:
-            policy_command = runner.policy_command.copy()
         if not walking_armed and walk_requested:
             walk_requested = False
             if step % max(1, print_every) == 0:
@@ -4901,16 +4877,13 @@ def run_policy_loop(
             if not previous_walk_requested:
                 policy_entry_restart_count += 1
                 policy_entry_restart_reason = (
-                    "stand settled; autonomous march enabled"
-                    if runner.autonomous_march
-                    else "initial movement command"
+                    "initial movement command"
                     if not policy_was_started
                     else "movement re-entered after intentional stop"
                 )
                 print(f"[POLICY ENTRY] started: {policy_entry_restart_reason}")
                 policy_entry_elapsed_s = 0.0
                 policy_entry_q_start = np.asarray(q_previous_target, dtype=np.float32).copy()
-                march_start_time_s = time.monotonic()
                 scheduler.request_resync("policy entry initialized")
             policy_entry_elapsed_s += float(dt)
             if float(policy_entry_ramp_seconds) > 0.0:
@@ -4922,7 +4895,6 @@ def run_policy_loop(
         else:
             policy_entry_elapsed_s = 0.0
             policy_entry_scale = 0.0
-            march_start_time_s = None
         previous_walk_requested = bool(walk_requested)
 
         if walk_just_stopped and control_mode == "stand":
@@ -5077,14 +5049,6 @@ def run_policy_loop(
             action = np.zeros(action_dim, dtype=np.float32)
 
         elif active_control_mode == "policy":
-            if march_start_time_s is None:
-                raise RuntimeError(
-                    "Policy mode entered without an initialized marching clock"
-                )
-            marching_clock = runner.marching_clock(
-                max(0.0, time.monotonic() - march_start_time_s),
-                march_enabled=True,
-            )
             observation_build_start = time.monotonic()
             obs = runner.build_observation(
                 base_ang_vel_b=base_ang_vel_b,
@@ -5093,7 +5057,6 @@ def run_policy_loop(
                 q_current=q_current,
                 qd_current=qd_current,
                 previous_action=previous_raw_action,
-                marching_clock=marching_clock,
             )
             observation_build_s += time.monotonic() - observation_build_start
 
@@ -5582,16 +5545,10 @@ def run_policy_loop(
                         "active; policy walking is armed."
                     )
                 else:
-                    if runner.autonomous_march:
-                        print(
-                            "[POSE] stand settled. Autonomous marching policy "
-                            "takeover will start with zero command."
-                        )
-                    else:
-                        print(
-                            "[POSE] stand settled. Policy walking is armed; "
-                            "stand target remains fixed until a movement command."
-                        )
+                    print(
+                        "[POSE] stand settled. Policy walking is armed; "
+                        "stand target remains fixed until a movement command."
+                    )
 
         if active_control_mode == "sit" and sit_zero_pending:
             q_feedback = getattr(estimator, "q_current", q_safe_target)
@@ -5977,11 +5934,7 @@ def run_policy_loop(
             return "UNKNOWN"
         values = np.asarray(samples, dtype=np.float32)
         if actor_actions:
-            values = (
-                values
-                * runner.policy_joint_signs.reshape(1, -1)
-                * runner.action_scale_by_joint.reshape(1, -1)
-            )
+            values = values * runner.action_scale
         return classify_diagonal_trot(values, 1.0 / float(dt))[0]
 
     raw_status = gait_status(root_raw_signals, actor_actions=True)
@@ -6583,8 +6536,7 @@ def main():
         choices=["zero"],
         default="zero",
         help=(
-            "keep the unavailable base-linear-velocity state estimate at zero; "
-            "the marching actor repurposes obs[0:3] for its phase clock"
+            "force policy obs[0:3] to [0,0,0], matching locomotion training"
         ),
     )
     parser.add_argument(
@@ -7483,10 +7435,7 @@ def main():
                 "command_line": " ".join(sys.argv),
                 "runtime_control_hz": f"{runtime_control_hz:.6f}",
                 "policy_action_scale": f"{runner.action_scale:.6f}",
-                "policy_action_scales": ",".join(
-                    f"{float(value):.6f}"
-                    for value in runner.action_scale_by_joint
-                ),
+                "policy_action_formula": "q_default + 0.25 * raw_action",
                 "policy_hip_action_clip": f"{args.policy_hip_action_clip:.6f}",
                 "policy_hip_action_scale": f"{args.policy_hip_action_scale:.6f}",
                 "exact_policy_after_entry": str(bool(args.exact_policy_after_entry)),

@@ -137,13 +137,7 @@ def main():
         walking = step >= stand_steps
         entry_elapsed_steps = max(0, step - stand_steps + 1)
         alpha = 0.0 if not walking else smoothstep(min(1.0, entry_elapsed_steps / entry_steps))
-        policy_command = (
-            runner.policy_command
-            if runner.autonomous_march
-            else command
-            if walking
-            else np.zeros(3, dtype=np.float32)
-        )
+        policy_command = command if walking else np.zeros(3, dtype=np.float32)
 
         obs = runner.build_observation(
             base_ang_vel_b=np.zeros(3, dtype=np.float32),
@@ -152,10 +146,6 @@ def main():
             q_current=q,
             qd_current=qd,
             previous_action=previous_raw_action,
-            marching_clock=runner.marching_clock(
-                max(0, step - stand_steps) * runner.control_dt,
-                march_enabled=walking,
-            ),
         )
         raw_action = runner.infer_action(obs)
         if not np.all(np.isfinite(raw_action)):

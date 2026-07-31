@@ -1,30 +1,7 @@
 control_dt: 0.02
-# Legacy scalar retained for older analysis tools. The marching actor uses the
-# explicit signed per-joint scales below for motor targets.
+# Exact JointPositionAction scale used by the validated locomotion policy:
+# q_target = q_default + 0.25 * raw_action.
 policy_action_scale: 0.25
-
-policy_contract:
-  autonomous_march: true
-  marching_clock_frequency_hz: 0.80
-  marching_clock_formula: sin_cos_one
-  command: [0.0, 0.0, 0.0]
-
-# Signed JointPositionAction scales from the marching task. These are listed by
-# actor joint name so the grouped policy order cannot be confused with a
-# per-leg/interleaved order.
-policy_action_scales:
-  BL_hip_joint: -0.25
-  BR_hip_joint: -0.25
-  FL_hip_joint: -0.25
-  FR_hip_joint: -0.25
-  BL_thigh_joint: -0.40
-  BR_thigh_joint: -0.40
-  FL_thigh_joint: -0.40
-  FR_thigh_joint: -0.40
-  BL_calf_joint: 0.40
-  BR_calf_joint: 0.40
-  FL_calf_joint: 0.40
-  FR_calf_joint: 0.40
 
 # Policy output/observation joint order.
 #
@@ -63,7 +40,7 @@ policy_joint_signs:
   FR_calf_joint: 1
 
 observation_layout:
-  marching_clock: [0, 1, 2]
+  base_lin_vel: [0, 1, 2]
   base_ang_vel: [3, 4, 5]
   projected_gravity: [6, 7, 8]
   command: [9, 10, 11]

@@ -121,7 +121,7 @@ def test_one_can_socketcan_defaults_and_unique_ids():
 
 def test_policy_contract_observation_and_action():
     runner = PolicyRunner()
-    assert runner.policy_path.name == "model_12357_actor.pt"
+    assert runner.policy_path.name == "policy.pt"
     assert runner.policy_sha256 == EXPECTED_POLICY_SHA256
     assert runner.policy_hash_matches
     assert runner.policy_order == EXPECTED_POLICY_JOINT_ORDER
@@ -142,30 +142,20 @@ def test_policy_contract_observation_and_action():
     assert runner.observation_dim == 48
     assert runner.action_dim == 12
     assert runner.action_scale == pytest.approx(0.25)
-    np.testing.assert_array_equal(
-        runner.action_scale_by_joint,
-        np.array(
-            [-0.25] * 4 + [-0.40] * 4 + [0.40] * 4,
-            dtype=np.float32,
-        ),
-    )
-    assert runner.autonomous_march
-    assert runner.marching_clock_frequency_hz == pytest.approx(0.8)
 
     previous = np.linspace(-0.5, 0.5, 12, dtype=np.float32)
-    clock = runner.marching_clock(0.0)
+    command = np.array([0.2, -0.1, 0.3], dtype=np.float32)
     obs = runner.build_observation(
         base_ang_vel_b=np.array([0.1, -0.2, 0.3], dtype=np.float32),
         projected_gravity_b=np.array([0.0, 0.0, -1.0], dtype=np.float32),
-        command=runner.policy_command,
+        command=command,
         q_current=runner.q_default.copy(),
         qd_current=np.zeros(12, dtype=np.float32),
         previous_action=previous,
-        marching_clock=clock,
     )
     assert obs.shape == (48,)
-    np.testing.assert_array_equal(obs[0:3], [0.0, 1.0, 1.0])
-    np.testing.assert_array_equal(obs[9:12], np.zeros(3, dtype=np.float32))
+    np.testing.assert_array_equal(obs[0:3], np.zeros(3, dtype=np.float32))
+    np.testing.assert_array_equal(obs[9:12], command)
     np.testing.assert_allclose(obs[36:48], previous)
 
     action = runner.infer_action(obs)
@@ -206,62 +196,49 @@ def test_hip_action_scale_applies_after_clip():
         assert conditioned[index] == pytest.approx(expected)
 
 
-def test_live_imu_populates_policy_slots_with_marching_clock_and_zero_command():
+def test_live_imu_and_velocity_command_populate_exact_policy_slots():
     runner = PolicyRunner()
     gyro = np.array([0.11, -0.22, 0.33], dtype=np.float32)
     gravity = np.array([0.05, -0.04, -0.998], dtype=np.float32)
+    command = np.array([0.15, -0.07, 0.2], dtype=np.float32)
     previous = np.linspace(-0.2, 0.2, 12, dtype=np.float32)
     obs = runner.build_observation(
         base_ang_vel_b=gyro,
         projected_gravity_b=gravity,
-        command=runner.policy_command,
+        command=command,
         q_current=runner.q_default.copy(),
         qd_current=np.zeros(12, dtype=np.float32),
         previous_action=previous,
-        marching_clock=runner.marching_clock(0.25),
     )
-    np.testing.assert_allclose(
-        np.dot(obs[0:2], obs[0:2]),
-        1.0,
-        atol=1.0e-6,
-    )
-    assert obs[2] == pytest.approx(1.0)
+    np.testing.assert_array_equal(obs[0:3], np.zeros(3, dtype=np.float32))
     np.testing.assert_allclose(obs[3:6], gyro)
     np.testing.assert_allclose(obs[6:9], gravity)
-    np.testing.assert_array_equal(obs[9:12], np.zeros(3, dtype=np.float32))
+    np.testing.assert_array_equal(obs[9:12], command)
     np.testing.assert_allclose(obs[36:48], previous)
 
 
-def test_marching_clock_advances_at_point_eight_hz_and_changes_actor_output():
+def test_nonzero_base_linear_velocity_slots_are_rejected_before_inference():
     runner = PolicyRunner()
-    clock_zero = runner.marching_clock(0.0)
-    clock_quarter = runner.marching_clock(1.0 / (4.0 * 0.8))
-    np.testing.assert_allclose(clock_zero, [0.0, 1.0, 1.0], atol=1.0e-6)
-    np.testing.assert_allclose(clock_quarter, [1.0, 0.0, 1.0], atol=1.0e-6)
-
-    def observation(clock):
-        return runner.build_observation(
-            base_ang_vel_b=np.zeros(3, dtype=np.float32),
-            projected_gravity_b=np.array([0.0, 0.0, -1.0], dtype=np.float32),
-            command=runner.policy_command,
-            q_current=runner.q_default,
-            qd_current=np.zeros(12, dtype=np.float32),
-            previous_action=np.zeros(12, dtype=np.float32),
-            marching_clock=clock,
-        )
-
-    action_zero = runner.infer_action(observation(clock_zero))
-    action_quarter = runner.infer_action(observation(clock_quarter))
-    assert np.max(np.abs(action_zero - action_quarter)) > 0.05
+    obs = runner.build_observation(
+        base_ang_vel_b=np.zeros(3, dtype=np.float32),
+        projected_gravity_b=np.array([0.0, 0.0, -1.0], dtype=np.float32),
+        command=np.zeros(3, dtype=np.float32),
+        q_current=runner.q_default,
+        qd_current=np.zeros(12, dtype=np.float32),
+        previous_action=np.zeros(12, dtype=np.float32),
+    )
+    obs[0] = 0.1
+    with pytest.raises(ValueError, match="0:3"):
+        runner.infer_action(obs)
 
 
-def test_signed_action_scales_apply_in_grouped_policy_joint_order():
+def test_uniform_action_scale_applies_in_grouped_policy_joint_order():
     runner = PolicyRunner()
     action = np.ones(12, dtype=np.float32)
     target = runner.action_to_q_target(action)
     np.testing.assert_allclose(
         target - runner.q_default,
-        np.array([-0.25] * 4 + [-0.40] * 4 + [0.40] * 4),
+        np.full(12, 0.25, dtype=np.float32),
         atol=1.0e-7,
     )
 

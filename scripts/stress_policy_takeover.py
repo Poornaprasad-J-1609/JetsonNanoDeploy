@@ -262,15 +262,10 @@ def run_case(
             obs = runner.build_observation(
                 base_ang_vel_b=noisy_gyro,
                 projected_gravity_b=noisy_gravity,
-                command=(
-                    runner.policy_command
-                    if runner.autonomous_march
-                    else np.asarray(command, dtype=np.float32)
-                ),
+                command=np.asarray(command, dtype=np.float32),
                 q_current=q_measured,
                 qd_current=qd_measured,
                 previous_action=previous_raw_action,
-                marching_clock=runner.marching_clock(step * runner.control_dt),
             )
             raw_action = runner.infer_action(obs)
             control_action = clip_policy_hip_actions(

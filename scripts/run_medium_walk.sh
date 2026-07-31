@@ -7,18 +7,6 @@ CAN_FRONT="${CAN_FRONT:-slcan0}"
 CAN_BACK="${CAN_BACK:-slcan1}"
 IMU_PORT="${IMU_PORT:-/dev/ttyUSB0}"
 
-for interface in "$CAN_FRONT" "$CAN_BACK"; do
-    if ! ip link show "$interface" >/dev/null 2>&1; then
-        echo "ERROR: SocketCAN interface $interface does not exist." >&2
-        exit 1
-    fi
-done
-
-if [[ ! -e "$IMU_PORT" ]]; then
-    echo "ERROR: Xsens IMU device $IMU_PORT does not exist." >&2
-    exit 1
-fi
-
 export PYTHONPATH="$ROOT_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
 
 args=(
@@ -49,8 +37,8 @@ args=(
     --no-stand-policy-stabilization
     --no-imu-stabilization
     --no-gait-assist
-    # The marching actor starts automatically after SPACE reaches a
-    # settled stand. Its policy command observation remains [0, 0, 0].
+    # SPACE settles in stand; W/A/S/D/Q/E then provide the trained velocity
+    # command observation and trigger locomotion-policy takeover.
     --walk-command-threshold 0.02
     --max-vx 1.80
     --max-vy 0.80
@@ -59,8 +47,7 @@ args=(
     --speed-scale-min 0.04
     --speed-scale-max 0.12
     --speed-scale-step 0.01
-    # Keep keyboard pose/hold/e-stop controls. Movement keys do not populate
-    # this actor's zero command slots.
+    # Latched movement commands remain active until a pose, hold, or e-stop key.
     --keyboard-control-mode latched
     --keyboard-command-timeout 0.20
     --walk-command-grace-seconds 0.20
@@ -98,6 +85,18 @@ if [[ "${DRY_RUN:-0}" == "1" ]]; then
     printf ' %q' "$PYTHON_BIN" "${args[@]}" "$@"
     printf '\n'
     exit 0
+fi
+
+for interface in "$CAN_FRONT" "$CAN_BACK"; do
+    if ! ip link show "$interface" >/dev/null 2>&1; then
+        echo "ERROR: SocketCAN interface $interface does not exist." >&2
+        exit 1
+    fi
+done
+
+if [[ ! -e "$IMU_PORT" ]]; then
+    echo "ERROR: Xsens IMU device $IMU_PORT does not exist." >&2
+    exit 1
 fi
 
 exec "$PYTHON_BIN" "${args[@]}" "$@"

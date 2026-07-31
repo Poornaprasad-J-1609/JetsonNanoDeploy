@@ -140,12 +140,10 @@ def print_control_limits():
     return command_limits
 
 
-def sample_policy(command, runner, safety, clock_elapsed_s=0.0):
+def sample_policy(command, runner, safety):
     command = np.asarray(command, dtype=np.float32)
     command_clipped = clip_command(command, load_command_limits())
-    effective_command = (
-        runner.policy_command if runner.autonomous_march else command_clipped
-    )
+    effective_command = command_clipped
 
     obs = runner.build_observation(
         base_ang_vel_b=np.zeros(3, dtype=np.float32),
@@ -154,7 +152,6 @@ def sample_policy(command, runner, safety, clock_elapsed_s=0.0):
         q_current=runner.q_default,
         qd_current=np.zeros(len(runner.policy_order), dtype=np.float32),
         previous_action=np.zeros(len(runner.policy_order), dtype=np.float32),
-        marching_clock=runner.marching_clock(clock_elapsed_s),
     )
     action = runner.infer_action(obs)
     q_raw = runner.action_to_q_target(action)
@@ -351,29 +348,22 @@ def main():
             f"= {safety.dq_max[i] / runner.control_dt:.2f} rad/s"
         )
 
-    if runner.autonomous_march:
-        cycle_seconds = 1.0 / runner.marching_clock_frequency_hz
-        sample_commands = [
-            (f"phase_{phase_index}", [0.0, 0.0, 0.0], cycle_seconds * phase_index / 8.0)
-            for phase_index in range(8)
-        ]
-    else:
-        sample_commands = [
-            ("forward", [0.30, 0.0, 0.0], 0.0),
-            ("fast_fwd", [0.45, 0.0, 0.0], 0.0),
-            ("backward", [-0.30, 0.0, 0.0], 0.0),
-            ("left", [0.0, 0.25, 0.0], 0.0),
-            ("right", [0.0, -0.25, 0.0], 0.0),
-            ("yaw_left", [0.0, 0.0, 0.45], 0.0),
-            ("yaw_right", [0.0, 0.0, -0.45], 0.0),
-            ("diagonal", [0.30, 0.20, 0.30], 0.0),
-            ("too_fast", [3.00, -3.00, 3.00], 0.0),
-        ]
+    sample_commands = [
+        ("forward", [0.30, 0.0, 0.0]),
+        ("fast_fwd", [0.45, 0.0, 0.0]),
+        ("backward", [-0.30, 0.0, 0.0]),
+        ("left", [0.0, 0.25, 0.0]),
+        ("right", [0.0, -0.25, 0.0]),
+        ("yaw_left", [0.0, 0.0, 0.45]),
+        ("yaw_right", [0.0, 0.0, -0.45]),
+        ("diagonal", [0.30, 0.20, 0.30]),
+        ("too_fast", [3.00, -3.00, 3.00]),
+    ]
 
     print("\nSample policy targets and final MIT command targets from default pose:")
     position_clip_count = 0
     runtime_violations = []
-    for label, command, clock_elapsed_s in sample_commands:
+    for label, command in sample_commands:
         command = np.asarray(command, dtype=np.float32)
         (
             command_clipped,
@@ -387,7 +377,6 @@ def main():
             command,
             runner,
             safety,
-            clock_elapsed_s=clock_elapsed_s,
         )
         pos_clipped = np.abs(q_policy - q_raw) > 1e-6
         rate_clipped = np.abs(q_safe - q_policy) > 1e-6
