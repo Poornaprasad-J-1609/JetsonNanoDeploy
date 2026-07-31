@@ -121,7 +121,7 @@ def test_one_can_socketcan_defaults_and_unique_ids():
 
 def test_policy_contract_observation_and_action():
     runner = PolicyRunner()
-    assert runner.policy_path.name == "model_13108_actor.pt"
+    assert runner.policy_path.name == "model_12357_actor.pt"
     assert runner.policy_sha256 == EXPECTED_POLICY_SHA256
     assert runner.policy_hash_matches
     assert runner.policy_order == EXPECTED_POLICY_JOINT_ORDER
