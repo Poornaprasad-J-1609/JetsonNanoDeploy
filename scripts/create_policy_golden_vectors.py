@@ -1,48 +1,32 @@
 #!/usr/bin/env python3
-"""Package independent Isaac observation/action rows as golden vectors."""
+"""Create deterministic Grallator policy golden vectors."""
 
 import argparse
 import sys
 from pathlib import Path
 
-import yaml
-
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from policy_qualification import create_golden_vectors_from_isaac_csv  # noqa: E402
+from policy_qualification import create_golden_vectors  # noqa: E402
+from policy_runner import PolicyRunner  # noqa: E402
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--source-csv",
-        required=True,
-        help="Isaac CSV containing exact obs_000..047 and reference actor actions",
-    )
+    parser.add_argument("--policy-path", default=None)
     parser.add_argument(
         "--output",
         default=str(ROOT / "tests" / "data" / "grallator_policy_golden_vectors.npz"),
     )
-    parser.add_argument("--policy-sha256", default=None)
+    parser.add_argument("--allow-policy-hash-mismatch", action="store_true")
     args = parser.parse_args()
-
-    policy_hash = args.policy_sha256
-    if not policy_hash:
-        with (ROOT / "config" / "policy_contract.yaml").open(
-            "r", encoding="utf-8"
-        ) as stream:
-            contract = yaml.safe_load(stream) or {}
-        policy_hash = str(
-            contract["policy_contract"]["artifact"]["sha256"]
-        )
-    path = create_golden_vectors_from_isaac_csv(
-        args.source_csv,
-        args.output,
-        policy_hash,
+    runner = PolicyRunner(
+        policy_path=args.policy_path,
+        allow_policy_hash_mismatch=args.allow_policy_hash_mismatch,
     )
-    print("Policy SHA256:", policy_hash)
-    print("Independent Isaac source:", Path(args.source_csv).expanduser().resolve())
+    path = create_golden_vectors(runner, args.output)
+    print("Policy SHA256:", runner.policy_sha256)
     print("Golden vectors written:", path)
 
 

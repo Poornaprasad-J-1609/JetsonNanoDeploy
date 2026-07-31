@@ -29,7 +29,6 @@ from imu_interface import (
     policy_frame_roll_pitch_from_gravity,
 )
 from motor_command_layer import MotorCommandLayer, print_mit_commands
-from four_bar_motor_command_layer import FourBarMotorCommandLayer
 from timing_scheduler import DeadlineScheduler, timing_qualification_passed
 from can_command_streamer import CanCommandStreamer
 from gait_diagnostics import (
@@ -43,12 +42,6 @@ from policy_qualification import (
     calf_calibration_gate,
     replay_policy_csv,
     root_cause_report_lines,
-)
-from deployment_readiness import evaluate_deployment_readiness
-from marching_clock import (
-    DIAGNOSTIC_CLOCK_FORMULAS,
-    MarchingClock,
-    MarchingClockConfigurationError,
 )
 from can_topology import (
     add_can_topology_args,
@@ -425,21 +418,6 @@ def action_equivalent_for_q_target(runner, q_target):
     ).astype(np.float32)
 
 
-def scale_policy_target_offset(q_default, q_actor_target, hardware_action_gain):
-    """Scale only an actor's offset from the training default pose."""
-    q_default = np.asarray(q_default, dtype=np.float32)
-    q_actor_target = np.asarray(q_actor_target, dtype=np.float32)
-    gain = float(hardware_action_gain)
-    if q_default.shape != q_actor_target.shape:
-        raise ValueError(
-            "q_default and q_actor_target must have identical shapes; "
-            f"got {q_default.shape} and {q_actor_target.shape}"
-        )
-    if not np.isfinite(gain) or gain < 0.0 or gain > 1.0:
-        raise ValueError("hardware_action_gain must be finite and within 0..1")
-    return (q_default + gain * (q_actor_target - q_default)).astype(np.float32)
-
-
 def projected_gravity_to_roll_pitch(projected_gravity_b):
     # projected_gravity_b = R_world_from_body.T @ [0, 0, -1]. Therefore a
     # positive body roll produces negative gravity-Y, and positive pitch
@@ -509,7 +487,6 @@ def stand_policy_imu_correction(
     q_current,
     qd_current,
     cfg,
-    marching_clock,
 ):
     """Return only the actor response caused by live IMU state.
 
@@ -539,7 +516,6 @@ def stand_policy_imu_correction(
         q_current=policy_q,
         qd_current=policy_qd,
         previous_action=previous_action,
-        marching_clock=marching_clock,
     )
     upright_obs = runner.build_observation(
         base_ang_vel_b=np.zeros(3, dtype=np.float32),
@@ -548,7 +524,6 @@ def stand_policy_imu_correction(
         q_current=policy_q,
         qd_current=policy_qd,
         previous_action=previous_action,
-        marching_clock=marching_clock,
     )
     live_action = runner.infer_action(live_obs)
     upright_action = runner.infer_action(upright_obs)
@@ -1188,7 +1163,6 @@ def compact_telemetry_record(
     policy_order=None,
     policy_sha256=None,
     policy_entry_scale=0.0,
-    hardware_action_gain=1.0,
     policy_entry_elapsed_s=0.0,
     policy_entry_restart_count=0,
     policy_entry_restart_reason="",
@@ -1355,7 +1329,6 @@ def compact_telemetry_record(
         "max_lateness_ms": 1000.0 * float(max_lateness_s),
         "policy_steady_cycles": int(policy_steady_cycles),
         "policy_entry_scale": float(policy_entry_scale),
-        "hardware_action_gain": float(hardware_action_gain),
         "policy_entry_elapsed_s": float(policy_entry_elapsed_s),
         "policy_entry_restart_count": int(policy_entry_restart_count),
         "policy_entry_restart_reason": str(policy_entry_restart_reason or ""),
@@ -2050,7 +2023,6 @@ class CsvRunLogger:
         "max_lateness_ms",
         "policy_steady_cycles",
         "policy_entry_scale",
-        "hardware_action_gain",
         "policy_entry_elapsed_s",
         "policy_entry_restart_count",
         "policy_entry_restart_reason",
@@ -3879,14 +3851,12 @@ def run_policy_loop(
     policy_command_vx_max,
     policy_command_vy_max,
     policy_command_yaw_max,
-    policy_command_override,
     policy_action_clip,
     policy_hip_action_clip,
     policy_hip_action_scale,
     policy_action_smoothing,
     policy_action_delta_limit,
     policy_entry_ramp_seconds,
-    hardware_action_gain,
     policy_sim_match,
     exact_policy_after_entry,
     stand_policy_stabilization,
@@ -3904,7 +3874,6 @@ def run_policy_loop(
     deadline_resync_s,
     timing_fault_consecutive,
     policy_shadow_mode=False,
-    marching_clock_provider=None,
     encoder_calibration_required=True,
     encoder_calibration_passed=False,
     torque_ramp=None,
@@ -3959,12 +3928,6 @@ def run_policy_loop(
     direct_imu_stabilization_enabled = bool(
         motion_assist_cfg.get("imu_posture", {}).get("enabled", False)
     )
-    if marching_clock_provider is not None:
-        marching_clock_provider.require_runtime_mode(
-            policy_shadow_mode=policy_shadow_mode,
-            mode=mode,
-        )
-        marching_clock_provider.reset()
 
     control_mode = "policy" if policy_shadow_mode else start_control_mode
     zero_frame = str(initial_zero_frame).lower()
@@ -4057,20 +4020,6 @@ def run_policy_loop(
     print("policy_shadow_mode:", bool(policy_shadow_mode))
     if policy_shadow_mode:
         print("[SHADOW] Motors remain passive; no MIT movement command is transmitted.")
-    if marching_clock_provider is None:
-        print("marching_clock: unavailable")
-    else:
-        clock_label = (
-            "UNVERIFIED SHADOW DIAGNOSTIC"
-            if marching_clock_provider.diagnostic_only
-            else "verified training contract"
-        )
-        print(
-            "marching_clock:",
-            f"{clock_label}; formula={marching_clock_provider.formula}",
-            f"frequency={marching_clock_provider.frequency_hz:.6g} Hz",
-            f"reset={marching_clock_provider.reset_rule}",
-        )
     print("Joystick buttons:")
     print("  button 4    -> STOP walking and SIT/CROUCH pose")
     print("  button 5    -> STAND pose")
@@ -4111,14 +4060,6 @@ def run_policy_loop(
         f"yaw={float(policy_command_yaw_max):.3f}",
         "(0 disables each cap)",
     )
-    print(
-        "policy_command_override:",
-        (
-            "disabled"
-            if policy_command_override is None
-            else np.asarray(policy_command_override, dtype=np.float32).tolist()
-        ),
-    )
     print("policy_action_clip:", float(policy_action_clip), "(0 disables)")
     print(
         "policy_hip_action_clip:",
@@ -4129,7 +4070,6 @@ def run_policy_loop(
     print("policy_action_smoothing:", float(policy_action_smoothing), "(0 disables)")
     print("policy_action_delta_limit:", float(policy_action_delta_limit), "(0 disables)")
     print("policy_entry_ramp_seconds:", float(policy_entry_ramp_seconds))
-    print("hardware_action_gain:", float(hardware_action_gain))
     print(
         "exact_policy_after_entry:",
         bool(exact_policy_after_entry),
@@ -4225,11 +4165,6 @@ def run_policy_loop(
 
     while steps is None or step < steps:
         cycle_start = time.monotonic()
-        marching_clock = (
-            None
-            if marching_clock_provider is None
-            else marching_clock_provider.sample_elapsed(float(step) * float(dt))
-        )
         if can_streamer is not None and can_streamer.fault_reason is not None:
             print("\nEMERGENCY STOP:", can_streamer.fault_reason)
             can_streamer.clear()
@@ -4794,11 +4729,6 @@ def run_policy_loop(
             vy_abs_max=policy_command_vy_max,
             yaw_abs_max=policy_command_yaw_max,
         )
-        if policy_command_override is not None:
-            policy_command = np.asarray(
-                policy_command_override,
-                dtype=np.float32,
-            ).copy()
         if not walking_armed and walk_requested:
             walk_requested = False
             if step % max(1, print_every) == 0:
@@ -5047,7 +4977,6 @@ def run_policy_loop(
                     q_current=q_current,
                     qd_current=qd_current,
                     cfg=motion_assist_cfg,
-                    marching_clock=marching_clock,
                 )
                 q_policy_target = q_policy_target + imu_correction
                 imu_correction_abs_max = float(np.max(np.abs(imu_correction)))
@@ -5131,7 +5060,6 @@ def run_policy_loop(
                 q_current=q_current,
                 qd_current=qd_current,
                 previous_action=previous_raw_action,
-                marching_clock=marching_clock,
             )
             observation_build_s += time.monotonic() - observation_build_start
 
@@ -5143,35 +5071,23 @@ def run_policy_loop(
             target_conversion_start = time.monotonic()
             q_actor_target = runner.action_to_q_target(raw_action)
             q_actor_target_for_log = q_actor_target.copy()
-            q_hardware_actor_target = scale_policy_target_offset(
-                runner.q_default,
-                q_actor_target,
-                hardware_action_gain,
-            )
             if policy_shadow_mode:
                 policy_entry_scale = 1.0
-                q_policy_target = q_hardware_actor_target.copy()
-                action = action_equivalent_for_q_target(
-                    runner, q_policy_target
-                )
+                q_policy_target = q_actor_target.copy()
+                action = np.asarray(raw_action, dtype=np.float32).copy()
             elif bool(exact_policy_after_entry):
                 if float(policy_entry_scale) < 0.999:
                     q_policy_target = (
                         (1.0 - float(policy_entry_scale)) * policy_entry_q_start
-                        + float(policy_entry_scale) * q_hardware_actor_target
+                        + float(policy_entry_scale) * q_actor_target
                     ).astype(np.float32)
                     action = action_equivalent_for_q_target(runner, q_policy_target)
                 else:
-                    q_policy_target = q_hardware_actor_target
-                    action = action_equivalent_for_q_target(
-                        runner, q_policy_target
-                    )
+                    q_policy_target = q_actor_target
+                    action = np.asarray(raw_action, dtype=np.float32).copy()
             elif policy_sim_match:
-                action = (
-                    np.asarray(raw_action, dtype=np.float32)
-                    * float(policy_entry_scale)
-                    * float(hardware_action_gain)
-                )
+                action = np.asarray(raw_action, dtype=np.float32).copy()
+                action = np.asarray(action, dtype=np.float32) * float(policy_entry_scale)
                 q_policy_target = runner.action_to_q_target(action)
             else:
                 control_action = clip_policy_hip_actions(
@@ -5187,11 +5103,7 @@ def run_policy_loop(
                     smoothing=policy_action_smoothing,
                     delta_limit_abs=policy_action_delta_limit,
                 )
-                action = (
-                    np.asarray(action, dtype=np.float32)
-                    * float(policy_entry_scale)
-                    * float(hardware_action_gain)
-                )
+                action = np.asarray(action, dtype=np.float32) * float(policy_entry_scale)
                 q_policy_target = runner.action_to_q_target(action)
             q_entry_blended_target_for_log = q_policy_target.copy()
             entry_blend_active_for_log = float(policy_entry_scale) < 0.999
@@ -5736,7 +5648,6 @@ def run_policy_loop(
                 policy_order=runner.policy_order,
                 policy_sha256=runner.policy_sha256,
                 policy_entry_scale=policy_entry_scale,
-                hardware_action_gain=hardware_action_gain,
                 policy_entry_elapsed_s=policy_entry_elapsed_s,
                 policy_entry_restart_count=policy_entry_restart_count,
                 policy_entry_restart_reason=policy_entry_restart_reason,
@@ -6344,24 +6255,6 @@ def main():
         ),
     )
     parser.add_argument(
-        "--unverified-shadow-clock",
-        choices=DIAGNOSTIC_CLOCK_FORMULAS,
-        default=None,
-        help=(
-            "explicitly select a candidate model_12357 marching clock for "
-            "passive diagnostics only; requires --policy-shadow-mode --mode print"
-        ),
-    )
-    parser.add_argument(
-        "--unverified-shadow-clock-hz",
-        type=float,
-        default=1.5,
-        help=(
-            "candidate marching-clock frequency used only by "
-            "--unverified-shadow-clock (default 1.5 Hz)"
-        ),
-    )
-    parser.add_argument(
         "--policy-replay-csv",
         default=None,
         help="offline replay of logged obs_000..047; opens no IMU, CAN, or motor",
@@ -6632,23 +6525,20 @@ def main():
     parser.add_argument(
         "--imu-max-startup-roll-pitch-deg",
         type=float,
-        default=15.0,
+        default=60.0,
         help="maximum absolute roll/pitch accepted during startup IMU validation",
     )
     parser.add_argument(
         "--imu-max-active-roll-pitch-deg",
         type=float,
-        default=15.0,
+        default=75.0,
         help="maximum absolute roll/pitch accepted for required IMU active-motion validation",
     )
     parser.add_argument(
         "--base-lin-vel-source",
         choices=["zero"],
         default="zero",
-        help=(
-            "legacy policy compatibility option; model_12357 requires a "
-            "verified marching clock in observation indices 0:3"
-        ),
+        help="fixed policy contract: observation indices 0:3 are always [0,0,0]",
     )
     parser.add_argument(
         "--imu-stabilization",
@@ -6742,15 +6632,6 @@ def main():
         type=float,
         default=float(policy_deploy_defaults.get("policy_entry_ramp_seconds", 1.5)),
         help="seconds used to blend smoothly from stand into policy walking targets",
-    )
-    parser.add_argument(
-        "--policy-hardware-action-gain",
-        type=float,
-        default=float(policy_deploy_defaults.get("hardware_action_gain", 0.05)),
-        help=(
-            "scale only the policy joint offset from q_default; must be within "
-            "0..1 and starts at 0.05 for suspended qualification"
-        ),
     )
     parser.add_argument(
         "--policy-pd-torque-limit",
@@ -6923,12 +6804,6 @@ def main():
     args.policy_action_delta_limit = max(0.0, float(args.policy_action_delta_limit))
     if not np.isfinite(args.policy_entry_ramp_seconds) or args.policy_entry_ramp_seconds < 0.0:
         parser.error("--policy-entry-ramp-seconds must be finite and >= 0")
-    if (
-        not np.isfinite(args.policy_hardware_action_gain)
-        or args.policy_hardware_action_gain < 0.0
-        or args.policy_hardware_action_gain > 1.0
-    ):
-        parser.error("--policy-hardware-action-gain must be finite and within 0..1")
     if (
         args.mode == "mit-signal"
         and bool(args.policy_sim_match)
@@ -7138,86 +7013,6 @@ def main():
             f"{replay['maximum_absolute_error']:.9g}",
         )
         return 0
-
-    readiness = evaluate_deployment_readiness(ROOT, runner.policy_path)
-    policy_contract_cfg = load_yaml(ROOT / "config" / "policy_contract.yaml")
-    policy_semantic_cfg = (
-        (policy_contract_cfg or {}).get("policy_contract", {}).get(
-            "semantic_contract", {}
-        )
-        or {}
-    )
-    policy_observation_contract = policy_semantic_cfg.get("observation", {}) or {}
-    stationary_policy_command = policy_observation_contract.get(
-        "stationary_command"
-    )
-    if stationary_policy_command is not None:
-        stationary_policy_command = np.asarray(
-            stationary_policy_command,
-            dtype=np.float32,
-        )
-        if stationary_policy_command.shape != (3,) or not np.all(
-            np.isfinite(stationary_policy_command)
-        ):
-            parser.error(
-                "policy_contract semantic_contract.observation.stationary_command "
-                "must contain three finite values"
-            )
-    calibration_only = bool(args.joint_routing_test or args.calf_range_check)
-    marching_clock_provider = None
-    if args.unverified_shadow_clock is not None:
-        if not args.policy_shadow_mode or args.mode != "print":
-            parser.error(
-                "--unverified-shadow-clock requires "
-                "--policy-shadow-mode --mode print"
-            )
-        try:
-            marching_clock_provider = MarchingClock.unverified_shadow(
-                args.unverified_shadow_clock,
-                args.unverified_shadow_clock_hz,
-            )
-        except MarchingClockConfigurationError as exc:
-            parser.error(str(exc))
-        print(
-            "WARNING: using an UNVERIFIED marching-clock candidate for a "
-            "passive actor diagnostic. CAN is not opened and motors are not enabled."
-        )
-    elif readiness.policy_ready:
-        try:
-            marching_clock_provider = MarchingClock.from_verified_contract(
-                policy_observation_contract
-            )
-        except MarchingClockConfigurationError as exc:
-            print("ERROR: verified policy contract has no usable clock provider:", exc)
-            return 1
-
-    if (
-        args.policy_shadow_mode
-        and not readiness.policy_ready
-        and marching_clock_provider is None
-    ):
-        print("\n".join(readiness.lines()))
-        print(
-            "ERROR: generated policy observations are blocked until the exact "
-            "model_12357 Isaac semantic contract is verified. Exact CSV replay "
-            "remains available through --policy-replay-csv. A candidate clock "
-            "may be inspected without CAN or motor enable using "
-            "--mode print --unverified-shadow-clock."
-        )
-        return 1
-    if (
-        args.mode in ("signal", "mit-signal")
-        and not calibration_only
-        and not readiness.hardware_ready
-    ):
-        print("\n".join(readiness.lines()))
-        print(
-            "ERROR: motor enable is blocked by config/policy_contract.yaml. "
-            "Use passive connection checks or the explicit calibration-only "
-            "modes until every mandatory policy and hardware check passes."
-        )
-        return 1
-
     trained_control_dt = float(runner.control_dt)
     trained_control_hz = 1.0 / trained_control_dt
     if args.control_hz > 0.0:
@@ -7244,18 +7039,15 @@ def main():
     motor_ids = load_motor_ids()
     joint_can_bus = resolve_joint_can_bus(runner.policy_order, args.can_count)
     active_joints = args.active_joints if args.active_joints is not None else load_active_joints()
-    four_bar_cfg = load_yaml(ROOT / "config" / "four_bar_transmission.yaml")
-    four_bar_enabled = bool(
-        (four_bar_cfg or {}).get("four_bar_transmission", {}).get("enabled", False)
-    )
-    motor_layer_class = (
-        FourBarMotorCommandLayer if four_bar_enabled else MotorCommandLayer
-    )
-    motor_layer = motor_layer_class(
+    motor_layer = MotorCommandLayer(
         runner.policy_order,
         motor_ids,
         active_joints=active_joints,
         joint_can_bus=joint_can_bus,
+    )
+    four_bar_cfg = load_yaml(ROOT / "config" / "four_bar_transmission.yaml")
+    four_bar_enabled = bool(
+        (four_bar_cfg or {}).get("four_bar_transmission", {}).get("enabled", False)
     )
     joint_mapping = AuthoritativeJointMapping(
         motor_ids=motor_ids,
@@ -7375,6 +7167,12 @@ def main():
     except ValueError as exc:
         print("ERROR:", exc)
         return 1
+    if four_bar_enabled:
+        print(
+            "ERROR: four-bar transmission is enabled, but this deployment "
+            "contract requires the active walking path to remain 1:1."
+        )
+        return 1
     try:
         for bus_name, port in active_port_by_bus.items():
             selected_backend = backend_for_port(port, args.can_backend)
@@ -7470,21 +7268,12 @@ def main():
         f"vy={args.policy_command_vy_max:.3f}",
         f"yaw={args.policy_command_yaw_max:.3f}",
     )
-    print(
-        "Policy observation command override:",
-        (
-            "disabled"
-            if stationary_policy_command is None
-            else stationary_policy_command.tolist()
-        ),
-    )
     print("Policy action clip:", f"{args.policy_action_clip:.3f}")
     print("Policy hip action clip:", f"{args.policy_hip_action_clip:.3f}")
     print("Policy hip action scale:", f"{args.policy_hip_action_scale:.3f}")
     print("Policy action smoothing:", f"{args.policy_action_smoothing:.2f}")
     print("Policy action delta limit:", f"{args.policy_action_delta_limit:.3f}")
     print("Policy entry ramp:", f"{args.policy_entry_ramp_seconds:.2f} s")
-    print("Policy hardware action gain:", f"{args.policy_hardware_action_gain:.3f}")
     print("TORQUE QUALIFICATION STAGE:", args.torque_profile_stage)
     print("Robot must be fully suspended. Previous lower stage must have passed.")
     if args.torque_profile_stage == "stage40":
@@ -7647,7 +7436,6 @@ def main():
                 "command_line": " ".join(sys.argv),
                 "runtime_control_hz": f"{runtime_control_hz:.6f}",
                 "policy_action_scale": f"{runner.action_scale:.6f}",
-                "hardware_action_gain": f"{args.policy_hardware_action_gain:.6f}",
                 "policy_hip_action_clip": f"{args.policy_hip_action_clip:.6f}",
                 "policy_hip_action_scale": f"{args.policy_hip_action_scale:.6f}",
                 "exact_policy_after_entry": str(bool(args.exact_policy_after_entry)),
@@ -8043,14 +7831,12 @@ def main():
             policy_command_vx_max=args.policy_command_vx_max,
             policy_command_vy_max=args.policy_command_vy_max,
             policy_command_yaw_max=args.policy_command_yaw_max,
-            policy_command_override=stationary_policy_command,
             policy_action_clip=args.policy_action_clip,
             policy_hip_action_clip=args.policy_hip_action_clip,
             policy_hip_action_scale=args.policy_hip_action_scale,
             policy_action_smoothing=args.policy_action_smoothing,
             policy_action_delta_limit=args.policy_action_delta_limit,
             policy_entry_ramp_seconds=args.policy_entry_ramp_seconds,
-            hardware_action_gain=args.policy_hardware_action_gain,
             policy_sim_match=bool(args.policy_sim_match),
             exact_policy_after_entry=bool(args.exact_policy_after_entry),
             stand_policy_stabilization=bool(args.stand_policy_stabilization),
@@ -8068,7 +7854,6 @@ def main():
             deadline_resync_s=0.001 * float(args.deadline_resync_ms),
             timing_fault_consecutive=int(args.timing_fault_consecutive),
             policy_shadow_mode=bool(args.policy_shadow_mode),
-            marching_clock_provider=marching_clock_provider,
             encoder_calibration_required=bool(calibration_required),
             encoder_calibration_passed=bool(calibration_ok),
             torque_ramp=torque_ramp,

@@ -38,9 +38,6 @@ policy_deployment:
   command_vx_abs_max: 0.0
   command_vy_abs_max: 0.0
   command_yaw_abs_max: 0.0
-  # Scale only the actor-produced offset from q_default. Never scale the
-  # absolute target itself. Progress this value only after qualified trials.
-  hardware_action_gain: 0.05
   # Ground-safe defaults: preserve the trained action_scale from joint_map.yaml,
   # but do not let the first walking key press jump straight from stand to a
   # full actor output. Use --policy-sim-match only for controlled comparisons.

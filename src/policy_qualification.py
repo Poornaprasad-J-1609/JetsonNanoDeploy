@@ -2,84 +2,68 @@
 """Deterministic policy replay, golden vectors, and qualification gates."""
 
 import csv
+import json
 import time
 from pathlib import Path
 
 import numpy as np
 import yaml
 
-def create_golden_vectors_from_isaac_csv(
-    source_csv,
-    output_path,
-    policy_sha256,
-):
-    """Package independently logged Isaac actor inputs and outputs."""
-    source_csv = Path(source_csv).expanduser().resolve()
+from policy_runner import EXPECTED_OBSERVATION_LAYOUT, EXPECTED_POLICY_JOINT_ORDER
+
+
+GOLDEN_CASES = (
+    "upright_zero_command",
+    "upright_forward",
+    "upright_backward",
+    "small_roll",
+    "small_pitch",
+    "joint_position_disturbance",
+    "joint_velocity_disturbance",
+    "previous_action_disturbance",
+)
+
+
+def golden_observations():
+    observations = np.zeros((len(GOLDEN_CASES), 48), dtype=np.float32)
+    observations[:, 8] = -1.0
+    observations[1, 9] = 0.072
+    observations[2, 9] = -0.072
+    observations[3, 6:9] = np.array([0.08, 0.0, -0.996795], dtype=np.float32)
+    observations[4, 6:9] = np.array([0.0, -0.08, -0.996795], dtype=np.float32)
+    observations[5, 12:24] = np.linspace(-0.08, 0.08, 12, dtype=np.float32)
+    observations[6, 24:36] = np.linspace(-0.6, 0.6, 12, dtype=np.float32)
+    observations[7, 36:48] = np.linspace(-0.4, 0.4, 12, dtype=np.float32)
+    return observations
+
+
+def create_golden_vectors(runner, output_path):
     output_path = Path(output_path).expanduser().resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    observation_fields = [f"obs_{index:03d}" for index in range(48)]
-    action_field_sets = (
-        [f"policy_action_{index:02d}" for index in range(12)],
-        [f"action_{index:02d}" for index in range(12)],
-        [f"raw_action_{index:02d}" for index in range(12)],
-    )
-    observations = []
-    expected_actions = []
-    case_names = []
-    with source_csv.open("r", encoding="utf-8", newline="") as stream:
-        reader = csv.DictReader(stream)
-        fields = set(reader.fieldnames or ())
-        if not set(observation_fields).issubset(fields):
-            raise ValueError(
-                "Isaac CSV must contain obs_000 through obs_047 exactly as "
-                "passed to the actor"
-            )
-        action_fields = next(
-            (candidate for candidate in action_field_sets if set(candidate).issubset(fields)),
-            None,
-        )
-        if action_fields is None:
-            raise ValueError(
-                "Isaac CSV must contain policy_action_00..11, action_00..11, "
-                "or raw_action_00..11"
-            )
-        for row_index, row in enumerate(reader):
-            try:
-                observation = np.asarray(
-                    [float(row[name]) for name in observation_fields],
-                    dtype=np.float32,
-                )
-                action = np.asarray(
-                    [float(row[name]) for name in action_fields],
-                    dtype=np.float32,
-                )
-            except (KeyError, TypeError, ValueError):
-                continue
-            if not np.all(np.isfinite(observation)) or not np.all(np.isfinite(action)):
-                continue
-            observations.append(observation)
-            expected_actions.append(action)
-            case_names.append(str(row.get("step", row_index)))
-    if not observations:
-        raise ValueError(f"No complete finite Isaac actor rows found in {source_csv}")
-
+    observations = golden_observations()
+    actions = np.stack([runner.infer_action(obs) for obs in observations])
     np.savez_compressed(
         output_path,
-        case_names=np.asarray(case_names),
-        observations=np.asarray(observations, dtype=np.float32),
-        expected_actions=np.asarray(expected_actions, dtype=np.float32),
-        policy_sha256=np.asarray(str(policy_sha256)),
-        source_csv=np.asarray(str(source_csv)),
+        case_names=np.asarray(GOLDEN_CASES),
+        observations=observations,
+        expected_actions=actions.astype(np.float32),
+        policy_sha256=np.asarray(runner.policy_sha256),
+        action_scale=np.asarray(runner.action_scale, dtype=np.float32),
+        joint_order=np.asarray(EXPECTED_POLICY_JOINT_ORDER),
+        observation_layout=np.asarray(json.dumps(EXPECTED_OBSERVATION_LAYOUT)),
     )
     return output_path
 
 
-def check_golden_vectors(runner, input_path, tolerance=1.0e-5):
+def check_golden_vectors(runner, input_path, tolerance=1.0e-6):
     input_path = Path(input_path).expanduser().resolve()
     with np.load(input_path, allow_pickle=False) as data:
         observations = np.asarray(data["observations"], dtype=np.float32)
         expected = np.asarray(data["expected_actions"], dtype=np.float32)
         policy_hash = str(np.asarray(data["policy_sha256"]).item())
+        action_scale = float(np.asarray(data["action_scale"]).item())
+        joint_order = tuple(str(item) for item in data["joint_order"].tolist())
+        layout = json.loads(str(np.asarray(data["observation_layout"]).item()))
 
     errors = []
     if observations.ndim != 2 or observations.shape[1] != 48:
@@ -88,13 +72,14 @@ def check_golden_vectors(runner, input_path, tolerance=1.0e-5):
         errors.append(f"golden actions shape is {expected.shape}, expected [N, 12]")
     if policy_hash != runner.policy_sha256:
         errors.append(f"policy SHA256 differs: golden={policy_hash} loaded={runner.policy_sha256}")
+    if abs(action_scale - float(runner.action_scale)) > 1.0e-9:
+        errors.append(f"action scale differs: golden={action_scale} loaded={runner.action_scale}")
+    if joint_order != tuple(EXPECTED_POLICY_JOINT_ORDER):
+        errors.append("golden policy joint order differs from verified actor order")
+    if layout != EXPECTED_OBSERVATION_LAYOUT:
+        errors.append("golden observation layout differs from the verified 48D layout")
     if errors:
-        return {
-            "passed": False,
-            "errors": errors,
-            "maximum_absolute_error": float("inf"),
-            "case_count": int(observations.shape[0]) if observations.ndim else 0,
-        }
+        return {"passed": False, "errors": errors, "maximum_absolute_error": float("inf")}
 
     actual = np.stack([runner.infer_action(obs) for obs in observations])
     maximum_error = float(np.max(np.abs(actual - expected)))

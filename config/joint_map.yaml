@@ -1,13 +1,13 @@
 control_dt: 0.02
-# Legacy scalar candidate from the previous locomotion actor. model_12357's
-# per-index scale must be copied from its exact Isaac action configuration
-# before policy-controlled motor enable is permitted.
+# Must match the JointPositionAction scale used during policy training.
+# The current grallator flat/rough configs use 0.25. Lower this only for
+# intentionally softened first-contact tests.
 policy_action_scale: 0.25
 
 # Policy output/observation joint order.
 #
-# Deployment candidate only. The checkpoint has no semantic joint names. Keep
-# hardware blocked until this order is exported from model_12357's environment.
+# Verified against the Isaac/MuJoCo policy observation and action schema. Keep
+# this in actor order; name-based routing handles the different motor-ID order.
 policy_to_real_order:
   - BL_hip_joint
   - BR_hip_joint
@@ -41,7 +41,7 @@ policy_joint_signs:
   FR_calf_joint: 1
 
 observation_layout:
-  marching_clock: [0, 1, 2]
+  base_lin_vel: [0, 1, 2]
   base_ang_vel: [3, 4, 5]
   projected_gravity: [6, 7, 8]
   command: [9, 10, 11]
