@@ -34,6 +34,7 @@ from main_controller import (
     requires_calf_endpoint_gate,
     runtime_stand_command_phase,
     shifted_safety_filter_with_diagnostics,
+    snapshot_hold_target_from_fresh_feedback,
     stand_recovery_gain_blend_scale,
     stand_ready_for_walking,
     stand_state_ready_for_policy_entry,
@@ -1635,6 +1636,7 @@ def test_medium_walk_uses_loaded_per_joint_support_profile():
     assert "--no-exact-policy-after-entry" not in launcher
     assert "--torque-profile-stage stage30" in launcher
     assert "--policy-pd-torque-profile" in launcher
+    assert "--pose-pd-torque-limit 40" in launcher
     profile = load_yaml(ROOT / "config" / "policy_torque_loaded.yaml")[
         "policy_torque_profile"
     ]
@@ -1643,9 +1645,42 @@ def test_medium_walk_uses_loaded_per_joint_support_profile():
             assert profile["start_nm"][joint_name] == pytest.approx(18.0)
             assert profile["final_nm"][joint_name] == pytest.approx(18.0)
         else:
-            assert profile["start_nm"][joint_name] == pytest.approx(24.0)
+            assert profile["start_nm"][joint_name] == pytest.approx(30.0)
             assert profile["final_nm"][joint_name] == pytest.approx(30.0)
     assert CAN_FEEDBACK_RECEIVE_EVERY_N_CYCLES == 2
+
+
+def test_hold_snapshot_uses_fresh_joint_feedback_without_waiting():
+    policy_order = ["joint_a", "joint_b", "joint_c"]
+
+    class Estimator:
+        joint_index_by_name = {name: index for index, name in enumerate(policy_order)}
+        last_feedback_by_joint = {
+            "joint_a": {"timestamp": time.monotonic()},
+            "joint_b": {"timestamp": time.monotonic() - 1.0},
+            "joint_c": {"timestamp": time.monotonic()},
+        }
+
+    class Layer:
+        active_joints = policy_order
+
+        def __init__(self):
+            self.policy_order = list(policy_order)
+
+    class Safety:
+        max_feedback_age_s = 0.08
+
+    q_hold, captured, missing = snapshot_hold_target_from_fresh_feedback(
+        estimator=Estimator(),
+        motor_layer=Layer(),
+        safety=Safety(),
+        q_previous_target=np.array([10.0, 20.0, 30.0], dtype=np.float32),
+        q_current=np.array([1.0, 2.0, 3.0], dtype=np.float32),
+    )
+
+    np.testing.assert_array_equal(q_hold, [1.0, 20.0, 3.0])
+    assert captured == 2
+    assert missing == ["joint_b"]
 
 
 def test_four_bar_transmission_is_inactive():

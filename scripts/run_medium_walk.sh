@@ -65,16 +65,20 @@ args=(
     # remain active after the blend.
     --exact-policy-after-entry
     # Loaded support profile from the July 31 telemetry: hips remain bounded at
-    # 18 Nm while thighs/calves start at 24 Nm and ramp to 30 Nm. This avoids
-    # the 14 Nm policy-entry collapse without giving lateral hips 30 Nm.
+    # 18 Nm while thighs/calves use a fixed 30 Nm ceiling. The old 24 -> 30 Nm
+    # ramp never advanced and left most sagittal packets torque-limited.
     --torque-profile-stage stage30
     --policy-pd-torque-profile "$ROOT_DIR/config/policy_torque_loaded.yaml"
     --pose-transition-speed-rad-s 0.55
     --pose-transition-min-seconds 1.2
+    # A crouch request from a loaded policy state reached 117 Nm in the July
+    # 31 telemetry. Preserve the synchronized pose target while bounding the
+    # effective legacy impedance to a value that still supports the robot.
+    --pose-pd-torque-limit 40
     --stand-ready-error-rad 0.25
     --stand-ready-velocity-rad-s 0.15
-    # Pose phases use the proven e9a4a13 legacy packet path; measured hardware
-    # safety remains active while host-side pose torque rewriting is disabled.
+    # Pose phases retain the proven e9a4a13 target/gain path. The finite torque
+    # ceiling above scales impedance only when its estimate exceeds 40 Nm.
     --feedback-timeout 0.05
     --fresh-feedback-max-age 0.08
     --policy-steps 0

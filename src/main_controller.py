@@ -3047,6 +3047,53 @@ def acquire_hold_target_from_feedback(
     )
 
 
+def snapshot_hold_target_from_fresh_feedback(
+    estimator,
+    motor_layer,
+    safety,
+    q_previous_target,
+    q_current,
+):
+    """Capture H from the fresh feedback already read for this control cycle.
+
+    The 200 Hz CAN worker must keep streaming while the 50 Hz loop changes
+    modes. Waiting for another complete feedback set after clearing the worker
+    lets the cached frames age out and can turn a normal H request into an
+    encoder-stale fault. Joints without fresh feedback retain their last sent
+    target.
+    """
+    active_joints = list(motor_layer.active_joints)
+    max_age_s = getattr(safety, "max_feedback_age_s", 0.25)
+    fresh_names, _ = fresh_active_feedback_names(
+        estimator,
+        active_joints,
+        max_age_s,
+    )
+    q_hold = np.asarray(q_previous_target, dtype=np.float32).copy()
+    q_measured = np.asarray(q_current, dtype=np.float32).reshape(-1)
+    if q_measured.shape != q_hold.shape:
+        raise ValueError("hold feedback and previous target shapes must match")
+
+    index_by_joint = getattr(
+        estimator,
+        "joint_index_by_name",
+        {name: index for index, name in enumerate(motor_layer.policy_order)},
+    )
+    captured = set()
+    for joint_name in fresh_names:
+        index = index_by_joint.get(joint_name)
+        if index is None or index < 0 or index >= q_measured.size:
+            continue
+        measured = float(q_measured[index])
+        if not np.isfinite(measured):
+            continue
+        q_hold[index] = measured
+        captured.add(joint_name)
+
+    missing = [name for name in active_joints if name not in captured]
+    return q_hold, len(captured), missing
+
+
 def encoder_feedback_required(mode, estimator):
     return mode == "mit-signal" and hasattr(estimator, "last_feedback_by_joint")
 
@@ -4620,25 +4667,14 @@ def run_policy_loop(
                     )
                     break
             elif mode_request == "hold":
-                (
-                    q_hold,
-                    feedback_count,
-                    hold_missing,
-                    q_current,
-                    qd_current,
-                    base_lin_vel_b,
-                    base_ang_vel_b,
-                    projected_gravity_b,
-                ) = acquire_hold_target_from_feedback(
-                    estimator,
-                    motor_layer,
-                    safety,
-                    q_previous_target,
-                    feedback_timeout=feedback_timeout,
-                    capture_seconds=hold_capture_seconds,
-                    buses=buses,
-                    mode=mode,
-                    allow_poll_snapshot=not has_motion_target,
+                q_hold, feedback_count, hold_missing = (
+                    snapshot_hold_target_from_fresh_feedback(
+                        estimator,
+                        motor_layer,
+                        safety,
+                        q_previous_target,
+                        q_current,
+                    )
                 )
                 q_previous_target = q_hold.copy()
                 previous_raw_action = np.zeros(action_dim, dtype=np.float32)
