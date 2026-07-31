@@ -1,0 +1,31 @@
+policy_torque_profile:
+  # The loaded stand-to-policy transition needs materially more support than
+  # the old uniform 14 Nm entry stage. Keep hip authority conservative because
+  # the FR hip reached its physical boundary in the July 31 test.
+  start_nm:
+    BL_hip_joint: 18.0
+    BR_hip_joint: 18.0
+    FL_hip_joint: 18.0
+    FR_hip_joint: 18.0
+    BL_thigh_joint: 24.0
+    BR_thigh_joint: 24.0
+    FL_thigh_joint: 24.0
+    FR_thigh_joint: 24.0
+    BL_calf_joint: 24.0
+    BR_calf_joint: 24.0
+    FL_calf_joint: 24.0
+    FR_calf_joint: 24.0
+
+  final_nm:
+    BL_hip_joint: 18.0
+    BR_hip_joint: 18.0
+    FL_hip_joint: 18.0
+    FR_hip_joint: 18.0
+    BL_thigh_joint: 30.0
+    BR_thigh_joint: 30.0
+    FL_thigh_joint: 30.0
+    FR_thigh_joint: 30.0
+    BL_calf_joint: 30.0
+    BR_calf_joint: 30.0
+    FL_calf_joint: 30.0
+    FR_calf_joint: 30.0

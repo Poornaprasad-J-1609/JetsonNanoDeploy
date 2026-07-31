@@ -1031,8 +1031,46 @@ def test_policy_torque_limit_preserves_target_and_scales_impedance():
     assert command["joint_v_des"] == pytest.approx(0.0)
     assert command["impedance_scale"] < 1.0
     assert command["kp_effective"] < 110.0
+    assert command["kd_effective"] == pytest.approx(6.5, abs=0.01)
+    assert command["kp_scale"] < 1.0
+    assert command["kd_scale"] == pytest.approx(1.0)
     assert abs(command["tau_pd_est"]) <= 12.05
     assert command["torque_limited"]
+
+
+def test_policy_torque_limit_prioritizes_damping_during_fast_reversal():
+    runner = PolicyRunner()
+    motor_ids = load_yaml(ROOT / "config" / "motor_ids.yaml")["motor_ids"]
+    joint_name = "FR_hip_joint"
+    joint_index = runner.policy_order.index(joint_name)
+    layer = MotorCommandLayer(
+        runner.policy_order,
+        motor_ids,
+        active_joints=[joint_name],
+        joint_can_bus=resolve_joint_can_bus(runner.policy_order, 1),
+    )
+    layer.set_policy_pd_torque_limit(14.0)
+    q_target = np.zeros(12, dtype=np.float32)
+    q_target[joint_index] = 0.50
+    command = layer.build_mit_commands(
+        q_target,
+        phase="policy",
+        feedback_by_joint={
+            joint_name: {
+                "position_raw": -0.50,
+                "joint_position": -0.50,
+                "joint_velocity": -3.0,
+            }
+        },
+    )[0]
+
+    assert command["q_des"] == pytest.approx(0.50)
+    assert command["torque_limited"]
+    assert command["kd_effective"] > 4.0
+    assert command["kp_effective"] < 1.0
+    assert command["kd_scale"] > 0.8
+    assert command["kp_scale"] < 0.02
+    assert abs(command["tau_pd_est"]) <= 14.05
 
 
 def test_policy_packet_boundary_uses_physical_not_diagnostic_limits():
@@ -1588,14 +1626,25 @@ def test_stage40_guard_is_present_in_main_controller_source():
     assert "stage40 requires --acknowledge-40nm-suspension-test" in source
 
 
-def test_medium_walk_restores_measured_good_0c17450_profile():
+def test_medium_walk_uses_loaded_per_joint_support_profile():
     launcher = (ROOT / "scripts" / "run_medium_walk.sh").read_text(
         encoding="utf-8"
     )
     assert "--joint-velocity-source finite-difference" in launcher
     assert "--exact-policy-after-entry" in launcher
     assert "--no-exact-policy-after-entry" not in launcher
-    assert "--torque-profile-stage stage20" in launcher
+    assert "--torque-profile-stage stage30" in launcher
+    assert "--policy-pd-torque-profile" in launcher
+    profile = load_yaml(ROOT / "config" / "policy_torque_loaded.yaml")[
+        "policy_torque_profile"
+    ]
+    for joint_name in PolicyRunner().policy_order:
+        if "hip" in joint_name:
+            assert profile["start_nm"][joint_name] == pytest.approx(18.0)
+            assert profile["final_nm"][joint_name] == pytest.approx(18.0)
+        else:
+            assert profile["start_nm"][joint_name] == pytest.approx(24.0)
+            assert profile["final_nm"][joint_name] == pytest.approx(30.0)
     assert CAN_FEEDBACK_RECEIVE_EVERY_N_CYCLES == 2
 
 

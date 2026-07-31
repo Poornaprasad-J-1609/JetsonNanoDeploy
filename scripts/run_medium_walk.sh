@@ -64,9 +64,11 @@ args=(
     # actor target. Physical joint, encoder, tilt, fault, and torque safety
     # remain active after the blend.
     --exact-policy-after-entry
-    # The July 23 stage20 run preserved loaded support without the aggressive
-    # 30-to-40 Nm profile used by the degraded July 24 runs.
-    --torque-profile-stage stage20
+    # Loaded support profile from the July 31 telemetry: hips remain bounded at
+    # 18 Nm while thighs/calves start at 24 Nm and ramp to 30 Nm. This avoids
+    # the 14 Nm policy-entry collapse without giving lateral hips 30 Nm.
+    --torque-profile-stage stage30
+    --policy-pd-torque-profile "$ROOT_DIR/config/policy_torque_loaded.yaml"
     --pose-transition-speed-rad-s 0.55
     --pose-transition-min-seconds 1.2
     --stand-ready-error-rad 0.25

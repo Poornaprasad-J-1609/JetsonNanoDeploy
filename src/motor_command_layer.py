@@ -1079,6 +1079,8 @@ class MotorCommandLayer:
             q_before_torque_limit = q_des
             torque_limited = False
             impedance_scale = 1.0
+            kp_scale = 1.0
+            kd_scale = 1.0
             tau_pd_est = None
             if (
                 phase_torque_limit > 0.0
@@ -1097,34 +1099,70 @@ class MotorCommandLayer:
                 tau_pd_est = kp_effective * (q_des - q_feedback) + velocity_and_ff_torque
 
                 if abs(tau_pd_est) > phase_torque_limit:
-                    # Isaac/MuJoCo clips the PD effort without changing the
-                    # policy's position target. Preserve that same hard-bounded
-                    # target here and scale impedance so the MIT packet produces
-                    # the requested bounded effort at the current feedback
-                    # state. Rewriting q_des toward each encoder sample made the
-                    # target pulse at the feedback rate and removed gait/support
-                    # authority whenever feedback arrived below policy rate.
-                    gain_torque = tau_pd_est - joint_tau_ff_effective
-                    target_gain_torque = clip_scalar(
-                        gain_torque,
-                        -phase_torque_limit - joint_tau_ff_effective,
-                        phase_torque_limit - joint_tau_ff_effective,
+                    # Keep the policy target fixed, but do not remove damping
+                    # when the position error consumes the torque budget. The
+                    # July 31 loaded run showed a reversing hip at -3 rad/s
+                    # with both gains scaled almost to zero; the joint then
+                    # crossed its physical limit. Reserve torque for damping
+                    # first and use only the remaining authority for stiffness.
+                    position_error = q_des - q_feedback
+                    velocity_error = joint_v_des - qd_feedback
+                    damping_torque = kd_effective * velocity_error
+                    damping_plus_ff = damping_torque + joint_tau_ff_effective
+                    if abs(damping_plus_ff) > phase_torque_limit:
+                        target_damping_torque = (
+                            clip_scalar(
+                                damping_plus_ff,
+                                -phase_torque_limit,
+                                phase_torque_limit,
+                            )
+                            - joint_tau_ff_effective
+                        )
+                        kd_scale = (
+                            clip_scalar(
+                                target_damping_torque / damping_torque,
+                                0.0,
+                                1.0,
+                            )
+                            if abs(damping_torque) > 1.0e-9
+                            else 0.0
+                        )
+                        kd *= kd_scale
+                        kd_effective = self._effective_unsigned_wire_value(
+                            kd,
+                            "kd",
+                            command_proto,
+                        )
+
+                    damping_plus_ff = (
+                        kd_effective * velocity_error + joint_tau_ff_effective
                     )
-                    impedance_scale = (
-                        clip_scalar(target_gain_torque / gain_torque, 0.0, 1.0)
-                        if abs(gain_torque) > 1.0e-9
-                        else 0.0
-                    )
-                    kp *= impedance_scale
-                    kd *= impedance_scale
+                    position_torque = kp_effective * position_error
+                    combined_torque = damping_plus_ff + position_torque
+                    if abs(combined_torque) > phase_torque_limit:
+                        target_position_torque = (
+                            clip_scalar(
+                                combined_torque,
+                                -phase_torque_limit,
+                                phase_torque_limit,
+                            )
+                            - damping_plus_ff
+                        )
+                        kp_scale = (
+                            clip_scalar(
+                                target_position_torque / position_torque,
+                                0.0,
+                                1.0,
+                            )
+                            if abs(position_torque) > 1.0e-9
+                            else 0.0
+                        )
+                        kp *= kp_scale
+
+                    impedance_scale = min(kp_scale, kd_scale)
                     kp_effective = self._effective_unsigned_wire_value(
                         kp,
                         "kp",
-                        command_proto,
-                    )
-                    kd_effective = self._effective_unsigned_wire_value(
-                        kd,
-                        "kd",
                         command_proto,
                     )
                     velocity_and_ff_torque = (
@@ -1203,6 +1241,8 @@ class MotorCommandLayer:
                 "command_rate_limited": command_rate_limited,
                 "torque_limited": torque_limited,
                 "impedance_scale": impedance_scale,
+                "kp_scale": kp_scale,
+                "kd_scale": kd_scale,
                 "torque_limit_effective": phase_torque_limit,
                 "torque_limit_start": float(
                     self.policy_pd_torque_limit_start.get(joint_name, phase_torque_limit)
