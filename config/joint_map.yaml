@@ -1,5 +1,5 @@
 control_dt: 0.02
-# Legacy scalar retained for older analysis tools. model_12357 uses the
+# Legacy scalar retained for older analysis tools. The marching actor uses the
 # explicit signed per-joint scales below for motor targets.
 policy_action_scale: 0.25
 

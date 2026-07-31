@@ -4035,7 +4035,7 @@ def run_policy_loop(
     print("  right stick X -> turn/yaw")
     print("Terminal keys:")
     if runner.autonomous_march:
-        print("  model_12357 marches automatically after STAND settles")
+        print("  autonomous marching starts after STAND settles")
         print("  movement keys are ignored by the policy command slots")
     else:
         print("  w/s -> straight vx, a/d -> lateral vy, combine for xy diagonal")
@@ -6584,7 +6584,7 @@ def main():
         default="zero",
         help=(
             "keep the unavailable base-linear-velocity state estimate at zero; "
-            "model_12357 repurposes actor obs[0:3] for its marching clock"
+            "the marching actor repurposes obs[0:3] for its phase clock"
         ),
     )
     parser.add_argument(

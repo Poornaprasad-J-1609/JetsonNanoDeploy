@@ -15,7 +15,7 @@ except ImportError as exc:
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_POLICY_SHA256 = "139dc25e7ad44628cebfea12e96095781d8fc8e070d4419487dfb88a240f79d3"
+EXPECTED_POLICY_SHA256 = "0352c9f9082606cd0d0e595988a0ba81f560c714227c1d6a429c40b8a79a2ff8"
 EXPECTED_OBSERVATION_DIM = 48
 EXPECTED_ACTION_DIM = 12
 EXPECTED_POLICY_JOINT_ORDER = list(POLICY_JOINT_ORDER)
@@ -72,7 +72,7 @@ def resolve_policy_path(root, policy_path=None):
     if policy_path is not None:
         return Path(policy_path)
 
-    preferred = root / "policy" / "model_12357_actor.pt"
+    preferred = root / "policy" / "model_13108_actor.pt"
     if preferred.exists():
         return preferred
 
@@ -256,14 +256,15 @@ class PolicyRunner:
                 )
             if self.marching_clock_formula != "sin_cos_one":
                 raise ValueError(
-                    "model_12357 requires marching_clock_formula: sin_cos_one"
+                    "autonomous marching requires marching_clock_formula: "
+                    "sin_cos_one"
                 )
             if self.policy_command.shape != (3,) or not np.array_equal(
                 self.policy_command,
                 np.zeros(3, dtype=np.float32),
             ):
                 raise ValueError(
-                    "model_12357 autonomous marching requires command [0, 0, 0]"
+                    "autonomous marching requires command [0, 0, 0]"
                 )
         if not np.isfinite(self.control_dt) or self.control_dt <= 0.0:
             raise ValueError("control_dt must be finite and > 0")

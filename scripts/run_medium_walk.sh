@@ -49,7 +49,7 @@ args=(
     --no-stand-policy-stabilization
     --no-imu-stabilization
     --no-gait-assist
-    # model_12357 starts in-place marching automatically after SPACE reaches a
+    # The marching actor starts automatically after SPACE reaches a
     # settled stand. Its policy command observation remains [0, 0, 0].
     --walk-command-threshold 0.02
     --max-vx 1.80

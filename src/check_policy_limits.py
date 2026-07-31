@@ -9,7 +9,7 @@ try:
 except ImportError as exc:
     raise ImportError("Install PyYAML first: pip3 install pyyaml") from exc
 
-from policy_runner import PolicyRunner
+from policy_runner import EXPECTED_OBSERVATION_LAYOUT, PolicyRunner
 from safety_monitor import SafetyMonitor
 from motor_command_layer import MotorCommandLayer
 from imu_interface import projected_gravity_absolute_xsens
@@ -61,13 +61,8 @@ def array_limits_by_joint(runner, limits):
 def check_observation_layout(runner):
     failures = []
     expected_lengths = {
-        "base_lin_vel": 3,
-        "base_ang_vel": 3,
-        "projected_gravity": 3,
-        "command": 3,
-        "joint_pos_relative": len(runner.policy_order),
-        "joint_vel": len(runner.policy_order),
-        "previous_action": len(runner.policy_order),
+        field_name: len(indices)
+        for field_name, indices in EXPECTED_OBSERVATION_LAYOUT.items()
     }
     used = []
 
@@ -145,18 +140,21 @@ def print_control_limits():
     return command_limits
 
 
-def sample_policy(command, runner, safety):
+def sample_policy(command, runner, safety, clock_elapsed_s=0.0):
     command = np.asarray(command, dtype=np.float32)
     command_clipped = clip_command(command, load_command_limits())
+    effective_command = (
+        runner.policy_command if runner.autonomous_march else command_clipped
+    )
 
     obs = runner.build_observation(
         base_ang_vel_b=np.zeros(3, dtype=np.float32),
         projected_gravity_b=np.array([0.0, 0.0, -1.0], dtype=np.float32),
-        command=runner.policy_command if runner.autonomous_march else command_clipped,
+        command=effective_command,
         q_current=runner.q_default,
         qd_current=np.zeros(len(runner.policy_order), dtype=np.float32),
         previous_action=np.zeros(len(runner.policy_order), dtype=np.float32),
-        marching_clock=runner.marching_clock(0.0),
+        marching_clock=runner.marching_clock(clock_elapsed_s),
     )
     action = runner.infer_action(obs)
     q_raw = runner.action_to_q_target(action)
@@ -170,7 +168,15 @@ def sample_policy(command, runner, safety):
         apply_rate_limit=False,
         use_policy_limits=True,
     )
-    return command_clipped, action, q_raw, q_hard, q_policy, q_safe
+    return (
+        command_clipped,
+        effective_command,
+        action,
+        q_raw,
+        q_hard,
+        q_policy,
+        q_safe,
+    )
 
 
 def check_motor_commands(
@@ -181,13 +187,19 @@ def check_motor_commands(
     motor_layer,
     limits,
     phase="policy",
+    limit_scope=None,
     verbose=False,
 ):
-    if phase == "policy":
+    limit_scope = (
+        "policy" if limit_scope is None and phase == "policy" else limit_scope
+    )
+    if limit_scope == "policy":
         q_min = safety.policy_q_min
         q_max = safety.policy_q_max
-    else:
+    elif limit_scope in (None, "hard"):
         q_min, q_max, _ = array_limits_by_joint(runner, limits)
+    else:
+        raise ValueError(f"Unknown limit scope: {limit_scope}")
     limit_by_joint = {
         name: (float(q_min[i]), float(q_max[i]))
         for i, name in enumerate(runner.policy_order)
@@ -272,6 +284,7 @@ def check_extreme_target_enforcement(runner, safety, motor_layer, limits):
             motor_layer=motor_layer,
             limits=limits,
             phase="policy",
+            limit_scope="hard",
         )
     )
     violations.extend(
@@ -338,27 +351,43 @@ def main():
             f"= {safety.dq_max[i] / runner.control_dt:.2f} rad/s"
         )
 
-    sample_commands = [
-        ("forward", [0.30, 0.0, 0.0]),
-        ("fast_fwd", [0.45, 0.0, 0.0]),
-        ("backward", [-0.30, 0.0, 0.0]),
-        ("left", [0.0, 0.25, 0.0]),
-        ("right", [0.0, -0.25, 0.0]),
-        ("yaw_left", [0.0, 0.0, 0.45]),
-        ("yaw_right", [0.0, 0.0, -0.45]),
-        ("diagonal", [0.30, 0.20, 0.30]),
-        ("too_fast", [3.00, -3.00, 3.00]),
-    ]
+    if runner.autonomous_march:
+        cycle_seconds = 1.0 / runner.marching_clock_frequency_hz
+        sample_commands = [
+            (f"phase_{phase_index}", [0.0, 0.0, 0.0], cycle_seconds * phase_index / 8.0)
+            for phase_index in range(8)
+        ]
+    else:
+        sample_commands = [
+            ("forward", [0.30, 0.0, 0.0], 0.0),
+            ("fast_fwd", [0.45, 0.0, 0.0], 0.0),
+            ("backward", [-0.30, 0.0, 0.0], 0.0),
+            ("left", [0.0, 0.25, 0.0], 0.0),
+            ("right", [0.0, -0.25, 0.0], 0.0),
+            ("yaw_left", [0.0, 0.0, 0.45], 0.0),
+            ("yaw_right", [0.0, 0.0, -0.45], 0.0),
+            ("diagonal", [0.30, 0.20, 0.30], 0.0),
+            ("too_fast", [3.00, -3.00, 3.00], 0.0),
+        ]
 
     print("\nSample policy targets and final MIT command targets from default pose:")
     position_clip_count = 0
     runtime_violations = []
-    for label, command in sample_commands:
+    for label, command, clock_elapsed_s in sample_commands:
         command = np.asarray(command, dtype=np.float32)
-        command_clipped, action, q_raw, q_hard, q_policy, q_safe = sample_policy(
+        (
+            command_clipped,
+            effective_command,
+            action,
+            q_raw,
+            q_hard,
+            q_policy,
+            q_safe,
+        ) = sample_policy(
             command,
             runner,
             safety,
+            clock_elapsed_s=clock_elapsed_s,
         )
         pos_clipped = np.abs(q_policy - q_raw) > 1e-6
         rate_clipped = np.abs(q_safe - q_policy) > 1e-6
@@ -377,7 +406,7 @@ def main():
         )
         print(
             f"  {label:9s} cmd=[{command[0]:+.2f},{command[1]:+.2f},{command[2]:+.2f}] "
-            f"sent=[{command_clipped[0]:+.2f},{command_clipped[1]:+.2f},{command_clipped[2]:+.2f}] "
+            f"sent=[{effective_command[0]:+.2f},{effective_command[1]:+.2f},{effective_command[2]:+.2f}] "
             f"cmd_clip={'yes' if command_was_clipped else 'no'} "
             f"action_abs_max={np.max(np.abs(action)):.3f} "
             f"position_clips={int(pos_clipped.sum())} "
@@ -406,7 +435,8 @@ def main():
     print("OK: raw policy targets are inspected with position limits retained.")
     print("OK: main_controller applies configured action filtering and joint slew limits on hardware.")
     print("OK: sit/stand paths retain configured dq_max_per_step rate limits.")
-    print("OK: MotorCommandLayer clips pose targets to hard limits and policy targets to policy_min/policy_max.")
+    print("OK: SafetyMonitor enforces policy_min/policy_max before policy motor commands.")
+    print("OK: MotorCommandLayer independently enforces physical hard limits.")
     print("OK: MIT kp/kd/v/tau parameters obey control_limits.yaml when mit_parameters.enabled is true.")
     if position_clip_count > 0:
         print("Note: policy_raw position clips were observed, but final motor commands stayed inside limits.")
