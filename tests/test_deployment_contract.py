@@ -1,5 +1,6 @@
 import argparse
 import contextlib
+import csv
 import io
 import queue
 import py_compile
@@ -1000,7 +1001,7 @@ def test_final_policy_packet_respects_position_rate_and_torque_limits():
     assert abs(extreme_feedback["tau_pd_est"]) <= 30.05
 
 
-def test_policy_torque_limit_still_limits_position_target():
+def test_policy_torque_limit_preserves_target_and_scales_impedance():
     runner = PolicyRunner()
     motor_ids = load_yaml(ROOT / "config" / "motor_ids.yaml")["motor_ids"]
     joint_name = "FL_thigh_joint"
@@ -1026,9 +1027,12 @@ def test_policy_torque_limit_still_limits_position_target():
         },
     )[0]
 
-    assert command["q_des"] < 0.60
-    assert command["impedance_scale"] == pytest.approx(1.0)
+    assert command["q_des"] == pytest.approx(0.60)
+    assert command["joint_v_des"] == pytest.approx(0.0)
+    assert command["impedance_scale"] < 1.0
+    assert command["kp_effective"] < 110.0
     assert abs(command["tau_pd_est"]) <= 12.05
+    assert command["torque_limited"]
 
 
 def test_policy_packet_boundary_uses_physical_not_diagnostic_limits():
@@ -1402,6 +1406,45 @@ def test_policy_torque_ramp_holds_instead_of_backing_off_for_tracking_error():
     assert max(effective.values()) == pytest.approx(before)
 
 
+@pytest.mark.parametrize(
+    "violation",
+    (
+        {"feedback_age_max_s": 0.06},
+        {"feedback_fresh_count": 6},
+        {"cycle_work_s": 0.025},
+        {"timing_fault": True},
+    ),
+)
+def test_policy_torque_ramp_holds_for_transient_pipeline_gates(violation):
+    runner = PolicyRunner()
+    start = constant_joint_map(runner.policy_order, 14.0)
+    final = constant_joint_map(runner.policy_order, 20.0)
+    ramp = PolicyTorqueRamp(runner.policy_order, start, final)
+    clean = {
+        "steady_policy_elapsed_s": 6.0,
+        "entry_complete": True,
+        "feedback_fresh_count": 12,
+        "feedback_count_expected": 12,
+        "feedback_age_max_s": 0.01,
+        "encoder_margin_rad": 0.5,
+        "tracking_error_max": 0.0,
+        "measured_torque_max": 0.0,
+        "cycle_work_s": 0.005,
+        "timing_fault": False,
+    }
+    effective = ramp.update(**clean)
+    before = max(effective.values())
+
+    blocked = dict(clean)
+    blocked.update(violation)
+    for _ in range(20):
+        effective = ramp.update(**blocked)
+
+    assert ramp.paused
+    assert ramp.violation_count == 0
+    assert max(effective.values()) == pytest.approx(before)
+
+
 def test_policy_torque_ramp_identifies_fixed_stage():
     runner = PolicyRunner()
     fixed = constant_joint_map(runner.policy_order, 14.0)
@@ -1476,6 +1519,48 @@ def test_async_csv_logger_writes_without_blocking(tmp_path):
     assert submit_elapsed < 0.10
     assert log_path.exists()
     assert "compact_line" in log_path.read_text(encoding="utf-8").splitlines()[0]
+
+
+def test_async_csv_logger_uses_control_cycle_capture_timestamp(tmp_path):
+    log_path = tmp_path / "captured_time.csv"
+    logger = CsvRunLogger(
+        enabled=True,
+        log_file=str(log_path),
+        policy_order=PolicyRunner().policy_order,
+        async_enabled=True,
+    )
+    captured_monotonic = logger.start_time + 1.25
+    logger.log(
+        {
+            "phase": "policy",
+            "step": 7,
+            "mode": "policy",
+            "vx": 0.0,
+            "vy": 0.0,
+            "vxy": 0.0,
+            "yaw": 0.0,
+            "policy_vx": 0.0,
+            "policy_vy": 0.0,
+            "policy_yaw": 0.0,
+            "speed": 0.1,
+            "imu": "fake",
+            "act_max": 0.0,
+            "tau_cmd": 0.0,
+            "tau_cmd_max": 0.0,
+            "cmds": 0,
+            "bus_counts": "none",
+            "tau_fb": None,
+            "tau_fb_max": None,
+            "_csv_capture_monotonic": captured_monotonic,
+            "_csv_capture_wall_time": "2026-07-31T12:34:56.789",
+        }
+    )
+    logger.close()
+
+    with log_path.open(newline="", encoding="utf-8") as stream:
+        row = next(csv.DictReader(stream))
+    assert float(row["elapsed_s"]) == pytest.approx(1.25)
+    assert row["wall_time"] == "2026-07-31T12:34:56.789"
 
 
 def test_async_csv_full_queue_increments_dropped_record_count():

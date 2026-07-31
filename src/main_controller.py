@@ -1055,6 +1055,19 @@ class PolicyTorqueRamp:
                     self.recovery_ceiling,
                     self.progress,
                 )
+            elif (
+                reason.startswith("feedback age")
+                or reason.startswith("fresh feedback")
+                or reason.startswith("cycle work")
+                or reason == "timing overrun"
+            ):
+                # These are producer/telemetry qualification gates, not
+                # evidence that the current motor torque is unsafe. Hold the
+                # present stage and wait for a clean supervision sample.
+                # Backing off on ordinary previous-cycle feedback (still well
+                # inside the runtime freshness limit) trapped stage20 around
+                # 14 Nm and made the loaded robot sag as policy took control.
+                self.violation_count = 0
             else:
                 self.violation_count += 1
                 if self.violation_count >= 5:
@@ -1973,6 +1986,9 @@ class CsvRunLogger:
         "can_command_hz",
         "can_command_generation",
         "can_command_send_count",
+        "can_feedback_receive_count",
+        "can_feedback_last_drain_ms",
+        "can_feedback_max_drain_ms",
         "can_command_last_batch_ms",
         "can_command_max_batch_ms",
         "can_command_missed_deadlines",
@@ -2145,16 +2161,28 @@ class CsvRunLogger:
             self._worker.start()
 
     def _row_from_record(self, record):
+        record = dict(record)
+        captured_monotonic = float(
+            record.pop("_csv_capture_monotonic", time.monotonic())
+        )
+        captured_wall_time = str(
+            record.pop(
+                "_csv_capture_wall_time",
+                datetime.now().isoformat(timespec="milliseconds"),
+            )
+        )
         row = {field: "" for field in self.fieldnames}
         row.update(self.run_metadata)
         row.update(record)
         if "csv_logging_ms" in row and row["csv_logging_ms"] in ("", None, 0.0):
             row["csv_logging_ms"] = 1000.0 * float(self.last_log_duration_s)
-        row["csv_queue_depth"] = self.queue_depth()
-        row["csv_dropped_records"] = int(self.dropped_records)
+        if row["csv_queue_depth"] in ("", None):
+            row["csv_queue_depth"] = self.queue_depth()
+        if row["csv_dropped_records"] in ("", None):
+            row["csv_dropped_records"] = int(self.dropped_records)
         row["run_id"] = self.run_id
-        row["wall_time"] = datetime.now().isoformat(timespec="milliseconds")
-        row["elapsed_s"] = f"{time.monotonic() - self.start_time:.6f}"
+        row["wall_time"] = captured_wall_time
+        row["elapsed_s"] = f"{captured_monotonic - self.start_time:.6f}"
         row["compact_line"] = compact_telemetry_line(record)
         if row["tau_fb"] is None:
             row["tau_fb"] = ""
@@ -2206,14 +2234,19 @@ class CsvRunLogger:
     def submit(self, record):
         if not self.enabled or self._writer is None:
             return 0.0
+        stamped_record = dict(record)
+        stamped_record.setdefault("_csv_capture_monotonic", time.monotonic())
+        stamped_record.setdefault(
+            "_csv_capture_wall_time",
+            datetime.now().isoformat(timespec="milliseconds"),
+        )
+        stamped_record["csv_queue_depth"] = self.queue_depth()
+        stamped_record["csv_dropped_records"] = int(self.dropped_records)
         if not self.async_enabled:
-            return self._write_record(record)
+            return self._write_record(stamped_record)
         started = time.monotonic()
-        lightweight_record = dict(record)
-        lightweight_record["csv_queue_depth"] = self.queue_depth()
-        lightweight_record["csv_dropped_records"] = int(self.dropped_records)
         try:
-            self._queue.put_nowait(lightweight_record)
+            self._queue.put_nowait(stamped_record)
         except queue.Full:
             self.dropped_records += 1
         return time.monotonic() - started

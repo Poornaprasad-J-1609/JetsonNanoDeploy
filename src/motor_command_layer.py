@@ -1059,6 +1059,23 @@ class MotorCommandLayer:
                 "tau",
                 command_proto,
             )
+            q_before_command_rate_limit = q_des
+            command_rate_limited = False
+            if previous_command_q is not None and max_command_delta is not None:
+                q_des = clip_scalar(
+                    q_des,
+                    float(previous_command_q[i] - max_command_delta[i]),
+                    float(previous_command_q[i] + max_command_delta[i]),
+                )
+                q_des = self.apply_hard_joint_limit(
+                    joint_name,
+                    q_des,
+                    phase=phase,
+                )
+                command_rate_limited = (
+                    abs(q_des - q_before_command_rate_limit) > 1.0e-7
+                )
+
             q_before_torque_limit = q_des
             torque_limited = False
             impedance_scale = 1.0
@@ -1079,12 +1096,14 @@ class MotorCommandLayer:
                 )
                 tau_pd_est = kp_effective * (q_des - q_feedback) + velocity_and_ff_torque
 
-                if phase in ("sit", "stand") and abs(tau_pd_est) > phase_torque_limit:
-                    # A pose trajectory is already synchronized and speed
-                    # bounded. Pulling q_des back toward each noisy encoder
-                    # independently feeds motor motion into the next target and
-                    # creates the visible move-pause-reverse pattern. Preserve
-                    # the common trajectory and reduce impedance instead.
+                if abs(tau_pd_est) > phase_torque_limit:
+                    # Isaac/MuJoCo clips the PD effort without changing the
+                    # policy's position target. Preserve that same hard-bounded
+                    # target here and scale impedance so the MIT packet produces
+                    # the requested bounded effort at the current feedback
+                    # state. Rewriting q_des toward each encoder sample made the
+                    # target pulse at the feedback rate and removed gait/support
+                    # authority whenever feedback arrived below policy rate.
                     gain_torque = tau_pd_est - joint_tau_ff_effective
                     target_gain_torque = clip_scalar(
                         gain_torque,
@@ -1117,47 +1136,6 @@ class MotorCommandLayer:
                         + velocity_and_ff_torque
                     )
                     torque_limited = True
-                else:
-                    position_torque = kp_effective * (q_des - q_feedback)
-                    position_torque = clip_scalar(
-                        position_torque,
-                        -phase_torque_limit - velocity_and_ff_torque,
-                        phase_torque_limit - velocity_and_ff_torque,
-                    )
-                    q_des = self.apply_hard_joint_limit(
-                        joint_name,
-                        q_feedback + position_torque / kp_effective,
-                        phase=phase,
-                    )
-                    tau_pd_est = (
-                        kp_effective * (q_des - q_feedback)
-                        + velocity_and_ff_torque
-                    )
-                    if abs(tau_pd_est) > phase_torque_limit and kd_effective > 0.0:
-                        target_torque = clip_scalar(
-                            tau_pd_est,
-                            -phase_torque_limit,
-                            phase_torque_limit,
-                        )
-                        joint_v_des = qd_feedback + (
-                            target_torque
-                            - kp_effective * (q_des - q_feedback)
-                            - joint_tau_ff_effective
-                        ) / kd_effective
-                        joint_v_des = clip_scalar(
-                            joint_v_des,
-                            float(self.proto["v_min"]),
-                            float(self.proto["v_max"]),
-                        )
-                        tau_pd_est = (
-                            kp_effective * (q_des - q_feedback)
-                            + kd_effective * (joint_v_des - qd_feedback)
-                            + joint_tau_ff_effective
-                        )
-                    torque_limited = abs(q_des - q_before_torque_limit) > 1e-7
-                    torque_limited = torque_limited or (
-                        abs(joint_v_des - joint_v_des_requested) > 1e-7
-                    )
 
             if (
                 tau_pd_est is None
@@ -1173,92 +1151,6 @@ class MotorCommandLayer:
                     + kd_effective * (joint_v_des - qd_feedback)
                     + joint_tau_ff_effective
                 )
-
-            q_before_command_rate_limit = q_des
-            command_rate_limited = False
-            if previous_command_q is not None and max_command_delta is not None:
-                q_des = clip_scalar(
-                    q_des,
-                    float(previous_command_q[i] - max_command_delta[i]),
-                    float(previous_command_q[i] + max_command_delta[i]),
-                )
-                q_des = self.apply_hard_joint_limit(
-                    joint_name,
-                    q_des,
-                    phase=phase,
-                )
-                command_rate_limited = (
-                    abs(q_des - q_before_command_rate_limit) > 1.0e-7
-                )
-                if command_rate_limited and preload_feedback_valid:
-                    tau_pd_est = (
-                        kp_effective * (q_des - q_feedback)
-                        + kd_effective * (joint_v_des - qd_feedback)
-                        + joint_tau_ff_effective
-                    )
-                    if (
-                        phase_torque_limit > 0.0
-                        and abs(tau_pd_est) > phase_torque_limit
-                        and kd_effective > 0.0
-                    ):
-                        target_torque = clip_scalar(
-                            tau_pd_est,
-                            -phase_torque_limit,
-                            phase_torque_limit,
-                        )
-                        joint_v_des = qd_feedback + (
-                            target_torque
-                            - kp_effective * (q_des - q_feedback)
-                            - joint_tau_ff_effective
-                        ) / kd_effective
-                        joint_v_des = clip_scalar(
-                            joint_v_des,
-                            float(self.proto["v_min"]),
-                            float(self.proto["v_max"]),
-                        )
-                        tau_pd_est = (
-                            kp_effective * (q_des - q_feedback)
-                            + kd_effective * (joint_v_des - qd_feedback)
-                            + joint_tau_ff_effective
-                        )
-                    if (
-                        phase_torque_limit > 0.0
-                        and abs(tau_pd_est) > phase_torque_limit
-                    ):
-                        gain_torque = tau_pd_est - joint_tau_ff_effective
-                        target_gain_torque = clip_scalar(
-                            gain_torque,
-                            -phase_torque_limit - joint_tau_ff_effective,
-                            phase_torque_limit - joint_tau_ff_effective,
-                        )
-                        final_impedance_scale = (
-                            clip_scalar(
-                                target_gain_torque / gain_torque,
-                                0.0,
-                                1.0,
-                            )
-                            if abs(gain_torque) > 1.0e-9
-                            else 0.0
-                        )
-                        kp *= final_impedance_scale
-                        kd *= final_impedance_scale
-                        impedance_scale *= final_impedance_scale
-                        kp_effective = self._effective_unsigned_wire_value(
-                            kp,
-                            "kp",
-                            command_proto,
-                        )
-                        kd_effective = self._effective_unsigned_wire_value(
-                            kd,
-                            "kd",
-                            command_proto,
-                        )
-                        tau_pd_est = (
-                            kp_effective * (q_des - q_feedback)
-                            + kd_effective * (joint_v_des - qd_feedback)
-                            + joint_tau_ff_effective
-                        )
-                        torque_limited = True
 
             p_base = offset + direction * q_des
             p_des = motor_command_position_near_feedback(
