@@ -138,18 +138,30 @@ def test_policy_contract_observation_and_action():
     assert runner.observation_dim == 48
     assert runner.action_dim == 12
     assert runner.action_scale == pytest.approx(0.25)
+    np.testing.assert_array_equal(
+        runner.action_scale_by_joint,
+        np.array(
+            [-0.25] * 4 + [-0.40] * 4 + [0.40] * 4,
+            dtype=np.float32,
+        ),
+    )
+    assert runner.autonomous_march
+    assert runner.marching_clock_frequency_hz == pytest.approx(0.8)
 
     previous = np.linspace(-0.5, 0.5, 12, dtype=np.float32)
+    clock = runner.marching_clock(0.0)
     obs = runner.build_observation(
         base_ang_vel_b=np.array([0.1, -0.2, 0.3], dtype=np.float32),
         projected_gravity_b=np.array([0.0, 0.0, -1.0], dtype=np.float32),
-        command=np.array([0.2, 0.0, 0.0], dtype=np.float32),
+        command=runner.policy_command,
         q_current=runner.q_default.copy(),
         qd_current=np.zeros(12, dtype=np.float32),
         previous_action=previous,
+        marching_clock=clock,
     )
     assert obs.shape == (48,)
-    np.testing.assert_array_equal(obs[0:3], np.zeros(3, dtype=np.float32))
+    np.testing.assert_array_equal(obs[0:3], [0.0, 1.0, 1.0])
+    np.testing.assert_array_equal(obs[9:12], np.zeros(3, dtype=np.float32))
     np.testing.assert_allclose(obs[36:48], previous)
 
     action = runner.infer_action(obs)
@@ -190,7 +202,7 @@ def test_hip_action_scale_applies_after_clip():
         assert conditioned[index] == pytest.approx(expected)
 
 
-def test_live_imu_populates_policy_slots_without_base_velocity():
+def test_live_imu_populates_policy_slots_with_marching_clock_and_zero_command():
     runner = PolicyRunner()
     gyro = np.array([0.11, -0.22, 0.33], dtype=np.float32)
     gravity = np.array([0.05, -0.04, -0.998], dtype=np.float32)
@@ -198,15 +210,56 @@ def test_live_imu_populates_policy_slots_without_base_velocity():
     obs = runner.build_observation(
         base_ang_vel_b=gyro,
         projected_gravity_b=gravity,
-        command=np.array([0.1, 0.0, 0.0], dtype=np.float32),
+        command=runner.policy_command,
         q_current=runner.q_default.copy(),
         qd_current=np.zeros(12, dtype=np.float32),
         previous_action=previous,
+        marching_clock=runner.marching_clock(0.25),
     )
-    np.testing.assert_array_equal(obs[0:3], np.zeros(3, dtype=np.float32))
+    np.testing.assert_allclose(
+        np.dot(obs[0:2], obs[0:2]),
+        1.0,
+        atol=1.0e-6,
+    )
+    assert obs[2] == pytest.approx(1.0)
     np.testing.assert_allclose(obs[3:6], gyro)
     np.testing.assert_allclose(obs[6:9], gravity)
+    np.testing.assert_array_equal(obs[9:12], np.zeros(3, dtype=np.float32))
     np.testing.assert_allclose(obs[36:48], previous)
+
+
+def test_marching_clock_advances_at_point_eight_hz_and_changes_actor_output():
+    runner = PolicyRunner()
+    clock_zero = runner.marching_clock(0.0)
+    clock_quarter = runner.marching_clock(1.0 / (4.0 * 0.8))
+    np.testing.assert_allclose(clock_zero, [0.0, 1.0, 1.0], atol=1.0e-6)
+    np.testing.assert_allclose(clock_quarter, [1.0, 0.0, 1.0], atol=1.0e-6)
+
+    def observation(clock):
+        return runner.build_observation(
+            base_ang_vel_b=np.zeros(3, dtype=np.float32),
+            projected_gravity_b=np.array([0.0, 0.0, -1.0], dtype=np.float32),
+            command=runner.policy_command,
+            q_current=runner.q_default,
+            qd_current=np.zeros(12, dtype=np.float32),
+            previous_action=np.zeros(12, dtype=np.float32),
+            marching_clock=clock,
+        )
+
+    action_zero = runner.infer_action(observation(clock_zero))
+    action_quarter = runner.infer_action(observation(clock_quarter))
+    assert np.max(np.abs(action_zero - action_quarter)) > 0.05
+
+
+def test_signed_action_scales_apply_in_grouped_policy_joint_order():
+    runner = PolicyRunner()
+    action = np.ones(12, dtype=np.float32)
+    target = runner.action_to_q_target(action)
+    np.testing.assert_allclose(
+        target - runner.q_default,
+        np.array([-0.25] * 4 + [-0.40] * 4 + [0.40] * 4),
+        atol=1.0e-7,
+    )
 
 
 def test_imu_reading_quality_accepts_valid_and_rejects_bad_vectors():

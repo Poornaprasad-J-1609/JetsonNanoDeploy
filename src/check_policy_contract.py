@@ -47,10 +47,11 @@ def main():
     obs = runner.build_observation(
         base_ang_vel_b=np.zeros(3, dtype=np.float32),
         projected_gravity_b=np.array([0.0, 0.0, -1.0], dtype=np.float32),
-        command=np.zeros(3, dtype=np.float32),
+        command=runner.policy_command,
         q_current=runner.q_default.copy(),
         qd_current=np.zeros(EXPECTED_ACTION_DIM, dtype=np.float32),
         previous_action=np.zeros(EXPECTED_ACTION_DIM, dtype=np.float32),
+        marching_clock=runner.marching_clock(0.0),
     )
 
     failures = []
@@ -70,8 +71,10 @@ def main():
         failures.append("policy unexpectedly accepted [1,34]")
     if model_accepts_shape(runner.policy, 45):
         failures.append("policy unexpectedly accepted [1,45]")
-    if not np.array_equal(obs[0:3], np.zeros(3, dtype=np.float32)):
-        failures.append("build_observation did not force obs[0:3] to exact zeros")
+    if not np.array_equal(obs[0:3], np.array([0.0, 1.0, 1.0], dtype=np.float32)):
+        failures.append("build_observation did not populate the phase-zero march clock")
+    if not np.array_equal(obs[9:12], np.zeros(3, dtype=np.float32)):
+        failures.append("autonomous marching command slots are not exactly zero")
 
     print("Policy:", runner.policy_path)
     print("SHA256:", runner.policy_sha256)
@@ -84,6 +87,8 @@ def main():
     print("[1,34] rejected:", not model_accepts_shape(runner.policy, 34))
     print("[1,45] rejected:", not model_accepts_shape(runner.policy, 45))
     print("obs[0:3]:", obs[0:3].tolist())
+    print("obs[9:12]:", obs[9:12].tolist())
+    print("Signed action scales:", runner.action_scale_by_joint.tolist())
 
     if failures:
         print("\nPOLICY CONTRACT FAILED:")

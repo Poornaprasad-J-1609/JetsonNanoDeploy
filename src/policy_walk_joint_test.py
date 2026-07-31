@@ -518,10 +518,15 @@ def main():
                 obs = runner.build_observation(
                     base_ang_vel_b=base_ang_vel_b,
                     projected_gravity_b=projected_gravity_b,
-                    command=command,
+                    command=(
+                        runner.policy_command
+                        if runner.autonomous_march
+                        else command
+                    ),
                     q_current=q_current,
                     qd_current=qd_current,
                     previous_action=previous_action,
+                    marching_clock=runner.marching_clock(step * runner.control_dt),
                 )
                 action = runner.infer_action(obs)
                 q_policy_target = runner.action_to_q_target(action)

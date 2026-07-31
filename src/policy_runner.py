@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import hashlib
+import math
 import os
 from pathlib import Path
 import numpy as np
@@ -19,7 +20,7 @@ EXPECTED_OBSERVATION_DIM = 48
 EXPECTED_ACTION_DIM = 12
 EXPECTED_POLICY_JOINT_ORDER = list(POLICY_JOINT_ORDER)
 EXPECTED_OBSERVATION_LAYOUT = {
-    "base_lin_vel": list(range(0, 3)),
+    "marching_clock": list(range(0, 3)),
     "base_ang_vel": list(range(3, 6)),
     "projected_gravity": list(range(6, 9)),
     "command": list(range(9, 12)),
@@ -204,9 +205,66 @@ class PolicyRunner:
                 + ", ".join(invalid_signs)
             )
         self.action_scale = float(self.joint_cfg["policy_action_scale"])
+        policy_contract = self.joint_cfg.get("policy_contract", {}) or {}
+        self.autonomous_march = bool(policy_contract.get("autonomous_march", False))
+        self.marching_clock_frequency_hz = float(
+            policy_contract.get("marching_clock_frequency_hz", 0.0)
+        )
+        self.marching_clock_formula = str(
+            policy_contract.get("marching_clock_formula", "")
+        ).strip().lower()
+        self.policy_command = np.asarray(
+            policy_contract.get("command", [0.0, 0.0, 0.0]),
+            dtype=np.float32,
+        )
+        configured_action_scales = self.joint_cfg.get("policy_action_scales", {}) or {}
+        missing_action_scales = [
+            joint_name
+            for joint_name in self.policy_order
+            if joint_name not in configured_action_scales
+        ]
+        if missing_action_scales:
+            raise ValueError(
+                "policy_action_scales is missing required joint(s): "
+                + ", ".join(missing_action_scales)
+            )
+        self.action_scale_by_joint = np.asarray(
+            [
+                float(configured_action_scales[joint_name])
+                for joint_name in self.policy_order
+            ],
+            dtype=np.float32,
+        )
         self.control_dt = float(self.joint_cfg["control_dt"])
         if not np.isfinite(self.action_scale) or self.action_scale <= 0.0:
             raise ValueError("policy_action_scale must be finite and > 0")
+        if (
+            self.action_scale_by_joint.shape != (EXPECTED_ACTION_DIM,)
+            or not np.all(np.isfinite(self.action_scale_by_joint))
+            or np.any(self.action_scale_by_joint == 0.0)
+        ):
+            raise ValueError(
+                "policy_action_scales must provide 12 finite, nonzero signed values"
+            )
+        if self.autonomous_march:
+            if (
+                not np.isfinite(self.marching_clock_frequency_hz)
+                or self.marching_clock_frequency_hz <= 0.0
+            ):
+                raise ValueError(
+                    "autonomous marching requires marching_clock_frequency_hz > 0"
+                )
+            if self.marching_clock_formula != "sin_cos_one":
+                raise ValueError(
+                    "model_12357 requires marching_clock_formula: sin_cos_one"
+                )
+            if self.policy_command.shape != (3,) or not np.array_equal(
+                self.policy_command,
+                np.zeros(3, dtype=np.float32),
+            ):
+                raise ValueError(
+                    "model_12357 autonomous marching requires command [0, 0, 0]"
+                )
         if not np.isfinite(self.control_dt) or self.control_dt <= 0.0:
             raise ValueError("control_dt must be finite and > 0")
 
@@ -319,12 +377,12 @@ class PolicyRunner:
         q_current,
         qd_current,
         previous_action,
+        marching_clock,
     ):
         obs = np.zeros(EXPECTED_OBSERVATION_DIM, dtype=np.float32)
 
         fields = {
-            # These slots exist in training but are always literal zeros.
-            "base_lin_vel": np.zeros(3, dtype=np.float32),
+            "marching_clock": np.asarray(marching_clock, dtype=np.float32),
             "base_ang_vel": np.asarray(base_ang_vel_b, dtype=np.float32),
             "projected_gravity": np.asarray(projected_gravity_b, dtype=np.float32),
             "command": np.asarray(command, dtype=np.float32),
@@ -354,9 +412,22 @@ class PolicyRunner:
                 )
             obs[indices] = values
 
-        if not np.array_equal(obs[0:3], np.zeros(3, dtype=np.float32)):
-            raise RuntimeError("Policy base linear velocity observation must remain exactly zero")
         return obs
+
+    def marching_clock(self, elapsed_s, march_enabled=True):
+        elapsed_s = float(elapsed_s)
+        if not np.isfinite(elapsed_s) or elapsed_s < 0.0:
+            raise ValueError("marching-clock elapsed time must be finite and >= 0")
+        if not bool(march_enabled):
+            return np.array([0.0, 1.0, 0.0], dtype=np.float32)
+        phase = (
+            elapsed_s * self.marching_clock_frequency_hz
+        ) % 1.0
+        angle = 2.0 * math.pi * phase
+        return np.array(
+            [math.sin(angle), math.cos(angle), 1.0],
+            dtype=np.float32,
+        )
 
     def infer_action(self, obs):
         obs = np.asarray(obs, dtype=np.float32)
@@ -367,8 +438,14 @@ class PolicyRunner:
             )
         if not np.all(np.isfinite(obs)):
             raise ValueError("Policy observation contains NaN or Inf")
-        if not np.array_equal(obs[0:3], np.zeros(3, dtype=np.float32)):
-            raise ValueError("Policy observation indices 0:3 must be exactly [0, 0, 0]")
+        clock = obs[0:3]
+        clock_norm = float(np.dot(clock[0:2], clock[0:2]))
+        if not np.isclose(clock_norm, 1.0, atol=1.0e-4):
+            raise ValueError(
+                "Policy marching-clock sin/cos slots must have unit magnitude"
+            )
+        if float(clock[2]) not in (0.0, 1.0):
+            raise ValueError("Policy marching-clock mode slot must be 0 or 1")
 
         obs_t = torch.from_numpy(obs).unsqueeze(0)
         with torch.inference_mode():
@@ -392,7 +469,10 @@ class PolicyRunner:
             )
         if not np.all(np.isfinite(action)):
             raise ValueError("Policy action contains NaN or Inf")
-        return self.q_default + self.policy_joint_signs * self.action_scale * action
+        return (
+            self.q_default
+            + self.policy_joint_signs * self.action_scale_by_joint * action
+        )
 
     def array_to_joint_dict(self, q):
         q = np.asarray(q, dtype=np.float32)
@@ -407,7 +487,10 @@ if __name__ == "__main__":
     print("Observation dim:", runner.observation_dim)
     print("Action dim:", runner.action_dim)
     print("Control dt:", runner.control_dt)
-    print("Action scale:", runner.action_scale)
+    print("Legacy action scale:", runner.action_scale)
+    print("Signed action scales:", runner.action_scale_by_joint)
+    print("Autonomous march:", runner.autonomous_march)
+    print("Marching clock frequency:", runner.marching_clock_frequency_hz)
     print("Joint order:")
     for i, name in enumerate(runner.policy_order):
         print(f"{i:02d}: {name}")

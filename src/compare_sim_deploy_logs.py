@@ -219,10 +219,11 @@ def main():
             dry_obs = runner.build_observation(
                 base_ang_vel_b=np.zeros(3, dtype=np.float32),
                 projected_gravity_b=np.array([0.0, 0.0, -1.0], dtype=np.float32),
-                command=command,
+                command=runner.policy_command if runner.autonomous_march else command,
                 q_current=dry_q,
                 qd_current=dry_qd,
                 previous_action=dry_previous_raw_action,
+                marching_clock=runner.marching_clock(step * runner.control_dt),
             )
             dry_action = runner.infer_action(dry_obs)
             dry_requested_target = runner.action_to_q_target(dry_action)
@@ -240,10 +241,11 @@ def main():
         always_obs = runner.build_observation(
             base_ang_vel_b=np.zeros(3, dtype=np.float32),
             projected_gravity_b=np.array([0.0, 0.0, -1.0], dtype=np.float32),
-            command=command,
+            command=runner.policy_command if runner.autonomous_march else command,
             q_current=always_q,
             qd_current=always_qd,
             previous_action=always_previous_raw_action,
+            marching_clock=runner.marching_clock(step * runner.control_dt),
         )
         always_action = runner.infer_action(always_obs)
         always_requested_target = runner.action_to_q_target(always_action)

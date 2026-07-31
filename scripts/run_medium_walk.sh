@@ -49,6 +49,8 @@ args=(
     --no-stand-policy-stabilization
     --no-imu-stabilization
     --no-gait-assist
+    # model_12357 starts in-place marching automatically after SPACE reaches a
+    # settled stand. Its policy command observation remains [0, 0, 0].
     --walk-command-threshold 0.02
     --max-vx 1.80
     --max-vy 0.80
@@ -57,9 +59,8 @@ args=(
     --speed-scale-min 0.04
     --speed-scale-max 0.12
     --speed-scale-step 0.01
-    # A terminal cannot report key release. Latch one movement command until
-    # H, Space, C, X, or another movement key is pressed so SSH key-repeat
-    # gaps cannot repeatedly drop policy control back into loaded stand.
+    # Keep keyboard pose/hold/e-stop controls. Movement keys do not populate
+    # this actor's zero command slots.
     --keyboard-control-mode latched
     --keyboard-command-timeout 0.20
     --walk-command-grace-seconds 0.20

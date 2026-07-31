@@ -174,7 +174,10 @@ def main():
 
     with torch.no_grad():
         replay_actions = runner.policy(torch.from_numpy(observations)).cpu().numpy()
-    replay_targets = runner.q_default[None, :] + runner.action_scale * replay_actions
+    replay_targets = (
+        runner.q_default[None, :]
+        + runner.action_scale_by_joint[None, :] * replay_actions
+    )
     final_targets = np.clip(
         replay_targets,
         safety.policy_q_min[None, :],
@@ -294,9 +297,13 @@ def main():
         previous_shaped = shaped_actions[index]
         previous_logged_shaped = shaped_logged_actions[index]
 
-    shaped_targets = runner.q_default[None, :] + runner.action_scale * shaped_actions
+    shaped_targets = (
+        runner.q_default[None, :]
+        + runner.action_scale_by_joint[None, :] * shaped_actions
+    )
     shaped_logged_targets = (
-        runner.q_default[None, :] + runner.action_scale * shaped_logged_actions
+        runner.q_default[None, :]
+        + runner.action_scale_by_joint[None, :] * shaped_logged_actions
     )
     shaped_policy_targets = np.clip(
         shaped_logged_targets,

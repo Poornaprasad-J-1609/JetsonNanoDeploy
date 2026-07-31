@@ -152,10 +152,11 @@ def sample_policy(command, runner, safety):
     obs = runner.build_observation(
         base_ang_vel_b=np.zeros(3, dtype=np.float32),
         projected_gravity_b=np.array([0.0, 0.0, -1.0], dtype=np.float32),
-        command=command_clipped,
+        command=runner.policy_command if runner.autonomous_march else command_clipped,
         q_current=runner.q_default,
         qd_current=np.zeros(len(runner.policy_order), dtype=np.float32),
         previous_action=np.zeros(len(runner.policy_order), dtype=np.float32),
+        marching_clock=runner.marching_clock(0.0),
     )
     action = runner.infer_action(obs)
     q_raw = runner.action_to_q_target(action)

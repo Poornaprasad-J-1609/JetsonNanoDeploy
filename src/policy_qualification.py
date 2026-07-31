@@ -13,9 +13,9 @@ from policy_runner import EXPECTED_OBSERVATION_LAYOUT, EXPECTED_POLICY_JOINT_ORD
 
 
 GOLDEN_CASES = (
-    "upright_zero_command",
-    "upright_forward",
-    "upright_backward",
+    "upright_phase_zero",
+    "upright_phase_quarter",
+    "upright_phase_half",
     "small_roll",
     "small_pitch",
     "joint_position_disturbance",
@@ -26,9 +26,10 @@ GOLDEN_CASES = (
 
 def golden_observations():
     observations = np.zeros((len(GOLDEN_CASES), 48), dtype=np.float32)
+    observations[:, 0:3] = np.array([0.0, 1.0, 1.0], dtype=np.float32)
+    observations[1, 0:3] = np.array([1.0, 0.0, 1.0], dtype=np.float32)
+    observations[2, 0:3] = np.array([0.0, -1.0, 1.0], dtype=np.float32)
     observations[:, 8] = -1.0
-    observations[1, 9] = 0.072
-    observations[2, 9] = -0.072
     observations[3, 6:9] = np.array([0.08, 0.0, -0.996795], dtype=np.float32)
     observations[4, 6:9] = np.array([0.0, -0.08, -0.996795], dtype=np.float32)
     observations[5, 12:24] = np.linspace(-0.08, 0.08, 12, dtype=np.float32)
@@ -48,7 +49,7 @@ def create_golden_vectors(runner, output_path):
         observations=observations,
         expected_actions=actions.astype(np.float32),
         policy_sha256=np.asarray(runner.policy_sha256),
-        action_scale=np.asarray(runner.action_scale, dtype=np.float32),
+        action_scales=np.asarray(runner.action_scale_by_joint, dtype=np.float32),
         joint_order=np.asarray(EXPECTED_POLICY_JOINT_ORDER),
         observation_layout=np.asarray(json.dumps(EXPECTED_OBSERVATION_LAYOUT)),
     )
@@ -61,7 +62,7 @@ def check_golden_vectors(runner, input_path, tolerance=1.0e-6):
         observations = np.asarray(data["observations"], dtype=np.float32)
         expected = np.asarray(data["expected_actions"], dtype=np.float32)
         policy_hash = str(np.asarray(data["policy_sha256"]).item())
-        action_scale = float(np.asarray(data["action_scale"]).item())
+        action_scales = np.asarray(data["action_scales"], dtype=np.float32)
         joint_order = tuple(str(item) for item in data["joint_order"].tolist())
         layout = json.loads(str(np.asarray(data["observation_layout"]).item()))
 
@@ -72,8 +73,12 @@ def check_golden_vectors(runner, input_path, tolerance=1.0e-6):
         errors.append(f"golden actions shape is {expected.shape}, expected [N, 12]")
     if policy_hash != runner.policy_sha256:
         errors.append(f"policy SHA256 differs: golden={policy_hash} loaded={runner.policy_sha256}")
-    if abs(action_scale - float(runner.action_scale)) > 1.0e-9:
-        errors.append(f"action scale differs: golden={action_scale} loaded={runner.action_scale}")
+    if not np.array_equal(action_scales, runner.action_scale_by_joint):
+        errors.append(
+            "signed action scales differ: "
+            f"golden={action_scales.tolist()} "
+            f"loaded={runner.action_scale_by_joint.tolist()}"
+        )
     if joint_order != tuple(EXPECTED_POLICY_JOINT_ORDER):
         errors.append("golden policy joint order differs from verified actor order")
     if layout != EXPECTED_OBSERVATION_LAYOUT:
