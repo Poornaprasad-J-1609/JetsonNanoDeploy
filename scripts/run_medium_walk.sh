@@ -70,9 +70,10 @@ args=(
     # the applied actor-coordinate action back through previous_action so the
     # observation and motor state describe the same control path.
     --no-exact-policy-after-entry
-    # The chains are loose fall arrest, not weight support. Enter with the
-    # proven 18 Nm hip / 30 Nm sagittal limits, then qualify a gradual increase
-    # to 24/36 Nm. This remains below the independently guarded 40 Nm stage.
+    # The chains are loose fall arrest, not weight support. Enter with 18 Nm
+    # hip / 34 Nm sagittal limits so policy takeover does not drop below loaded
+    # standing demand, then qualify a gradual increase to 24/36 Nm. This stays
+    # below the independently guarded 40 Nm stage.
     --torque-profile-stage stage36
     --policy-pd-torque-profile "$ROOT_DIR/config/policy_torque_loaded.yaml"
     --policy-torque-ramp-delay-seconds 2.0

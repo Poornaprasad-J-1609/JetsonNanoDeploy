@@ -1,22 +1,22 @@
 policy_torque_profile:
   # The chains are fall arrest only, so this is a fully loaded ground profile.
-  # Enter with the proven 18/30 Nm limits, then ramp only after the policy entry
-  # blend and runtime qualification gates pass. The Aug 1 logs showed that a
-  # fixed 18 Nm hip limit softened BL/FL lateral support, while the fixed 30 Nm
-  # sagittal limit reduced Kp/Kd on 35-76% of walking packets.
+  # Enter with 18 Nm hips and 34 Nm sagittal joints, then ramp only after the
+  # policy entry blend and runtime qualification gates pass. The Aug 1 loaded
+  # stand needed about 32 Nm at BL calf before locomotion began; entering policy
+  # at 30 Nm immediately reduced support stiffness and let the leg fold.
   start_nm:
     BL_hip_joint: 18.0
     BR_hip_joint: 18.0
     FL_hip_joint: 18.0
     FR_hip_joint: 18.0
-    BL_thigh_joint: 30.0
-    BR_thigh_joint: 30.0
-    FL_thigh_joint: 30.0
-    FR_thigh_joint: 30.0
-    BL_calf_joint: 30.0
-    BR_calf_joint: 30.0
-    FL_calf_joint: 30.0
-    FR_calf_joint: 30.0
+    BL_thigh_joint: 34.0
+    BR_thigh_joint: 34.0
+    FL_thigh_joint: 34.0
+    FR_thigh_joint: 34.0
+    BL_calf_joint: 34.0
+    BR_calf_joint: 34.0
+    FL_calf_joint: 34.0
+    FR_calf_joint: 34.0
 
   final_nm:
     BL_hip_joint: 24.0

@@ -1708,7 +1708,7 @@ def test_medium_walk_uses_loaded_per_joint_support_profile():
             assert profile["start_nm"][joint_name] == pytest.approx(18.0)
             assert profile["final_nm"][joint_name] == pytest.approx(24.0)
         else:
-            assert profile["start_nm"][joint_name] == pytest.approx(30.0)
+            assert profile["start_nm"][joint_name] == pytest.approx(34.0)
             assert profile["final_nm"][joint_name] == pytest.approx(36.0)
     assert not PolicyTorqueRamp(
         PolicyRunner().policy_order,
