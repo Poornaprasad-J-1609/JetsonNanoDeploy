@@ -374,6 +374,30 @@ def filtered_policy_action(
     return action.astype(np.float32)
 
 
+def policy_previous_action_observation(
+    previous_raw_action,
+    previous_sent_action,
+    exact_policy_after_entry,
+):
+    """Return the actor-coordinate action that the robot actually received."""
+    previous_raw_action = np.asarray(previous_raw_action, dtype=np.float32)
+    previous_sent_action = np.asarray(previous_sent_action, dtype=np.float32)
+    if previous_raw_action.shape != previous_sent_action.shape:
+        raise ValueError(
+            "previous raw/sent actions must have identical shapes; got "
+            f"{list(previous_raw_action.shape)} and "
+            f"{list(previous_sent_action.shape)}"
+        )
+    selected = (
+        previous_raw_action
+        if bool(exact_policy_after_entry)
+        else previous_sent_action
+    )
+    if not np.all(np.isfinite(selected)):
+        raise ValueError("previous policy action observation contains NaN or Inf")
+    return selected.copy()
+
+
 def clip_policy_hip_actions(
     raw_action,
     policy_order,
@@ -3987,9 +4011,10 @@ def run_policy_loop(
         measured_torque_soft_limits,
         window=12,
     )
-    # Preserve the trained observation contract: slots 36:48 contain the
-    # previous raw actor output. Hardware clipping, smoothing, and target slew
-    # limiting are applied downstream without changing this policy input.
+    # In exact mode the raw actor output is also the applied actor-coordinate
+    # action. In conditioned hardware mode the applied value is the clipped,
+    # smoothed action. Feeding the rejected raw value back into obs[36:48]
+    # creates a policy state that never existed in simulation.
     previous_raw_action = np.zeros(action_dim, dtype=np.float32)
     previous_sent_action = np.zeros(action_dim, dtype=np.float32)
     direct_leveling_correction = np.zeros(action_dim, dtype=np.float32)
@@ -4158,6 +4183,12 @@ def run_policy_loop(
         "exact_policy_after_entry:",
         bool(exact_policy_after_entry),
         "(sent action equals raw actor action after entry blend)",
+    )
+    print(
+        "previous_action_observation:",
+        "raw actor output"
+        if bool(exact_policy_after_entry)
+        else "conditioned actor action sent to target pipeline",
     )
     print(
         "policy_sim_match:",
@@ -5159,6 +5190,11 @@ def run_policy_loop(
             action = np.zeros(action_dim, dtype=np.float32)
 
         elif active_control_mode == "policy":
+            previous_action_observation = policy_previous_action_observation(
+                previous_raw_action=previous_raw_action,
+                previous_sent_action=previous_sent_action,
+                exact_policy_after_entry=exact_policy_after_entry,
+            )
             observation_build_start = time.monotonic()
             obs = runner.build_observation(
                 base_ang_vel_b=base_ang_vel_b,
@@ -5166,7 +5202,7 @@ def run_policy_loop(
                 command=policy_command,
                 q_current=q_current,
                 qd_current=qd_current,
-                previous_action=previous_raw_action,
+                previous_action=previous_action_observation,
             )
             observation_build_s += time.monotonic() - observation_build_start
 
@@ -6718,7 +6754,7 @@ def main():
         default=float(policy_deploy_defaults.get("hip_action_scale", 1.0)),
         help=(
             "motor-side scale applied to clipped hip actor outputs only; "
-            "does not alter raw previous_action observations or thigh/calf actions"
+            "does not alter thigh/calf actions"
         ),
     )
     parser.add_argument(
@@ -6733,7 +6769,8 @@ def main():
         default=float(policy_deploy_defaults.get("action_delta_limit_abs", 0.0)),
         help=(
             "maximum per-cycle change of the sent policy action; 0 disables. "
-            "This does not change the raw policy output stored in previous_action obs slots"
+            "Conditioned mode reports this applied actor-coordinate action in "
+            "the next previous_action observation"
         ),
     )
     parser.add_argument(
@@ -7549,6 +7586,11 @@ def main():
                 "policy_hip_action_clip": f"{args.policy_hip_action_clip:.6f}",
                 "policy_hip_action_scale": f"{args.policy_hip_action_scale:.6f}",
                 "exact_policy_after_entry": str(bool(args.exact_policy_after_entry)),
+                "previous_action_source": (
+                    "raw_actor"
+                    if bool(args.exact_policy_after_entry)
+                    else "sent_motor_action"
+                ),
                 "can_topology": "; ".join(topology_lines(args.can_count, port_by_bus)),
                 "can_backend": str(args.can_backend),
                 "can_command_hz": f"{float(args.can_command_hz):.6f}",

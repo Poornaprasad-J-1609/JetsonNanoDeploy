@@ -24,7 +24,7 @@ FIELDS = (
     (9, 12, "command", "m/s,m/s,rad/s"),
     (12, 24, "joint_pos_rel", "rad"),
     (24, 36, "joint_vel", "rad/s"),
-    (36, 48, "previous_raw_action", "policy action"),
+    (36, 48, "previous_applied_action", "actor-coordinate action"),
 )
 
 
@@ -111,6 +111,7 @@ def velocity_validation(q, qd, timestamps):
 def audit_rows(rows):
     obs = _matrix(rows, "obs", 48, 3)
     actions = _matrix(rows, "action", 12, 2)
+    sent_actions = _matrix(rows, "sent_action", 12, 2)
     q = _matrix(rows, "q", 12, 2)
     qd = _matrix(rows, "qd", 12, 2)
     timestamps = np.asarray([_number(row, "elapsed_s", i * 0.02) for i, row in enumerate(rows)])
@@ -147,9 +148,18 @@ def audit_rows(rows):
 
     previous_error = 0.0
     if len(rows) > 1:
-        previous_error = float(np.nanmax(np.abs(obs[1:, 36:48] - actions[:-1])))
+        expected_previous = (
+            sent_actions[:-1]
+            if np.any(np.isfinite(sent_actions))
+            else actions[:-1]
+        )
+        previous_error = float(
+            np.nanmax(np.abs(obs[1:, 36:48] - expected_previous))
+        )
         if previous_error > 2.0e-5:
-            warnings.append("previous action does not match previous raw policy output")
+            warnings.append(
+                "previous action does not match previous applied actor-coordinate action"
+            )
 
     gravity_norm = np.linalg.norm(obs[:, 6:9], axis=1)
     if np.nanmax(np.abs(obs[:, 0:3])) > 1.0e-7:

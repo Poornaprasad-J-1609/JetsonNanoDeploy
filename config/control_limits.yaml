@@ -49,8 +49,9 @@ policy_deployment:
   hip_action_clip_abs: 1.6
   # The 2026-08-01 loaded runs produced 0.50-0.62 rad measured hip travel,
   # while the matching simulation envelope was 0.24-0.36 rad. Apply this
-  # after the hip clip at the motor boundary; the raw actor action still feeds
-  # obs[36:48] exactly as it did during training.
+  # after the hip clip at the motor boundary. Conditioned deployment feeds the
+  # applied actor-coordinate action into obs[36:48], matching what moved the
+  # robot; exact mode still feeds the raw actor output.
   hip_action_scale: 0.30
   action_smoothing: 0.20
   action_delta_limit_abs: 0.15

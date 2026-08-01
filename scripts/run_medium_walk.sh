@@ -59,15 +59,16 @@ args=(
     --policy-action-clip 3.2
     # The Aug 1 loaded runs showed 0.50-0.62 rad real hip travel versus
     # 0.24-0.36 rad in simulation. Reduce only the motor-facing hip action;
-    # raw actions and previous_action observations remain unchanged.
+    # raw actor outputs remain logged; the next previous_action observation
+    # reports the conditioned actor-coordinate action actually sent.
     --policy-hip-action-scale 0.30
     --policy-action-smoothing 0.35
     --policy-action-delta-limit 0.20
     --policy-entry-ramp-seconds 2.0
     # Real telemetry left the trained state envelope and drove raw actor values
-    # to 25-35 (simulation max: 7.77). Keep previous raw action in the policy
-    # observation, but bound only the motor-facing action through the clip,
-    # smoothing, and delta controls above.
+    # to 25-35 (simulation max: 7.77). Keep raw output in diagnostics, but feed
+    # the applied actor-coordinate action back through previous_action so the
+    # observation and motor state describe the same control path.
     --no-exact-policy-after-entry
     # Loaded support profile from the July 31 telemetry: hips remain bounded at
     # 18 Nm while thighs/calves use a fixed 30 Nm ceiling. The old 24 -> 30 Nm

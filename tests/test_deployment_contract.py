@@ -29,6 +29,7 @@ from main_controller import (
     PolicyTorqueRamp,
     action_equivalent_for_q_target,
     clip_policy_hip_actions,
+    policy_previous_action_observation,
     compact_telemetry_record,
     constant_joint_map,
     requires_calf_endpoint_gate,
@@ -196,6 +197,20 @@ def test_hip_action_scale_applies_after_clip():
     for index, joint_name in enumerate(policy_order):
         expected = 1.04 if "_hip_joint" in joint_name else 2.0
         assert conditioned[index] == pytest.approx(expected)
+
+
+def test_conditioned_policy_observes_previous_action_actually_sent():
+    raw = np.full(12, 5.0, dtype=np.float32)
+    sent = np.linspace(-1.0, 1.0, 12, dtype=np.float32)
+
+    np.testing.assert_array_equal(
+        policy_previous_action_observation(raw, sent, True),
+        raw,
+    )
+    np.testing.assert_array_equal(
+        policy_previous_action_observation(raw, sent, False),
+        sent,
+    )
 
 
 def test_live_imu_and_velocity_command_populate_exact_policy_slots():
