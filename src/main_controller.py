@@ -928,6 +928,16 @@ def encoder_margin_to_policy_limits(safety, q_values, policy_order):
     return float(margin), str(joint_name)
 
 
+def torque_ramp_timing_fault(timing_snapshot):
+    """Return only the scheduler's sustained timing-fault state.
+
+    A single cycle can exceed the 20 ms policy period without constituting a
+    controller timing fault. The ramp qualifies that cycle independently with
+    its configurable max_cycle_work_s gate.
+    """
+    return bool(getattr(timing_snapshot, "timing_fault", False))
+
+
 class PolicyTorqueRamp:
     def __init__(
         self,
@@ -5402,7 +5412,9 @@ def run_policy_loop(
                     ),
                     cycle_work_s=scheduler.last_snapshot.cycle_work_s,
                     motor_fault=motor_fault_reason,
-                    timing_fault=bool(scheduler.last_snapshot.work_overrun),
+                    timing_fault=torque_ramp_timing_fault(
+                        scheduler.last_snapshot
+                    ),
                     print_fn=print,
                 )
                 torque_ramp_state_for_log = torque_ramp.telemetry()

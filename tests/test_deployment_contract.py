@@ -40,6 +40,7 @@ from main_controller import (
     stand_ready_for_walking,
     stand_state_ready_for_policy_entry,
     should_validate_stand_state_for_policy_entry,
+    torque_ramp_timing_fault,
     torque_ramp_supervision_due,
     validate_required_policy_imu,
     validate_torque_profile,
@@ -1500,6 +1501,47 @@ def test_policy_torque_ramp_holds_for_transient_pipeline_gates(violation):
     assert ramp.paused
     assert ramp.violation_count == 0
     assert max(effective.values()) == pytest.approx(before)
+
+
+def test_policy_torque_ramp_distinguishes_isolated_and_sustained_overruns():
+    runner = PolicyRunner()
+    start = constant_joint_map(runner.policy_order, 30.0)
+    final = constant_joint_map(runner.policy_order, 36.0)
+    ramp = PolicyTorqueRamp(
+        runner.policy_order,
+        start,
+        final,
+        delay_s=0.0,
+        ramp_s=1.0,
+        max_cycle_work_s=0.028,
+    )
+    common = {
+        "steady_policy_elapsed_s": 1.0,
+        "entry_complete": True,
+        "feedback_fresh_count": 12,
+        "feedback_count_expected": 12,
+        "feedback_age_max_s": 0.01,
+        "encoder_margin_rad": 0.5,
+        "tracking_error_max": 0.0,
+        "measured_torque_max": 0.0,
+        "cycle_work_s": 0.024,
+    }
+
+    isolated_overrun = argparse.Namespace(work_overrun=True, timing_fault=False)
+    effective = ramp.update(
+        **common,
+        timing_fault=torque_ramp_timing_fault(isolated_overrun),
+    )
+    assert not ramp.paused
+    assert max(effective.values()) == pytest.approx(36.0)
+
+    sustained_overrun = argparse.Namespace(work_overrun=True, timing_fault=True)
+    ramp.update(
+        **common,
+        timing_fault=torque_ramp_timing_fault(sustained_overrun),
+    )
+    assert ramp.paused
+    assert ramp.pause_reason == "timing overrun"
 
 
 def test_policy_torque_ramp_identifies_fixed_stage():
