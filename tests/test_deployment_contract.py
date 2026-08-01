@@ -1682,6 +1682,11 @@ def test_hold_snapshot_uses_fresh_joint_feedback_without_waiting():
     assert missing == ["joint_b"]
 
 
+def test_runtime_hold_does_not_clear_can_stream_before_snapshot():
+    source = (ROOT / "src" / "main_controller.py").read_text(encoding="utf-8")
+    assert 'can_streamer is not None and mode_request != "hold"' in source
+
+
 def test_four_bar_transmission_is_inactive():
     cfg = load_yaml(ROOT / "config" / "four_bar_transmission.yaml")
     assert cfg["four_bar_transmission"]["enabled"] is False

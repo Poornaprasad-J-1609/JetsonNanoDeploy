@@ -4515,9 +4515,12 @@ def run_policy_loop(
             # trajectory, which causes a visible stop and torque ramp.
             mode_request = None
         if mode_request in ("stand", "sit", "hold"):
-            if can_streamer is not None:
+            if can_streamer is not None and mode_request != "hold":
                 # Pose capture can intentionally block longer than one policy
-                # cycle. Never keep replaying the previous gait target.
+                # cycle. Never keep replaying the previous gait target. Hold
+                # snapshots the state already read this cycle and immediately
+                # replaces the stream, so clearing here would only create a
+                # feedback gap.
                 can_streamer.clear()
             required_imu_fault = validate_required_policy_imu(
                 estimator,
