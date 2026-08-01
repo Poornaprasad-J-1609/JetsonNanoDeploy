@@ -1683,8 +1683,9 @@ def test_async_csv_full_queue_increments_dropped_record_count():
 def test_stage40_guard_is_present_in_main_controller_source():
     source = (ROOT / "src" / "main_controller.py").read_text(encoding="utf-8")
     assert "--acknowledge-40nm-suspension-test" in source
+    assert "--acknowledge-40nm-loaded-ground-test" in source
     assert 'args.torque_profile_stage == "stage40"' in source
-    assert "stage40 requires --acknowledge-40nm-suspension-test" in source
+    assert "stage40 requires --acknowledge-40nm-suspension-test or " in source
 
 
 def test_medium_walk_uses_loaded_per_joint_support_profile():
@@ -1694,7 +1695,8 @@ def test_medium_walk_uses_loaded_per_joint_support_profile():
     assert "--joint-velocity-source finite-difference" in launcher
     assert "--no-exact-policy-after-entry" in launcher
     assert "--policy-hip-action-scale 0.30" in launcher
-    assert "--torque-profile-stage stage36" in launcher
+    assert "--torque-profile-stage stage40" in launcher
+    assert "--acknowledge-40nm-loaded-ground-test" in launcher
     assert "--policy-pd-torque-profile" in launcher
     assert "--policy-torque-ramp-max-tracking-error-rad 1.20" in launcher
     assert "--policy-torque-ramp-max-measured-torque 45.0" in launcher
@@ -1708,8 +1710,8 @@ def test_medium_walk_uses_loaded_per_joint_support_profile():
             assert profile["start_nm"][joint_name] == pytest.approx(18.0)
             assert profile["final_nm"][joint_name] == pytest.approx(24.0)
         else:
-            assert profile["start_nm"][joint_name] == pytest.approx(34.0)
-            assert profile["final_nm"][joint_name] == pytest.approx(36.0)
+            assert profile["start_nm"][joint_name] == pytest.approx(36.0)
+            assert profile["final_nm"][joint_name] == pytest.approx(40.0)
     assert not PolicyTorqueRamp(
         PolicyRunner().policy_order,
         profile["start_nm"],

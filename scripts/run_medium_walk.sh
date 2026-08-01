@@ -71,10 +71,11 @@ args=(
     # observation and motor state describe the same control path.
     --no-exact-policy-after-entry
     # The chains are loose fall arrest, not weight support. Enter with 18 Nm
-    # hip / 34 Nm sagittal limits so policy takeover does not drop below loaded
-    # standing demand, then qualify a gradual increase to 24/36 Nm. This stays
-    # below the independently guarded 40 Nm stage.
-    --torque-profile-stage stage36
+    # hip / 36 Nm sagittal limits so policy takeover has support reserve above
+    # the measured 33.4 Nm loaded stand demand, then qualify a gradual increase
+    # to 24/40 Nm under the independent 45 Nm measured-torque watchdog.
+    --torque-profile-stage stage40
+    --acknowledge-40nm-loaded-ground-test
     --policy-pd-torque-profile "$ROOT_DIR/config/policy_torque_loaded.yaml"
     --policy-torque-ramp-delay-seconds 2.0
     --policy-torque-ramp-seconds 8.0

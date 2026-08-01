@@ -1,28 +1,15 @@
 policy_torque_profile:
   # The chains are fall arrest only, so this is a fully loaded ground profile.
-  # Enter with 18 Nm hips and 34 Nm sagittal joints, then ramp only after the
+  # Enter with 18 Nm hips and 36 Nm sagittal joints, then ramp only after the
   # policy entry blend and runtime qualification gates pass. The Aug 1 loaded
-  # stand needed about 32 Nm at BL calf before locomotion began; entering policy
-  # at 30 Nm immediately reduced support stiffness and let the leg fold.
+  # stand needed about 33.4 Nm at BL calf before locomotion began. The rough-
+  # surface run remained torque-limited on 47-78% of sagittal packets at 34 Nm,
+  # while measured torque stayed below 40 Nm, supporting a guarded 36->40 step.
   start_nm:
     BL_hip_joint: 18.0
     BR_hip_joint: 18.0
     FL_hip_joint: 18.0
     FR_hip_joint: 18.0
-    BL_thigh_joint: 34.0
-    BR_thigh_joint: 34.0
-    FL_thigh_joint: 34.0
-    FR_thigh_joint: 34.0
-    BL_calf_joint: 34.0
-    BR_calf_joint: 34.0
-    FL_calf_joint: 34.0
-    FR_calf_joint: 34.0
-
-  final_nm:
-    BL_hip_joint: 24.0
-    BR_hip_joint: 24.0
-    FL_hip_joint: 24.0
-    FR_hip_joint: 24.0
     BL_thigh_joint: 36.0
     BR_thigh_joint: 36.0
     FL_thigh_joint: 36.0
@@ -31,3 +18,17 @@ policy_torque_profile:
     BR_calf_joint: 36.0
     FL_calf_joint: 36.0
     FR_calf_joint: 36.0
+
+  final_nm:
+    BL_hip_joint: 24.0
+    BR_hip_joint: 24.0
+    FL_hip_joint: 24.0
+    FR_hip_joint: 24.0
+    BL_thigh_joint: 40.0
+    BR_thigh_joint: 40.0
+    FL_thigh_joint: 40.0
+    FR_thigh_joint: 40.0
+    BL_calf_joint: 40.0
+    BR_calf_joint: 40.0
+    FL_calf_joint: 40.0
+    FR_calf_joint: 40.0

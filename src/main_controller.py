@@ -6832,7 +6832,12 @@ def main():
     parser.add_argument(
         "--acknowledge-40nm-suspension-test",
         action="store_true",
-        help="required to run torque-profile-stage stage40",
+        help="explicitly acknowledge a suspended stage40 test",
+    )
+    parser.add_argument(
+        "--acknowledge-40nm-loaded-ground-test",
+        action="store_true",
+        help="explicitly acknowledge a loaded-ground stage40 test",
     )
     parser.add_argument("--measured-torque-soft-hip", type=float, default=35.0)
     parser.add_argument("--measured-torque-soft-thigh", type=float, default=40.0)
@@ -7003,8 +7008,14 @@ def main():
         parser.error("--policy-torque-ramp-seconds must be > 0")
     if args.policy_absolute_torque_ceiling <= 0.0:
         parser.error("--policy-absolute-torque-ceiling must be > 0")
-    if args.torque_profile_stage == "stage40" and not args.acknowledge_40nm_suspension_test:
-        parser.error("stage40 requires --acknowledge-40nm-suspension-test")
+    if args.torque_profile_stage == "stage40" and not (
+        args.acknowledge_40nm_suspension_test
+        or args.acknowledge_40nm_loaded_ground_test
+    ):
+        parser.error(
+            "stage40 requires --acknowledge-40nm-suspension-test or "
+            "--acknowledge-40nm-loaded-ground-test"
+        )
     if not np.isfinite(args.pose_pd_torque_limit) or args.pose_pd_torque_limit < 0.0:
         parser.error("--pose-pd-torque-limit must be finite and >= 0")
     if (
@@ -7435,9 +7446,12 @@ def main():
     print("Policy action delta limit:", f"{args.policy_action_delta_limit:.3f}")
     print("Policy entry ramp:", f"{args.policy_entry_ramp_seconds:.2f} s")
     print("TORQUE QUALIFICATION STAGE:", args.torque_profile_stage)
-    print("Robot must be fully suspended. Previous lower stage must have passed.")
+    print("Previous lower torque stage must have passed.")
     if args.torque_profile_stage == "stage40":
-        print("40 Nm suspended stage explicitly acknowledged.")
+        if args.acknowledge_40nm_loaded_ground_test:
+            print("40 Nm loaded-ground stage explicitly acknowledged.")
+        else:
+            print("40 Nm suspended stage explicitly acknowledged.")
     print(
         "Exact policy after entry:",
         "enabled" if args.exact_policy_after_entry else "disabled",
