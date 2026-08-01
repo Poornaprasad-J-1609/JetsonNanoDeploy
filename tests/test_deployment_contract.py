@@ -1632,8 +1632,7 @@ def test_medium_walk_uses_loaded_per_joint_support_profile():
         encoding="utf-8"
     )
     assert "--joint-velocity-source finite-difference" in launcher
-    assert "--exact-policy-after-entry" in launcher
-    assert "--no-exact-policy-after-entry" not in launcher
+    assert "--no-exact-policy-after-entry" in launcher
     assert "--torque-profile-stage stage30" in launcher
     assert "--policy-pd-torque-profile" in launcher
     assert "--pose-pd-torque-limit 40" in launcher

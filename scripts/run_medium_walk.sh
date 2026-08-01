@@ -60,10 +60,11 @@ args=(
     --policy-action-smoothing 0.35
     --policy-action-delta-limit 0.20
     --policy-entry-ramp-seconds 2.0
-    # Blend safely for two seconds, then match Isaac/MuJoCo by sending the raw
-    # actor target. Physical joint, encoder, tilt, fault, and torque safety
-    # remain active after the blend.
-    --exact-policy-after-entry
+    # Real telemetry left the trained state envelope and drove raw actor values
+    # to 25-35 (simulation max: 7.77). Keep previous raw action in the policy
+    # observation, but bound only the motor-facing action through the clip,
+    # smoothing, and delta controls above.
+    --no-exact-policy-after-entry
     # Loaded support profile from the July 31 telemetry: hips remain bounded at
     # 18 Nm while thighs/calves use a fixed 30 Nm ceiling. The old 24 -> 30 Nm
     # ramp never advanced and left most sagittal packets torque-limited.
