@@ -57,6 +57,10 @@ args=(
     --policy-command-vy-max 0.12
     --policy-command-yaw-max 0
     --policy-action-clip 3.2
+    # The Aug 1 loaded runs showed 0.50-0.62 rad real hip travel versus
+    # 0.24-0.36 rad in simulation. Reduce only the motor-facing hip action;
+    # raw actions and previous_action observations remain unchanged.
+    --policy-hip-action-scale 0.40
     --policy-action-smoothing 0.35
     --policy-action-delta-limit 0.20
     --policy-entry-ramp-seconds 2.0
