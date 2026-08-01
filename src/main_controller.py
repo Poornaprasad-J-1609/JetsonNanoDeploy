@@ -776,6 +776,7 @@ TORQUE_PROFILE_STAGES = {
     "stage20": (14.0, 20.0),
     "stage24": (14.0, 24.0),
     "stage30": (14.0, 30.0),
+    "stage36": (14.0, 36.0),
     "stage40": (14.0, 40.0),
 }
 
@@ -2087,6 +2088,7 @@ class CsvRunLogger:
         "policy_action_scale",
         "policy_action_formula",
         "exact_policy_after_entry",
+        "previous_action_source",
         "can_topology",
         "can_backend",
         "torque_profile_stage",

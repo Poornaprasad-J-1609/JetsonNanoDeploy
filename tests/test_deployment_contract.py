@@ -1652,8 +1652,11 @@ def test_medium_walk_uses_loaded_per_joint_support_profile():
     assert "--joint-velocity-source finite-difference" in launcher
     assert "--no-exact-policy-after-entry" in launcher
     assert "--policy-hip-action-scale 0.30" in launcher
-    assert "--torque-profile-stage stage30" in launcher
+    assert "--torque-profile-stage stage36" in launcher
     assert "--policy-pd-torque-profile" in launcher
+    assert "--policy-torque-ramp-max-tracking-error-rad 1.20" in launcher
+    assert "--policy-torque-ramp-max-measured-torque 45.0" in launcher
+    assert "--policy-torque-ramp-max-feedback-age 0.060" in launcher
     assert "--pose-pd-torque-limit 40" in launcher
     profile = load_yaml(ROOT / "config" / "policy_torque_loaded.yaml")[
         "policy_torque_profile"
@@ -1661,10 +1664,15 @@ def test_medium_walk_uses_loaded_per_joint_support_profile():
     for joint_name in PolicyRunner().policy_order:
         if "hip" in joint_name:
             assert profile["start_nm"][joint_name] == pytest.approx(18.0)
-            assert profile["final_nm"][joint_name] == pytest.approx(18.0)
+            assert profile["final_nm"][joint_name] == pytest.approx(24.0)
         else:
             assert profile["start_nm"][joint_name] == pytest.approx(30.0)
-            assert profile["final_nm"][joint_name] == pytest.approx(30.0)
+            assert profile["final_nm"][joint_name] == pytest.approx(36.0)
+    assert not PolicyTorqueRamp(
+        PolicyRunner().policy_order,
+        profile["start_nm"],
+        profile["final_nm"],
+    ).is_fixed
     assert CAN_FEEDBACK_RECEIVE_EVERY_N_CYCLES == 2
 
 

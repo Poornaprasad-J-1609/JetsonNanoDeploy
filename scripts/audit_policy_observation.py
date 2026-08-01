@@ -63,7 +63,20 @@ def _correlation(a, b):
     return float(np.corrcoef(a, b)[0, 1])
 
 
-def velocity_validation(q, qd, timestamps):
+def velocity_validation(q, qd, timestamps, steps=None):
+    sparse_logging = False
+    if steps is not None and len(steps) > 1:
+        step_delta = np.diff(np.asarray(steps, dtype=np.float64))
+        valid_step_delta = step_delta[np.isfinite(step_delta) & (step_delta > 0.0)]
+        sparse_logging = bool(
+            valid_step_delta.size and np.nanmedian(valid_step_delta) > 1.5
+        )
+    # At full-rate logging, finite-difference position and reported velocity
+    # describe adjacent 20 ms cycles. Sparse logs compare an interval-average
+    # position velocity with one instantaneous sample, so allow the small sign
+    # disagreement observed around turning points while retaining correlation
+    # and gain checks that still catch an inverted encoder direction.
+    minimum_sign_agreement = 0.90 if sparse_logging else 0.95
     result = []
     for index, joint_name in enumerate(POLICY_JOINT_ORDER):
         dt = np.diff(timestamps)
@@ -91,7 +104,7 @@ def velocity_validation(q, qd, timestamps):
             np.count_nonzero(active) < 3
             or (
                 np.isfinite(sign_agreement)
-                and sign_agreement >= 0.95
+                and sign_agreement >= minimum_sign_agreement
                 and (not np.isfinite(corr) or corr >= 0.70)
                 and (not np.isfinite(gain) or 0.5 <= gain <= 2.0)
             )
@@ -103,6 +116,7 @@ def velocity_validation(q, qd, timestamps):
             "sign_agreement": sign_agreement,
             "rms_difference": rms,
             "time_delay_s": 0.0,
+            "minimum_sign_agreement": minimum_sign_agreement,
             "pass": passed,
         })
     return result
@@ -115,6 +129,7 @@ def audit_rows(rows):
     q = _matrix(rows, "q", 12, 2)
     qd = _matrix(rows, "qd", 12, 2)
     timestamps = np.asarray([_number(row, "elapsed_s", i * 0.02) for i, row in enumerate(rows)])
+    steps = np.asarray([_number(row, "step", np.nan) for row in rows])
     warnings = []
 
     if obs.shape[1] != 48:
@@ -147,19 +162,35 @@ def audit_rows(rows):
         warnings.append("command field differs from displayed policy command")
 
     previous_error = 0.0
+    previous_checked = False
     if len(rows) > 1:
-        expected_previous = (
-            sent_actions[:-1]
-            if np.any(np.isfinite(sent_actions))
-            else actions[:-1]
+        action_sources = {
+            str(row.get("previous_action_source", "")).strip()
+            for row in rows
+            if str(row.get("previous_action_source", "")).strip()
+        }
+        use_raw_action = action_sources == {"raw_actor"}
+        expected_previous = actions[:-1] if use_raw_action else sent_actions[:-1]
+        adjacent = np.isfinite(steps[1:]) & np.isfinite(steps[:-1]) & (
+            np.abs((steps[1:] - steps[:-1]) - 1.0) <= 1.0e-9
         )
-        previous_error = float(
-            np.nanmax(np.abs(obs[1:, 36:48] - expected_previous))
-        )
-        if previous_error > 2.0e-5:
-            warnings.append(
-                "previous action does not match previous applied actor-coordinate action"
+        finite = np.all(np.isfinite(expected_previous), axis=1)
+        comparable = adjacent & finite
+        if np.any(comparable):
+            previous_checked = True
+            previous_error = float(
+                np.nanmax(
+                    np.abs(
+                        obs[1:, 36:48][comparable]
+                        - expected_previous[comparable]
+                    )
+                )
             )
+            if previous_error > 2.0e-5:
+                warnings.append(
+                    "previous action does not match the previous applied "
+                    "actor-coordinate action"
+                )
 
     gravity_norm = np.linalg.norm(obs[:, 6:9], axis=1)
     if np.nanmax(np.abs(obs[:, 0:3])) > 1.0e-7:
@@ -177,7 +208,7 @@ def audit_rows(rows):
         if movement[index] > 0.03 and qd_range[index] < 1.0e-5:
             warnings.append(f"{joint_name}: joint velocity remains zero while position moves")
 
-    velocity = velocity_validation(q, obs[:, 24:36], timestamps)
+    velocity = velocity_validation(q, obs[:, 24:36], timestamps, steps=steps)
     for item in velocity:
         if not item["pass"]:
             warnings.append(
@@ -187,7 +218,7 @@ def audit_rows(rows):
             )
 
     table = []
-    joint_fields = {"joint_pos_rel", "joint_vel", "previous_raw_action"}
+    joint_fields = {"joint_pos_rel", "joint_vel", "previous_applied_action"}
     for start, end, semantic, unit in FIELDS:
         for obs_index in range(start, end):
             joint_name = ""
@@ -205,8 +236,10 @@ def audit_rows(rows):
                 passed = passed and q_rel_error[obs_index - start] <= 2.0e-4 and order_ok
             elif semantic == "joint_vel":
                 passed = passed and velocity[obs_index - start]["pass"] and order_ok
-            elif semantic == "previous_raw_action":
-                passed = passed and previous_error <= 2.0e-5 and order_ok
+            elif semantic == "previous_applied_action":
+                passed = passed and (
+                    not previous_checked or previous_error <= 2.0e-5
+                ) and order_ok
             table.append({
                 "observation_index": obs_index,
                 "semantic_field": semantic,

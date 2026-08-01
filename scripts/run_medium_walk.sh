@@ -70,11 +70,23 @@ args=(
     # the applied actor-coordinate action back through previous_action so the
     # observation and motor state describe the same control path.
     --no-exact-policy-after-entry
-    # Loaded support profile from the July 31 telemetry: hips remain bounded at
-    # 18 Nm while thighs/calves use a fixed 30 Nm ceiling. The old 24 -> 30 Nm
-    # ramp never advanced and left most sagittal packets torque-limited.
-    --torque-profile-stage stage30
+    # The chains are loose fall arrest, not weight support. Enter with the
+    # proven 18 Nm hip / 30 Nm sagittal limits, then qualify a gradual increase
+    # to 24/36 Nm. This remains below the independently guarded 40 Nm stage.
+    --torque-profile-stage stage36
     --policy-pd-torque-profile "$ROOT_DIR/config/policy_torque_loaded.yaml"
+    --policy-torque-ramp-delay-seconds 2.0
+    --policy-torque-ramp-seconds 8.0
+    # Match the measured loaded-ground and MuJoCo tracking envelope. The ramp
+    # pauses on larger errors or torque and backs off after sustained measured
+    # torque violations; hard encoder/tilt/torque safety remains independent.
+    --policy-torque-ramp-max-tracking-error-rad 1.20
+    --policy-torque-ramp-max-measured-torque 45.0
+    --policy-torque-ramp-max-feedback-age 0.060
+    --policy-torque-ramp-max-cycle-work-ms 28.0
+    --measured-torque-soft-hip 35.0
+    --measured-torque-soft-thigh 45.0
+    --measured-torque-soft-calf 45.0
     --pose-transition-speed-rad-s 0.55
     --pose-transition-min-seconds 1.2
     # A crouch request from a loaded policy state reached 117 Nm in the July
