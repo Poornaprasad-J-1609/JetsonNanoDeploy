@@ -4000,6 +4000,7 @@ def run_policy_loop(
     policy_entry_restart_reason = ""
     last_policy_gain_blend_alpha = 1.0
     stand_recovery_gain_active = False
+    stand_recovery_gain_mode = None
     stand_recovery_gain_elapsed_s = 0.0
     stand_recovery_policy_alpha_at_stop = 0.0
     previous_walk_requested = False
@@ -4697,6 +4698,10 @@ def run_policy_loop(
                 scheduler.request_resync("hold feedback capture")
 
             if mode_request is not None:
+                pose_requested_from_policy = bool(
+                    previous_walk_requested
+                    and mode_request in ("stand", "sit", "hold")
+                )
                 control_mode = mode_request
                 if control_mode in ("hold", "stand", "sit"):
                     has_motion_target = True
@@ -4728,14 +4733,29 @@ def run_policy_loop(
                     walking_armed = False
                     stand_ready_pending = True
                     stand_ready_settle_count = 0
-                    stand_recovery_gain_active = False
-                    stand_recovery_gain_elapsed_s = 0.0
                     print("[POSE] walking remains blocked until the stand target settles.")
                 elif control_mode in ("sit", "hold"):
                     walking_armed = False
                     stand_ready_pending = False
                     stand_ready_settle_count = 0
+                if pose_requested_from_policy:
+                    # Position targets already start from fresh feedback. Keep
+                    # impedance continuous as well: switching immediately from
+                    # official policy Kd=5-8 to the legacy pose Kd=36 produced
+                    # a measured -115 Nm spike when C was pressed while moving.
+                    stand_recovery_gain_active = True
+                    stand_recovery_gain_mode = control_mode
+                    stand_recovery_gain_elapsed_s = 0.0
+                    stand_recovery_policy_alpha_at_stop = float(
+                        last_policy_gain_blend_alpha
+                    )
+                    print(
+                        "[POSE] policy impedance will blend smoothly into "
+                        f"{control_mode} impedance."
+                    )
+                else:
                     stand_recovery_gain_active = False
+                    stand_recovery_gain_mode = None
                     stand_recovery_gain_elapsed_s = 0.0
                 if control_mode in ("stand", "sit", "hold"):
                     last_walk_command.fill(0.0)
@@ -4983,6 +5003,7 @@ def run_policy_loop(
             stand_ready_pending = True
             stand_ready_settle_count = 0
             stand_recovery_gain_active = True
+            stand_recovery_gain_mode = "stand"
             stand_recovery_gain_elapsed_s = 0.0
             stand_recovery_policy_alpha_at_stop = float(
                 last_policy_gain_blend_alpha
@@ -4991,6 +5012,29 @@ def run_policy_loop(
                 "[POSE] policy stopped; last target preserved and loaded stand "
                 "impedance recovery started."
             )
+
+        pose_gain_blend_from_phase = None
+        pose_gain_blend_alpha = 1.0
+        if stand_recovery_gain_active:
+            if active_control_mode != stand_recovery_gain_mode:
+                stand_recovery_gain_active = False
+                stand_recovery_gain_mode = None
+                stand_recovery_gain_elapsed_s = 0.0
+            else:
+                stand_recovery_gain_elapsed_s += float(dt)
+                pose_gain_blend_from_phase = "policy"
+                pose_gain_blend_alpha = stand_recovery_gain_blend_scale(
+                    stand_recovery_policy_alpha_at_stop,
+                    stand_recovery_gain_elapsed_s,
+                    policy_entry_ramp_seconds,
+                )
+                if pose_gain_blend_alpha >= 1.0 - 1.0e-6:
+                    stand_recovery_gain_active = False
+                    stand_recovery_gain_mode = None
+                    stand_recovery_gain_elapsed_s = 0.0
+                    pose_gain_blend_from_phase = None
+                    pose_gain_blend_alpha = 1.0
+                    print("[POSE] loaded pose impedance recovery completed.")
 
         if active_control_mode == "idle":
             q_safe_target = q_previous_target.copy()
@@ -5004,6 +5048,8 @@ def run_policy_loop(
                     q_safe_target,
                     phase="hold",
                     feedback_by_joint=fresh_feedback_for_commands,
+                    gain_blend_from_phase=pose_gain_blend_from_phase,
+                    gain_blend_alpha=pose_gain_blend_alpha,
                 )
                 if has_motion_target
                 else []
@@ -5016,21 +5062,6 @@ def run_policy_loop(
                 policy_has_started,
                 walking_armed,
             )
-            stand_gain_blend_from_phase = None
-            stand_gain_blend_alpha = 1.0
-            if stand_recovery_gain_active:
-                stand_recovery_gain_elapsed_s += float(dt)
-                stand_gain_blend_from_phase = "policy"
-                stand_gain_blend_alpha = stand_recovery_gain_blend_scale(
-                    stand_recovery_policy_alpha_at_stop,
-                    stand_recovery_gain_elapsed_s,
-                    policy_entry_ramp_seconds,
-                )
-                if stand_gain_blend_alpha >= 1.0 - 1.0e-6:
-                    stand_recovery_gain_active = False
-                    stand_gain_blend_from_phase = None
-                    stand_gain_blend_alpha = 1.0
-                    print("[POSE] loaded stand impedance recovery completed.")
             learned_stand_stabilization_active = bool(
                 stand_policy_stabilization
                 and walking_armed
@@ -5099,8 +5130,8 @@ def run_policy_loop(
                 q_safe_target,
                 phase=stand_command_phase,
                 feedback_by_joint=fresh_feedback_for_commands,
-                gain_blend_from_phase=stand_gain_blend_from_phase,
-                gain_blend_alpha=stand_gain_blend_alpha,
+                gain_blend_from_phase=pose_gain_blend_from_phase,
+                gain_blend_alpha=pose_gain_blend_alpha,
             )
 
         elif active_control_mode == "sit":
@@ -5122,6 +5153,8 @@ def run_policy_loop(
                 q_safe_target,
                 phase="sit",
                 feedback_by_joint=fresh_feedback_for_commands,
+                gain_blend_from_phase=pose_gain_blend_from_phase,
+                gain_blend_alpha=pose_gain_blend_alpha,
             )
             action = np.zeros(action_dim, dtype=np.float32)
 

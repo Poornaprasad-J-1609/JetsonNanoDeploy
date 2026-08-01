@@ -45,13 +45,13 @@ policy_deployment:
   # The latest loaded-ground log drove raw hip actions to |8.33| while the
   # matching MuJoCo run stayed near |3.23| maximum. This clip is followed by
   # hip_action_scale below; together they cap hip target contributions at
-  # +/-0.16 rad without reducing thigh/calf gait range.
+  # +/-0.12 rad without reducing thigh/calf gait range.
   hip_action_clip_abs: 1.6
   # The 2026-08-01 loaded runs produced 0.50-0.62 rad measured hip travel,
   # while the matching simulation envelope was 0.24-0.36 rad. Apply this
   # after the hip clip at the motor boundary; the raw actor action still feeds
   # obs[36:48] exactly as it did during training.
-  hip_action_scale: 0.40
+  hip_action_scale: 0.30
   action_smoothing: 0.20
   action_delta_limit_abs: 0.15
   policy_entry_ramp_seconds: 2.0

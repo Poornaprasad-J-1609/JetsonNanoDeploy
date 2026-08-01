@@ -856,7 +856,10 @@ def test_policy_packets_reject_pose_gain_encoding_blends():
         )
 
 
-def test_stand_recovery_blends_effective_policy_gains_without_a_gain_step():
+@pytest.mark.parametrize("pose_phase", ["stand", "sit", "hold"])
+def test_pose_recovery_blends_effective_policy_gains_without_a_gain_step(
+    pose_phase,
+):
     runner = PolicyRunner()
     motor_ids = load_yaml(ROOT / "config" / "motor_ids.yaml")["motor_ids"]
     joint_name = "FR_calf_joint"
@@ -877,21 +880,21 @@ def test_stand_recovery_blends_effective_policy_gains_without_a_gain_step():
 
     recovery_start = layer.build_mit_commands(
         q_target,
-        phase="stand",
+        phase=pose_phase,
         feedback_by_joint=feedback,
         gain_blend_from_phase="policy",
         gain_blend_alpha=0.0,
     )[0]
     recovery_middle = layer.build_mit_commands(
         q_target,
-        phase="stand",
+        phase=pose_phase,
         feedback_by_joint=feedback,
         gain_blend_from_phase="policy",
         gain_blend_alpha=0.5,
     )[0]
     recovery_end = layer.build_mit_commands(
         q_target,
-        phase="stand",
+        phase=pose_phase,
         feedback_by_joint=feedback,
         gain_blend_from_phase="policy",
         gain_blend_alpha=1.0,
@@ -1633,7 +1636,7 @@ def test_medium_walk_uses_loaded_per_joint_support_profile():
     )
     assert "--joint-velocity-source finite-difference" in launcher
     assert "--no-exact-policy-after-entry" in launcher
-    assert "--policy-hip-action-scale 0.40" in launcher
+    assert "--policy-hip-action-scale 0.30" in launcher
     assert "--torque-profile-stage stage30" in launcher
     assert "--policy-pd-torque-profile" in launcher
     assert "--pose-pd-torque-limit 40" in launcher
