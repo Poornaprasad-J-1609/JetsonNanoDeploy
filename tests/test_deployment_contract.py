@@ -1719,9 +1719,9 @@ def test_medium_walk_uses_loaded_per_joint_support_profile():
     assert "--policy-pd-torque-profile" in launcher
     assert "--policy-torque-ramp-max-tracking-error-rad 1.20" in launcher
     assert "--policy-torque-ramp-max-measured-torque 45.0" in launcher
-    assert "--policy-torque-ramp-max-feedback-age 0.020" in launcher
-    assert "--fresh-feedback-max-age 0.020" in launcher
-    assert "--feedback-snapshot-max-skew-ms 10" in launcher
+    assert "--policy-torque-ramp-max-feedback-age 0.030" in launcher
+    assert "--fresh-feedback-max-age 0.030" in launcher
+    assert "--feedback-snapshot-max-skew-ms 20" in launcher
     assert "--pose-pd-torque-limit 40" in launcher
     profile = load_yaml(ROOT / "config" / "policy_torque_loaded.yaml")[
         "policy_torque_profile"
@@ -1750,6 +1750,9 @@ def test_suspension_walk_uses_fixed_low_torque_and_speed_envelope():
     assert "--speed-scale-max 0.04" in launcher
     assert "--policy-command-vx-max 0.12" in launcher
     assert "--pose-pd-torque-limit 14" in launcher
+    assert "--pose-transition-speed-rad-s 0.20" in launcher
+    assert "--stand-ready-error-rad 0.08" in launcher
+    assert "--stand-ready-velocity-rad-s 0.10" in launcher
     assert CAN_FEEDBACK_RECEIVE_EVERY_N_CYCLES == 2
 
 

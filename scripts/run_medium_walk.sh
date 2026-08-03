@@ -80,7 +80,7 @@ args=(
     # torque violations; hard encoder/tilt/torque safety remains independent.
     --policy-torque-ramp-max-tracking-error-rad 1.20
     --policy-torque-ramp-max-measured-torque 45.0
-    --policy-torque-ramp-max-feedback-age 0.020
+    --policy-torque-ramp-max-feedback-age 0.030
     --policy-torque-ramp-max-cycle-work-ms 28.0
     --measured-torque-soft-hip 35.0
     --measured-torque-soft-thigh 45.0
@@ -96,8 +96,8 @@ args=(
     # Pose phases retain the proven e9a4a13 target/gain path. The finite torque
     # ceiling above scales impedance only when its estimate exceeds 40 Nm.
     --feedback-timeout 0.05
-    --fresh-feedback-max-age 0.020
-    --feedback-snapshot-max-skew-ms 10
+    --fresh-feedback-max-age 0.030
+    --feedback-snapshot-max-skew-ms 20
     --policy-steps 0
     --log-every 5
     --no-auto-push-log
