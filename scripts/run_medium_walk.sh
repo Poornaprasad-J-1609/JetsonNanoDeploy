@@ -68,35 +68,31 @@ args=(
     # Keep motor-facing conditioning enabled after policy entry. This switch
     # controls target filtering only; previous_action remains the raw actor.
     --no-exact-policy-after-entry
-    # The chains are loose fall arrest, not weight support. Enter with 18 Nm
-    # hip / 36 Nm sagittal limits so policy takeover has support reserve above
-    # the measured 33.4 Nm loaded stand demand, then qualify a gradual increase
-    # to 24/40 Nm under the independent 45 Nm measured-torque watchdog.
-    --torque-profile-stage stage40
-    --acknowledge-40nm-loaded-ground-test
+    # Use the requested common 100 Nm authority ceiling for every joint. This
+    # does not command 100 Nm continuously; Kp/Kd and tracking error determine
+    # actual torque. The independent measured-feedback stop remains at 110 Nm.
+    --torque-profile-stage stage100
+    --acknowledge-100nm-loaded-ground-test
     --policy-pd-torque-profile "$ROOT_DIR/config/policy_torque_loaded.yaml"
+    --policy-absolute-torque-ceiling 100
     --policy-torque-ramp-delay-seconds 2.0
     --policy-torque-ramp-seconds 8.0
     # Match the measured loaded-ground and MuJoCo tracking envelope. The ramp
     # pauses on larger errors or torque and backs off after sustained measured
     # torque violations; hard encoder/tilt/torque safety remains independent.
     --policy-torque-ramp-max-tracking-error-rad 1.20
-    --policy-torque-ramp-max-measured-torque 45.0
+    --policy-torque-ramp-max-measured-torque 100.0
     --policy-torque-ramp-max-feedback-age 0.060
     --policy-torque-ramp-max-cycle-work-ms 28.0
-    --measured-torque-soft-hip 35.0
-    --measured-torque-soft-thigh 45.0
-    --measured-torque-soft-calf 45.0
+    --measured-torque-soft-hip 100.0
+    --measured-torque-soft-thigh 100.0
+    --measured-torque-soft-calf 100.0
     --pose-transition-speed-rad-s 0.55
     --pose-transition-min-seconds 1.2
-    # A crouch request from a loaded policy state reached 117 Nm in the July
-    # 31 telemetry. Preserve the synchronized pose target while bounding the
-    # effective legacy impedance to a value that still supports the robot.
-    --pose-pd-torque-limit 40
+    --pose-pd-torque-limit 100
     --stand-ready-error-rad 0.25
     --stand-ready-velocity-rad-s 0.15
-    # Pose phases retain the proven e9a4a13 target/gain path. The finite torque
-    # ceiling above scales impedance only when its estimate exceeds 40 Nm.
+    # Pose phases use the same finite authority ceiling as walking.
     --feedback-timeout 0.05
     --fresh-feedback-max-age 0.08
     --policy-steps 0

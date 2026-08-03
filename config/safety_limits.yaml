@@ -35,11 +35,9 @@ encoder:
   # before the motor runs far past the URDF-like software stop.
   joint_limit_margin_rad: 0.30
 
-  # Ground-test guard for measured MIT torque feedback. A 47 kg robot can show
-  # 60-80 Nm support/load-transfer torque at a calf without that being a fault.
-  # Keep this below the RS04 wire range (+/-120 Nm) and use the CLI
-  # --policy-pd-torque-limit to limit commanded walking effort.
-  max_abs_torque: 95.0
+  # Independent feedback guard above the 100 Nm commanded authority ceiling and
+  # below the official RS04 wire limit of 120 Nm.
+  max_abs_torque: 110.0
   # Require this many consecutive over-limit feedback samples before stopping.
   # Set to 1 for immediate trips. 2 filters a single noisy feedback packet
   # while still stopping a real overload on the next control cycle.

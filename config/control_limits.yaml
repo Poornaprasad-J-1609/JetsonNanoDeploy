@@ -49,9 +49,8 @@ policy_deployment:
   hip_action_clip_abs: 1.6
   # The 2026-08-01 loaded runs produced 0.50-0.62 rad measured hip travel,
   # while the matching simulation envelope was 0.24-0.36 rad. Apply this
-  # after the hip clip at the motor boundary. Conditioned deployment feeds the
-  # applied actor-coordinate action into obs[36:48], matching what moved the
-  # robot; exact mode still feeds the raw actor output.
+  # after the hip clip at the motor boundary. Observation slots obs[36:48]
+  # always contain the previous raw actor output from the training contract.
   hip_action_scale: 0.30
   action_smoothing: 0.20
   action_delta_limit_abs: 0.15
@@ -59,25 +58,22 @@ policy_deployment:
   # Before packing a walking MIT command, constrain its estimated joint-space
   # PD torque around fresh encoder feedback. The independent measured-feedback
   # emergency stop remains in config/safety_limits.yaml.
-  # Safe suspension default. Do not raise this automatically; use
-  # --policy-pd-torque-limit 18 only for the controlled comparison after routing
-  # and IMU sign tests pass.
-  estimated_pd_torque_limit: 14.0
-  # Keep every joint at the same safe default unless an explicit hardware test
-  # justifies a per-joint override.
+  # Common requested torque ceiling for loaded sit, stand, hold, and walking.
+  # This is an authority ceiling, not a continuously commanded torque.
+  estimated_pd_torque_limit: 100.0
   estimated_pd_torque_limits:
-    BL_hip_joint: 14.0
-    BR_hip_joint: 14.0
-    FL_hip_joint: 14.0
-    FR_hip_joint: 14.0
-    BL_thigh_joint: 14.0
-    BR_thigh_joint: 14.0
-    FL_thigh_joint: 14.0
-    FR_thigh_joint: 14.0
-    BL_calf_joint: 14.0
-    BR_calf_joint: 14.0
-    FL_calf_joint: 14.0
-    FR_calf_joint: 14.0
+    BL_hip_joint: 100.0
+    BR_hip_joint: 100.0
+    FL_hip_joint: 100.0
+    FR_hip_joint: 100.0
+    BL_thigh_joint: 100.0
+    BR_thigh_joint: 100.0
+    FL_thigh_joint: 100.0
+    FR_thigh_joint: 100.0
+    BL_calf_joint: 100.0
+    BR_calf_joint: 100.0
+    FL_calf_joint: 100.0
+    FR_calf_joint: 100.0
 
 joint_position:
   enabled: true
@@ -87,14 +83,13 @@ joint_rate:
 
 mit_parameters:
   enabled: true
-  # Zero disables host-side pose torque limiting. Pose gains remain the fixed
-  # physical values in mit_motor_control.yaml; independent measured torque,
-  # position, velocity, tilt, and stale-feedback emergency checks remain on.
-  startup_pd_torque_limit: 0.0
-  sit_pd_torque_limit: 0.0
-  stand_pd_torque_limit: 0.0
-  hold_pd_torque_limit: 0.0
-  leveling_pd_torque_limit: 20.0
+  # Use the same authority ceiling for every phase. Pose and policy gains still
+  # determine the actual torque, while independent feedback safety remains on.
+  startup_pd_torque_limit: 100.0
+  sit_pd_torque_limit: 100.0
+  stand_pd_torque_limit: 100.0
+  hold_pd_torque_limit: 100.0
+  leveling_pd_torque_limit: 100.0
   p_min: -12.566370614359172
   p_max: 12.566370614359172
   v_min: -15.0

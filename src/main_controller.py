@@ -779,6 +779,7 @@ TORQUE_PROFILE_STAGES = {
     "stage30": (14.0, 30.0),
     "stage36": (14.0, 36.0),
     "stage40": (14.0, 40.0),
+    "stage100": (100.0, 100.0),
 }
 
 
@@ -6834,6 +6835,11 @@ def main():
         action="store_true",
         help="explicitly acknowledge a loaded-ground stage40 test",
     )
+    parser.add_argument(
+        "--acknowledge-100nm-loaded-ground-test",
+        action="store_true",
+        help="explicitly acknowledge the 100 Nm loaded-ground authority ceiling",
+    )
     parser.add_argument("--measured-torque-soft-hip", type=float, default=35.0)
     parser.add_argument("--measured-torque-soft-thigh", type=float, default=40.0)
     parser.add_argument("--measured-torque-soft-calf", type=float, default=40.0)
@@ -7010,6 +7016,13 @@ def main():
         parser.error(
             "stage40 requires --acknowledge-40nm-suspension-test or "
             "--acknowledge-40nm-loaded-ground-test"
+        )
+    if (
+        args.torque_profile_stage == "stage100"
+        and not args.acknowledge_100nm_loaded_ground_test
+    ):
+        parser.error(
+            "stage100 requires --acknowledge-100nm-loaded-ground-test"
         )
     if not np.isfinite(args.pose_pd_torque_limit) or args.pose_pd_torque_limit < 0.0:
         parser.error("--pose-pd-torque-limit must be finite and >= 0")
@@ -7447,6 +7460,8 @@ def main():
             print("40 Nm loaded-ground stage explicitly acknowledged.")
         else:
             print("40 Nm suspended stage explicitly acknowledged.")
+    elif args.torque_profile_stage == "stage100":
+        print("100 Nm loaded-ground stage explicitly acknowledged.")
     print(
         "Exact policy after entry:",
         "enabled" if args.exact_policy_after_entry else "disabled",
