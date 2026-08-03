@@ -379,7 +379,12 @@ def policy_previous_action_observation(
     previous_sent_action,
     exact_policy_after_entry,
 ):
-    """Return the actor-coordinate action that the robot actually received."""
+    """Return the previous raw actor output required by the training contract.
+
+    Motor-facing conditioning is deliberately excluded. Isaac Lab records the
+    actor output in the previous-action observation before deployment clipping,
+    smoothing, rate limiting, joint limiting, or torque limiting are applied.
+    """
     previous_raw_action = np.asarray(previous_raw_action, dtype=np.float32)
     previous_sent_action = np.asarray(previous_sent_action, dtype=np.float32)
     if previous_raw_action.shape != previous_sent_action.shape:
@@ -388,11 +393,7 @@ def policy_previous_action_observation(
             f"{list(previous_raw_action.shape)} and "
             f"{list(previous_sent_action.shape)}"
         )
-    selected = (
-        previous_raw_action
-        if bool(exact_policy_after_entry)
-        else previous_sent_action
-    )
+    selected = previous_raw_action
     if not np.all(np.isfinite(selected)):
         raise ValueError("previous policy action observation contains NaN or Inf")
     return selected.copy()
@@ -4198,9 +4199,7 @@ def run_policy_loop(
     )
     print(
         "previous_action_observation:",
-        "raw actor output"
-        if bool(exact_policy_after_entry)
-        else "conditioned actor action sent to target pipeline",
+        "raw actor output (training contract)",
     )
     print(
         "policy_sim_match:",
@@ -4783,9 +4782,8 @@ def run_policy_loop(
                     stand_ready_settle_count = 0
                 if pose_requested_from_policy:
                     # Position targets already start from fresh feedback. Keep
-                    # impedance continuous as well: switching immediately from
-                    # official policy Kd=5-8 to the legacy pose Kd=36 produced
-                    # a measured -115 Nm spike when C was pressed while moving.
+                    # impedance continuous as well: switching gains immediately
+                    # while a joint is moving can produce a large torque step.
                     stand_recovery_gain_active = True
                     stand_recovery_gain_mode = control_mode
                     stand_recovery_gain_elapsed_s = 0.0
@@ -5281,12 +5279,9 @@ def run_policy_loop(
                 (not bool(exact_policy_after_entry) and not policy_sim_match)
                 or float(policy_entry_scale) < 0.999
             )
-            # Blend only the position target during policy entry. Pose packets
-            # use a legacy gain encoding whose effective values are far above
-            # the official policy gains. Mixing those encodings produced
-            # roughly Kp=500-750 and Kd=20-36 during the first two seconds,
-            # while the known-good controller used policy impedance from the
-            # first actor packet.
+            # Blend only the position target during policy entry. All phases
+            # now use official physical gain units; policy impedance starts on
+            # the first actor packet and pose recovery blends gains explicitly.
             last_policy_gain_blend_alpha = 1.0
             if policy_shadow_mode:
                 q_safe_target = q_actor_target.copy()
@@ -7614,11 +7609,7 @@ def main():
                 "policy_hip_action_clip": f"{args.policy_hip_action_clip:.6f}",
                 "policy_hip_action_scale": f"{args.policy_hip_action_scale:.6f}",
                 "exact_policy_after_entry": str(bool(args.exact_policy_after_entry)),
-                "previous_action_source": (
-                    "raw_actor"
-                    if bool(args.exact_policy_after_entry)
-                    else "sent_motor_action"
-                ),
+                "previous_action_source": "raw_actor",
                 "can_topology": "; ".join(topology_lines(args.can_count, port_by_bus)),
                 "can_backend": str(args.can_backend),
                 "can_command_hz": f"{float(args.can_command_hz):.6f}",

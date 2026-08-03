@@ -58,17 +58,15 @@ args=(
     --policy-command-yaw-max 0
     --policy-action-clip 3.2
     # The Aug 1 loaded runs showed 0.50-0.62 rad real hip travel versus
-    # 0.24-0.36 rad in simulation. Reduce only the motor-facing hip action;
-    # raw actor outputs remain logged; the next previous_action observation
-    # reports the conditioned actor-coordinate action actually sent.
+    # 0.24-0.36 rad in simulation. Reduce only the motor-facing hip action.
+    # Observation slots 36:48 always retain the previous raw actor output,
+    # matching the Isaac training contract.
     --policy-hip-action-scale 0.30
     --policy-action-smoothing 0.35
     --policy-action-delta-limit 0.20
     --policy-entry-ramp-seconds 2.0
-    # Real telemetry left the trained state envelope and drove raw actor values
-    # to 25-35 (simulation max: 7.77). Keep raw output in diagnostics, but feed
-    # the applied actor-coordinate action back through previous_action so the
-    # observation and motor state describe the same control path.
+    # Keep motor-facing conditioning enabled after policy entry. This switch
+    # controls target filtering only; previous_action remains the raw actor.
     --no-exact-policy-after-entry
     # The chains are loose fall arrest, not weight support. Enter with 18 Nm
     # hip / 36 Nm sagittal limits so policy takeover has support reserve above

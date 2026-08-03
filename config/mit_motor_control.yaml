@@ -1,11 +1,13 @@
 motor:
   model: rs-04
   use_official_mit_ranges: true
-  # Sit/stand/hold retain the exact legacy operation-control encoding from
-  # e9a4a13, where loaded pose motion was proven strong and smooth. Policy and
-  # leveling use official RS04 units independently.
-  command_encoding: legacy_9b03a77
+  # Use one physical RS04 unit contract in every phase. The legacy 9b03a77
+  # range encoded Kp=75 and Kd=1.8 as approximately Kp=750 and Kd=36 when the
+  # official motor decoded the packet, which caused pose vibration.
+  command_encoding: official
   phase_command_encoding:
+    startup: official
+    hold: official
     policy: official
     leveling: official
 
@@ -60,7 +62,8 @@ communication:
   frame_gap_s: 0.0010
 
 gains:
-  # Config-side values from the proven e9a4a13 sit/stand packet path.
+  # Values below are physical RS04 gains because every phase uses the official
+  # operation-control range.
   startup:
     hip:
       kp: 75.0

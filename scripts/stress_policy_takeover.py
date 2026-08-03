@@ -619,6 +619,7 @@ def main():
     parser.add_argument("--policy-kp-scale", type=float, default=1.0)
     parser.add_argument("--policy-kd-scale", type=float, default=1.0)
     parser.add_argument("--policy-torque-limit", type=float, default=30.0)
+    parser.add_argument("--pose-torque-limit", type=float, default=40.0)
     parser.add_argument(
         "--policy-action-clip",
         type=float,
@@ -658,6 +659,8 @@ def main():
         parser.error("--policy-kd-scale must be finite and > 0")
     if not np.isfinite(args.policy_torque_limit) or args.policy_torque_limit <= 0.0:
         parser.error("--policy-torque-limit must be finite and > 0")
+    if not np.isfinite(args.pose_torque_limit) or args.pose_torque_limit <= 0.0:
+        parser.error("--pose-torque-limit must be finite and > 0")
     if not np.isfinite(args.policy_action_clip) or args.policy_action_clip < 0.0:
         parser.error("--policy-action-clip must be finite and >= 0")
     if (
@@ -703,6 +706,7 @@ def main():
         joint_cfg["kp"] *= float(args.policy_kp_scale)
         joint_cfg["kd"] *= float(args.policy_kd_scale)
     layer.set_policy_pd_torque_limit(args.policy_torque_limit)
+    layer.set_pose_pd_torque_limit(args.pose_torque_limit)
     safety = SafetyMonitor(runner.policy_order, control_dt=runner.control_dt)
     rng = np.random.default_rng(args.seed)
 
@@ -743,6 +747,7 @@ def main():
     print(f"policy_kp_scale: {args.policy_kp_scale:.3f}")
     print(f"policy_kd_scale: {args.policy_kd_scale:.3f}")
     print(f"policy_torque_limit_nm: {args.policy_torque_limit:.3f}")
+    print(f"pose_torque_limit_nm: {args.pose_torque_limit:.3f}")
     print(f"policy_action_clip: {args.policy_action_clip:.3f}")
     print(f"policy_hip_action_clip: {args.policy_hip_action_clip:.3f}")
     print(f"policy_hip_action_scale: {args.policy_hip_action_scale:.3f}")

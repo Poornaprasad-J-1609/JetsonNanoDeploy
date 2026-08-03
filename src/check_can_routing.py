@@ -424,8 +424,22 @@ def assert_rs04_wire_contract(proto):
 
 def assert_command_wire_contract(layer):
     if layer.command_encoding != "legacy_9b03a77":
-        if layer.command_proto != layer.proto:
-            raise AssertionError("official command protocol differs from feedback protocol")
+        for key in (
+            "p_min", "p_max", "v_min", "v_max", "kp_min", "kp_max",
+            "kd_min", "kd_max", "tau_min", "tau_max",
+        ):
+            if not np.isclose(
+                float(layer.command_proto[key]),
+                float(layer.proto[key]),
+                rtol=0.0,
+                atol=1.0e-12,
+            ):
+                raise AssertionError(
+                    f"official command range {key} differs from feedback protocol"
+                )
+        if bool(layer.command_proto.get("use_float_to_uint", True)):
+            raise AssertionError("official command protocol must use signed-offset packing")
+        assert_rs04_wire_contract(layer.command_proto)
         return "official RS04"
 
     expected = {

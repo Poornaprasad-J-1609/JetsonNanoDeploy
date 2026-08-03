@@ -87,8 +87,8 @@ joint_rate:
 
 mit_parameters:
   enabled: true
-  # Zero disables host-side pose target/gain rewriting and restores the proven
-  # e9a4a13 sit/stand/hold packet behavior. Independent measured torque,
+  # Zero disables host-side pose torque limiting. Pose gains remain the fixed
+  # physical values in mit_motor_control.yaml; independent measured torque,
   # position, velocity, tilt, and stale-feedback emergency checks remain on.
   startup_pd_torque_limit: 0.0
   sit_pd_torque_limit: 0.0
@@ -100,10 +100,11 @@ mit_parameters:
   v_min: -15.0
   v_max: 15.0
   kp_min: 0.0
-  # Accommodate the pre-SocketCAN effective gains in official RS04 units.
-  kp_max: 800.0
+  # Bound configured physical gains above the largest policy gain (130) while
+  # preventing a legacy-range regression from silently commanding 500-750.
+  kp_max: 200.0
   kd_min: 0.0
-  kd_max: 40.0
+  kd_max: 10.0
   # Must accommodate virtual_joint_stop.max_preload_nm. Total estimated
   # position + damping + feedforward torque remains bounded independently by
   # the selected policy torque stage.

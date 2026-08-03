@@ -200,7 +200,7 @@ def test_hip_action_scale_applies_after_clip():
         assert conditioned[index] == pytest.approx(expected)
 
 
-def test_conditioned_policy_observes_previous_action_actually_sent():
+def test_conditioned_policy_always_observes_previous_raw_actor_action():
     raw = np.full(12, 5.0, dtype=np.float32)
     sent = np.linspace(-1.0, 1.0, 12, dtype=np.float32)
 
@@ -210,7 +210,7 @@ def test_conditioned_policy_observes_previous_action_actually_sent():
     )
     np.testing.assert_array_equal(
         policy_previous_action_observation(raw, sent, False),
-        sent,
+        raw,
     )
 
 
@@ -715,7 +715,7 @@ def test_pose_torque_limit_preserves_synchronized_target_and_scales_impedance():
     assert np.all(np.diff(sent_targets) > 0.0)
 
 
-def test_configured_pose_path_matches_proven_e9a4a13_packet_behavior():
+def test_configured_pose_path_uses_official_physical_gain_units():
     runner = PolicyRunner()
     motor_ids = load_yaml(ROOT / "config" / "motor_ids.yaml")["motor_ids"]
     joint_name = "FL_thigh_joint"
@@ -741,16 +741,16 @@ def test_configured_pose_path_matches_proven_e9a4a13_packet_behavior():
     )[0]
 
     assert layer.pose_pd_torque_limits()["stand"] == pytest.approx(0.0)
-    assert command["command_encoding"] == "legacy_9b03a77"
+    assert command["command_encoding"] == "official"
     assert command["q_des"] == pytest.approx(0.40)
     assert not command["torque_limited"]
     assert command["kp"] == pytest.approx(50.0)
     assert command["kd"] == pytest.approx(1.8)
-    assert command["kp_effective"] == pytest.approx(500.0, abs=0.1)
-    assert command["kd_effective"] == pytest.approx(36.0, abs=0.1)
+    assert command["kp_effective"] == pytest.approx(50.0, abs=0.1)
+    assert command["kd_effective"] == pytest.approx(1.8, abs=0.01)
 
 
-def test_policy_restores_0c17450_gains_without_changing_pose_gains():
+def test_policy_and_pose_use_official_physical_gains():
     runner = PolicyRunner()
     motor_ids = load_yaml(ROOT / "config" / "motor_ids.yaml")["motor_ids"]
     joint_name = "FR_calf_joint"
@@ -784,9 +784,9 @@ def test_policy_restores_0c17450_gains_without_changing_pose_gains():
     assert policy_command["command_encoding"] == "official"
     assert policy_command["kp_effective"] == pytest.approx(110.0, abs=0.1)
     assert policy_command["kd_effective"] == pytest.approx(6.5, abs=0.01)
-    assert pose_command["command_encoding"] == "legacy_9b03a77"
-    assert pose_command["kp_effective"] == pytest.approx(750.0, abs=0.1)
-    assert pose_command["kd_effective"] == pytest.approx(36.0, abs=0.1)
+    assert pose_command["command_encoding"] == "official"
+    assert pose_command["kp_effective"] == pytest.approx(75.0, abs=0.1)
+    assert pose_command["kd_effective"] == pytest.approx(1.8, abs=0.01)
 
     back_joint = "BL_calf_joint"
     back_command = MotorCommandLayer(
@@ -916,15 +916,15 @@ def test_pose_recovery_blends_effective_policy_gains_without_a_gain_step(
         gain_blend_alpha=1.0,
     )[0]
 
-    assert recovery_start["command_encoding"] == "legacy_9b03a77"
+    assert recovery_start["command_encoding"] == "official"
     assert recovery_start["gain_blend_from_phase"] == "policy"
     assert recovery_start["kp_effective"] == pytest.approx(110.0, abs=0.2)
     assert recovery_start["kd_effective"] == pytest.approx(6.5, abs=0.02)
-    assert recovery_middle["kp_effective"] == pytest.approx(430.0, abs=0.2)
-    assert recovery_middle["kd_effective"] == pytest.approx(21.25, abs=0.02)
+    assert recovery_middle["kp_effective"] == pytest.approx(92.5, abs=0.2)
+    assert recovery_middle["kd_effective"] == pytest.approx(4.15, abs=0.02)
     assert recovery_end["gain_blend_from_phase"] is None
-    assert recovery_end["kp_effective"] == pytest.approx(750.0, abs=0.2)
-    assert recovery_end["kd_effective"] == pytest.approx(36.0, abs=0.02)
+    assert recovery_end["kp_effective"] == pytest.approx(75.0, abs=0.2)
+    assert recovery_end["kd_effective"] == pytest.approx(1.8, abs=0.02)
 
 
 def test_policy_entry_policy_gains_remain_inside_policy_torque_limit():
