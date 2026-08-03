@@ -42,19 +42,17 @@ policy_deployment:
   # but do not let the first walking key press jump straight from stand to a
   # full actor output. Use --policy-sim-match only for controlled comparisons.
   action_clip_abs: 2.8
-  # The latest loaded-ground log drove raw hip actions to |8.33| while the
-  # matching MuJoCo run stayed near |3.23| maximum. This clip is followed by
-  # hip_action_scale below; together they cap hip target contributions at
-  # +/-0.12 rad without reducing thigh/calf gait range.
+  # The latest loaded-ground log drove raw hip actions outside the matching
+  # MuJoCo envelope. Retain the simulation-derived clip while restoring enough
+  # motor-side amplitude for a visible suspended gait.
   hip_action_clip_abs: 1.6
   # The 2026-08-01 loaded runs produced 0.50-0.62 rad measured hip travel,
-  # while the matching simulation envelope was 0.24-0.36 rad. Apply this
-  # after the hip clip at the motor boundary. Conditioned deployment feeds the
-  # applied actor-coordinate action into obs[36:48], matching what moved the
-  # robot; exact mode still feeds the raw actor output.
-  hip_action_scale: 0.30
+  # while the matching simulation envelope was 0.24-0.36 rad. Start the next
+  # suspended validation at 0.50; obs[36:48] still receives the previous raw
+  # actor output exactly as it did during training.
+  hip_action_scale: 0.50
   action_smoothing: 0.20
-  action_delta_limit_abs: 0.15
+  action_delta_limit_abs: 0.30
   policy_entry_ramp_seconds: 2.0
   # Before packing a walking MIT command, constrain its estimated joint-space
   # PD torque around fresh encoder feedback. The independent measured-feedback

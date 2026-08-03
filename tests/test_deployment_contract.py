@@ -200,7 +200,7 @@ def test_hip_action_scale_applies_after_clip():
         assert conditioned[index] == pytest.approx(expected)
 
 
-def test_conditioned_policy_observes_previous_action_actually_sent():
+def test_conditioned_policy_preserves_previous_raw_action_training_contract():
     raw = np.full(12, 5.0, dtype=np.float32)
     sent = np.linspace(-1.0, 1.0, 12, dtype=np.float32)
 
@@ -210,8 +210,16 @@ def test_conditioned_policy_observes_previous_action_actually_sent():
     )
     np.testing.assert_array_equal(
         policy_previous_action_observation(raw, sent, False),
-        sent,
+        raw,
     )
+
+
+def test_imu_policy_filter_matches_validated_simulation_envelope():
+    cfg = load_yaml(ROOT / "config" / "imu.yaml")["imu"]["policy_filter"]
+
+    assert cfg["enabled"] is True
+    assert cfg["gyro_lowpass_alpha"] == pytest.approx(0.70)
+    np.testing.assert_allclose(cfg["gyro_clip_abs"], [2.25, 1.50, 0.60])
 
 
 def test_live_imu_and_velocity_command_populate_exact_policy_slots():
@@ -842,7 +850,7 @@ def test_policy_entry_uses_official_policy_gains_while_target_ramps():
         assert command["kd_effective"] == pytest.approx(6.5, abs=0.02)
 
 
-def test_policy_packets_reject_pose_gain_encoding_blends():
+def test_policy_entry_blends_effective_pose_gains_through_official_packets():
     runner = PolicyRunner()
     motor_ids = load_yaml(ROOT / "config" / "motor_ids.yaml")["motor_ids"]
     joint_name = "FR_calf_joint"
@@ -853,11 +861,9 @@ def test_policy_packets_reject_pose_gain_encoding_blends():
         joint_can_bus=resolve_joint_can_bus(runner.policy_order, 1),
     )
 
-    with pytest.raises(
-        ValueError,
-        match="policy packets cannot blend gains from a pose phase",
-    ):
-        layer.build_mit_commands(
+    commands = []
+    for alpha in (0.0, 0.5, 1.0):
+        commands.append(layer.build_mit_commands(
             np.zeros(12, dtype=np.float32),
             phase="policy",
             feedback_by_joint={
@@ -868,8 +874,19 @@ def test_policy_packets_reject_pose_gain_encoding_blends():
                 }
             },
             gain_blend_from_phase="stand",
-            gain_blend_alpha=0.5,
-        )
+            gain_blend_alpha=alpha,
+        )[0])
+
+    entry_start, entry_middle, entry_end = commands
+    assert entry_start["command_encoding"] == "official"
+    assert entry_start["gain_blend_from_phase"] == "startup"
+    assert entry_start["kp_effective"] == pytest.approx(750.0, abs=0.2)
+    assert entry_start["kd_effective"] == pytest.approx(36.0, abs=0.02)
+    assert entry_middle["kp_effective"] == pytest.approx(430.0, abs=0.2)
+    assert entry_middle["kd_effective"] == pytest.approx(21.25, abs=0.02)
+    assert entry_end["gain_blend_from_phase"] is None
+    assert entry_end["kp_effective"] == pytest.approx(110.0, abs=0.2)
+    assert entry_end["kd_effective"] == pytest.approx(6.5, abs=0.02)
 
 
 @pytest.mark.parametrize("pose_phase", ["stand", "sit", "hold"])
@@ -1694,13 +1711,17 @@ def test_medium_walk_uses_loaded_per_joint_support_profile():
     )
     assert "--joint-velocity-source finite-difference" in launcher
     assert "--no-exact-policy-after-entry" in launcher
-    assert "--policy-hip-action-scale 0.30" in launcher
+    assert "--policy-hip-action-scale 0.50" in launcher
+    assert "--policy-action-smoothing 0.20" in launcher
+    assert "--policy-action-delta-limit 0.30" in launcher
     assert "--torque-profile-stage stage40" in launcher
     assert "--acknowledge-40nm-loaded-ground-test" in launcher
     assert "--policy-pd-torque-profile" in launcher
     assert "--policy-torque-ramp-max-tracking-error-rad 1.20" in launcher
     assert "--policy-torque-ramp-max-measured-torque 45.0" in launcher
-    assert "--policy-torque-ramp-max-feedback-age 0.060" in launcher
+    assert "--policy-torque-ramp-max-feedback-age 0.020" in launcher
+    assert "--fresh-feedback-max-age 0.020" in launcher
+    assert "--feedback-snapshot-max-skew-ms 10" in launcher
     assert "--pose-pd-torque-limit 40" in launcher
     profile = load_yaml(ROOT / "config" / "policy_torque_loaded.yaml")[
         "policy_torque_profile"
@@ -1717,6 +1738,18 @@ def test_medium_walk_uses_loaded_per_joint_support_profile():
         profile["start_nm"],
         profile["final_nm"],
     ).is_fixed
+
+
+def test_suspension_walk_uses_fixed_low_torque_and_speed_envelope():
+    launcher = (ROOT / "scripts" / "run_suspension_walk.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "--torque-profile-stage stage14" in launcher
+    assert '--policy-pd-torque-profile ""' in launcher
+    assert "--speed-scale-initial 0.04" in launcher
+    assert "--speed-scale-max 0.04" in launcher
+    assert "--policy-command-vx-max 0.12" in launcher
+    assert "--pose-pd-torque-limit 14" in launcher
     assert CAN_FEEDBACK_RECEIVE_EVERY_N_CYCLES == 2
 
 

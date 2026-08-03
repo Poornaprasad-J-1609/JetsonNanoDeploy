@@ -36,17 +36,14 @@ imu:
   gyro_axis_signs: [1.0, 1.0, 1.0]
   gravity_axis_signs: [1.0, 1.0, 1.0]
 
-  # Filtering applied only to the policy observation slots obs[3:6].
-  # Raw IMU packets are still available through imu_interface.py, and motor
-  # encoder feedback is untouched. The noisy IsaacSim log from 20260713_121334
-  # has gyro p95 roughly x=0.65, y=0.29, z=0.10 rad/s during walking; the latest
-  # real run had sharper vibration spikes, especially on y/z. These limits keep
-  # the real policy input inside the same neighborhood without hiding normal
-  # body motion.
+  # Filtering applied only to policy observation slots obs[3:6]. The validated
+  # MuJoCo vx=0.5 run has gyro p99 magnitudes near [1.90, 1.19, 0.37] rad/s.
+  # Keep enough margin for trained body motion without admitting unbounded
+  # sensor spikes. A higher alpha also removes most of the old filter delay.
   policy_filter:
     enabled: true
-    gyro_lowpass_alpha: 0.45
-    gyro_clip_abs: [0.75, 0.45, 0.45]
+    gyro_lowpass_alpha: 0.70
+    gyro_clip_abs: [2.25, 1.50, 0.60]
 
   # JSON line examples accepted:
   #   {"gyro":[0,0,0],"projected_gravity":[0,0,-1]}

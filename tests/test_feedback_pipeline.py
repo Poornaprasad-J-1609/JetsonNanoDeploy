@@ -1,9 +1,11 @@
 import time
 
 import numpy as np
+import pytest
 
 from can_topology import resolve_joint_can_bus
 from main_controller import (
+    feedback_snapshot_skew_s,
     feedback_recency_summary,
     fresh_feedback_by_joint,
     refresh_active_feedback_before_fault,
@@ -157,6 +159,17 @@ def test_previous_cycle_feedback_remains_usable_inside_freshness_window():
     assert missing == []
     assert recency["fresh_previous_cycle"] == 1
     assert recency["fresh_current_cycle"] == 0
+
+
+def test_policy_feedback_snapshot_skew_uses_all_active_joint_timestamps():
+    feedback = {
+        "j0": {"timestamp": 10.000},
+        "j1": {"timestamp": 10.004},
+        "j2": {"timestamp": 10.009},
+    }
+
+    assert feedback_snapshot_skew_s(feedback, ["j0", "j1", "j2"]) == pytest.approx(0.009)
+    assert feedback_snapshot_skew_s(feedback, ["j0", "missing"]) is None
 
 
 def test_stale_feedback_is_reported_for_policy_freeze_path():

@@ -897,12 +897,6 @@ class MotorCommandLayer:
                     f"{gain_blend_from_phase}. Expected one of "
                     f"{list(self.gains.keys())}"
                 )
-            if phase == "policy" and gain_blend_source_phase != "policy":
-                raise ValueError(
-                    "policy packets cannot blend gains from a pose phase; "
-                    "blend the position target and use official policy gains"
-                )
-
         base_phase_torque_limit = 0.0
         if phase == "startup":
             base_phase_torque_limit = self.startup_pd_torque_limit

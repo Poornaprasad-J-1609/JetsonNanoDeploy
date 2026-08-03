@@ -125,7 +125,6 @@ def velocity_validation(q, qd, timestamps, steps=None):
 def audit_rows(rows):
     obs = _matrix(rows, "obs", 48, 3)
     actions = _matrix(rows, "action", 12, 2)
-    sent_actions = _matrix(rows, "sent_action", 12, 2)
     q = _matrix(rows, "q", 12, 2)
     qd = _matrix(rows, "qd", 12, 2)
     timestamps = np.asarray([_number(row, "elapsed_s", i * 0.02) for i, row in enumerate(rows)])
@@ -164,13 +163,7 @@ def audit_rows(rows):
     previous_error = 0.0
     previous_checked = False
     if len(rows) > 1:
-        action_sources = {
-            str(row.get("previous_action_source", "")).strip()
-            for row in rows
-            if str(row.get("previous_action_source", "")).strip()
-        }
-        use_raw_action = action_sources == {"raw_actor"}
-        expected_previous = actions[:-1] if use_raw_action else sent_actions[:-1]
+        expected_previous = actions[:-1]
         adjacent = np.isfinite(steps[1:]) & np.isfinite(steps[:-1]) & (
             np.abs((steps[1:] - steps[:-1]) - 1.0) <= 1.0e-9
         )
@@ -188,8 +181,7 @@ def audit_rows(rows):
             )
             if previous_error > 2.0e-5:
                 warnings.append(
-                    "previous action does not match the previous applied "
-                    "actor-coordinate action"
+                    "previous action does not match the previous raw actor output"
                 )
 
     gravity_norm = np.linalg.norm(obs[:, 6:9], axis=1)

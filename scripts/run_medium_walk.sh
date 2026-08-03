@@ -57,18 +57,14 @@ args=(
     --policy-command-vy-max 0.12
     --policy-command-yaw-max 0
     --policy-action-clip 3.2
-    # The Aug 1 loaded runs showed 0.50-0.62 rad real hip travel versus
-    # 0.24-0.36 rad in simulation. Reduce only the motor-facing hip action;
-    # raw actor outputs remain logged; the next previous_action observation
-    # reports the conditioned actor-coordinate action actually sent.
-    --policy-hip-action-scale 0.30
-    --policy-action-smoothing 0.35
-    --policy-action-delta-limit 0.20
+    # Restore gait authority in controlled increments while retaining the
+    # simulation-derived hip clip and all physical joint limits.
+    --policy-hip-action-scale 0.50
+    --policy-action-smoothing 0.20
+    --policy-action-delta-limit 0.30
     --policy-entry-ramp-seconds 2.0
-    # Real telemetry left the trained state envelope and drove raw actor values
-    # to 25-35 (simulation max: 7.77). Keep raw output in diagnostics, but feed
-    # the applied actor-coordinate action back through previous_action so the
-    # observation and motor state describe the same control path.
+    # Motor-facing conditioning remains downstream. The policy observation
+    # always receives the previous raw actor output, matching Isaac/MuJoCo.
     --no-exact-policy-after-entry
     # The chains are loose fall arrest, not weight support. Enter with 18 Nm
     # hip / 36 Nm sagittal limits so policy takeover has support reserve above
@@ -84,7 +80,7 @@ args=(
     # torque violations; hard encoder/tilt/torque safety remains independent.
     --policy-torque-ramp-max-tracking-error-rad 1.20
     --policy-torque-ramp-max-measured-torque 45.0
-    --policy-torque-ramp-max-feedback-age 0.060
+    --policy-torque-ramp-max-feedback-age 0.020
     --policy-torque-ramp-max-cycle-work-ms 28.0
     --measured-torque-soft-hip 35.0
     --measured-torque-soft-thigh 45.0
@@ -100,7 +96,8 @@ args=(
     # Pose phases retain the proven e9a4a13 target/gain path. The finite torque
     # ceiling above scales impedance only when its estimate exceeds 40 Nm.
     --feedback-timeout 0.05
-    --fresh-feedback-max-age 0.08
+    --fresh-feedback-max-age 0.020
+    --feedback-snapshot-max-skew-ms 10
     --policy-steps 0
     --log-every 5
     --no-auto-push-log

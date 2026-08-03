@@ -379,7 +379,7 @@ def policy_previous_action_observation(
     previous_sent_action,
     exact_policy_after_entry,
 ):
-    """Return the actor-coordinate action that the robot actually received."""
+    """Return the previous raw actor output required by the training contract."""
     previous_raw_action = np.asarray(previous_raw_action, dtype=np.float32)
     previous_sent_action = np.asarray(previous_sent_action, dtype=np.float32)
     if previous_raw_action.shape != previous_sent_action.shape:
@@ -388,11 +388,10 @@ def policy_previous_action_observation(
             f"{list(previous_raw_action.shape)} and "
             f"{list(previous_sent_action.shape)}"
         )
-    selected = (
-        previous_raw_action
-        if bool(exact_policy_after_entry)
-        else previous_sent_action
-    )
+    # Isaac Lab's ``last_action`` observation is the previous raw action passed
+    # to the action manager. Motor-side clipping and smoothing are downstream
+    # deployment details and must not redefine obs[36:48].
+    selected = previous_raw_action
     if not np.all(np.isfinite(selected)):
         raise ValueError("previous policy action observation contains NaN or Inf")
     return selected.copy()
@@ -2866,6 +2865,25 @@ def fresh_feedback_by_joint(estimator, active_joints, max_age_s):
     return fresh, missing
 
 
+def feedback_snapshot_skew_s(feedback_by_joint, active_joints):
+    """Return newest-to-oldest timestamp skew for a complete joint snapshot."""
+    timestamps = []
+    for joint_name in active_joints:
+        item = feedback_by_joint.get(joint_name)
+        if not isinstance(item, dict):
+            return None
+        try:
+            timestamp = float(item["timestamp"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        if not np.isfinite(timestamp):
+            return None
+        timestamps.append(timestamp)
+    if not timestamps:
+        return None
+    return max(timestamps) - min(timestamps)
+
+
 def feedback_recency_summary(estimator, active_joints, max_age_s):
     feedback = getattr(estimator, "last_feedback_by_joint", {}) or {}
     now = time.monotonic()
@@ -3985,6 +4003,7 @@ def run_policy_loop(
     pose_transition_speed_rad_s,
     pose_transition_min_seconds,
     fresh_feedback_max_age_s,
+    feedback_snapshot_max_skew_s,
     steady_feedback_budget_s,
     suspension_status_seconds,
     imu_active_max_roll_pitch_deg,
@@ -4023,10 +4042,8 @@ def run_policy_loop(
         measured_torque_soft_limits,
         window=12,
     )
-    # In exact mode the raw actor output is also the applied actor-coordinate
-    # action. In conditioned hardware mode the applied value is the clipped,
-    # smoothed action. Feeding the rejected raw value back into obs[36:48]
-    # creates a policy state that never existed in simulation.
+    # Preserve the trained observation contract: obs[36:48] is the previous
+    # raw actor output even when the motor-facing target is conditioned.
     previous_raw_action = np.zeros(action_dim, dtype=np.float32)
     previous_sent_action = np.zeros(action_dim, dtype=np.float32)
     direct_leveling_correction = np.zeros(action_dim, dtype=np.float32)
@@ -4198,9 +4215,7 @@ def run_policy_loop(
     )
     print(
         "previous_action_observation:",
-        "raw actor output"
-        if bool(exact_policy_after_entry)
-        else "conditioned actor action sent to target pipeline",
+        "raw actor output (training contract)",
     )
     print(
         "policy_sim_match:",
@@ -4219,6 +4234,7 @@ def run_policy_loop(
     print("hold_capture_seconds:", float(hold_capture_seconds))
     print("hold_command_repeats:", int(hold_command_repeats))
     print("fresh_feedback_max_age_s:", float(live_feedback_max_age_s))
+    print("feedback_snapshot_max_skew_ms:", 1000.0 * float(feedback_snapshot_max_skew_s))
     print("steady_feedback_budget_ms:", 1000.0 * float(steady_feedback_budget_s))
     print("suspension_status_seconds:", float(suspension_status_seconds))
     print("pose_transition_speed_rad_s:", float(pose_transition_speed_rad_s))
@@ -4474,7 +4490,7 @@ def run_policy_loop(
                     base_lin_vel_b,
                     base_ang_vel_b,
                     projected_gravity_b,
-                ) = estimator.read()
+                ) = read_estimator_state(estimator, refresh_imu=True)
             safety_check_start = time.monotonic()
             reason = encoder_safety_stop_reason(
                 safety=safety,
@@ -4649,7 +4665,7 @@ def run_policy_loop(
                     base_lin_vel_b,
                     base_ang_vel_b,
                     projected_gravity_b,
-                ) = estimator.read()
+                ) = read_estimator_state(estimator, refresh_imu=True)
                 q_previous_target = q_current.copy()
                 if feedback_count > 0:
                     print(
@@ -4980,7 +4996,7 @@ def run_policy_loop(
                     base_lin_vel_b,
                     base_ang_vel_b,
                     projected_gravity_b,
-                ) = estimator.read()
+                ) = read_estimator_state(estimator, refresh_imu=True)
                 fresh_feedback_for_commands, live_feedback_missing = fresh_feedback_by_joint(
                     estimator,
                     motor_layer.active_joints,
@@ -5006,6 +5022,31 @@ def run_policy_loop(
                     motor_layer.active_joints,
                     live_feedback_max_age_s,
                 )
+            elif active_control_mode == "policy" and float(feedback_snapshot_max_skew_s) > 0.0:
+                snapshot_skew_s = feedback_snapshot_skew_s(
+                    fresh_feedback_for_commands,
+                    motor_layer.active_joints,
+                )
+                if (
+                    snapshot_skew_s is None
+                    or snapshot_skew_s > float(feedback_snapshot_max_skew_s)
+                ):
+                    shown_skew = (
+                        "unknown"
+                        if snapshot_skew_s is None
+                        else f"{1000.0 * snapshot_skew_s:.1f} ms"
+                    )
+                    if step % max(1, print_every) == 0:
+                        print(
+                            "[FEEDBACK] policy snapshot is not coherent; "
+                            f"skew={shown_skew}, limit="
+                            f"{1000.0 * float(feedback_snapshot_max_skew_s):.1f} ms. "
+                            "Holding the previous target."
+                        )
+                    walk_requested = False
+                    active_control_mode = "hold" if has_motion_target else "idle"
+                    previous_raw_action = np.zeros(action_dim, dtype=np.float32)
+                    previous_sent_action = np.zeros(action_dim, dtype=np.float32)
 
         policy_was_started = bool(policy_has_started)
         if walk_requested:
@@ -5281,13 +5322,14 @@ def run_policy_loop(
                 (not bool(exact_policy_after_entry) and not policy_sim_match)
                 or float(policy_entry_scale) < 0.999
             )
-            # Blend only the position target during policy entry. Pose packets
-            # use a legacy gain encoding whose effective values are far above
-            # the official policy gains. Mixing those encodings produced
-            # roughly Kp=500-750 and Kd=20-36 during the first two seconds,
-            # while the known-good controller used policy impedance from the
-            # first actor packet.
-            last_policy_gain_blend_alpha = 1.0
+            # Convert both packet encodings to effective motor-side gains and
+            # blend impedance over the same interval as the position target.
+            # This preserves loaded-stand support at takeover without sending
+            # legacy numeric gain values through the official policy codec.
+            last_policy_gain_blend_alpha = float(policy_entry_scale)
+            policy_gain_blend_from_phase = (
+                "stand" if last_policy_gain_blend_alpha < 1.0 - 1.0e-6 else None
+            )
             if policy_shadow_mode:
                 q_safe_target = q_actor_target.copy()
                 q_joint_limit_filtered_target_for_log = q_actor_target.copy()
@@ -5322,6 +5364,8 @@ def run_policy_loop(
                     prelimit_q_target=q_policy_target,
                     previous_command_q=q_previous_target,
                     max_command_delta=safety.dq_max,
+                    gain_blend_from_phase=policy_gain_blend_from_phase,
+                    gain_blend_alpha=last_policy_gain_blend_alpha,
                 )
             )
             if (
@@ -6618,6 +6662,15 @@ def main():
         ),
     )
     parser.add_argument(
+        "--feedback-snapshot-max-skew-ms",
+        type=float,
+        default=10.0,
+        help=(
+            "maximum newest-to-oldest timestamp skew across the 12 feedback "
+            "samples used for one policy observation; 0 disables"
+        ),
+    )
+    parser.add_argument(
         "--encoder-limit-tolerance-rad",
         type=float,
         default=0.0,
@@ -7075,6 +7128,12 @@ def main():
             parser.error("--routing-test-torque-limit must be finite and within 0.0..12.0")
     if not np.isfinite(args.fresh_feedback_max_age) or args.fresh_feedback_max_age < 0.0:
         parser.error("--fresh-feedback-max-age must be finite and >= 0")
+    if (
+        not np.isfinite(args.feedback_snapshot_max_skew_ms)
+        or args.feedback_snapshot_max_skew_ms < 0.0
+        or args.feedback_snapshot_max_skew_ms > 20.0
+    ):
+        parser.error("--feedback-snapshot-max-skew-ms must be within 0.0..20.0")
     if (
         not np.isfinite(args.stand_ready_error_rad)
         or args.stand_ready_error_rad <= 0.0
@@ -7614,11 +7673,7 @@ def main():
                 "policy_hip_action_clip": f"{args.policy_hip_action_clip:.6f}",
                 "policy_hip_action_scale": f"{args.policy_hip_action_scale:.6f}",
                 "exact_policy_after_entry": str(bool(args.exact_policy_after_entry)),
-                "previous_action_source": (
-                    "raw_actor"
-                    if bool(args.exact_policy_after_entry)
-                    else "sent_motor_action"
-                ),
+                "previous_action_source": "raw_actor",
                 "can_topology": "; ".join(topology_lines(args.can_count, port_by_bus)),
                 "can_backend": str(args.can_backend),
                 "can_command_hz": f"{float(args.can_command_hz):.6f}",
@@ -8027,6 +8082,9 @@ def main():
             pose_transition_speed_rad_s=float(args.pose_transition_speed_rad_s),
             pose_transition_min_seconds=float(args.pose_transition_min_seconds),
             fresh_feedback_max_age_s=float(args.fresh_feedback_max_age),
+            feedback_snapshot_max_skew_s=(
+                0.001 * float(args.feedback_snapshot_max_skew_ms)
+            ),
             steady_feedback_budget_s=0.001 * float(args.steady_feedback_budget_ms),
             suspension_status_seconds=float(args.suspension_status_seconds),
             imu_active_max_roll_pitch_deg=float(args.imu_max_active_roll_pitch_deg),
