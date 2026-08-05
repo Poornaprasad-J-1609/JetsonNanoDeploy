@@ -14,7 +14,8 @@ except ImportError as exc:
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_POLICY_SHA256 = "b808d5967cc672ffeefb3807c088f6623c6acd20cc02f14a14c32ea856baa2a8"
+# Approved model_11078 locomotion checkpoint supplied as model_11078.pt.zip.
+EXPECTED_POLICY_SHA256 = "90a89edb0f4dd5905efc63ef9fecdf9b94123b161ccd839cda6d58dc68924ce1"
 EXPECTED_OBSERVATION_DIM = 48
 EXPECTED_ACTION_DIM = 12
 EXPECTED_POLICY_JOINT_ORDER = list(POLICY_JOINT_ORDER)
