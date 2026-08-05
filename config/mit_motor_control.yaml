@@ -69,10 +69,12 @@ gains:
       kp: 80.0
       kd: 4.0
     thigh:
-      kp: 110.0
+      # Loaded stand logs show stable feedback but persistent static sag at
+      # Kp=110. Match the rear policy impedance without changing damping.
+      kp: 130.0
       kd: 4.0
     calf:
-      kp: 110.0
+      kp: 130.0
       kd: 4.0
 
   hold:
@@ -80,10 +82,10 @@ gains:
       kp: 80.0
       kd: 4.0
     thigh:
-      kp: 110.0
+      kp: 130.0
       kd: 4.0
     calf:
-      kp: 110.0
+      kp: 130.0
       kd: 4.0
 
   policy:
@@ -129,10 +131,10 @@ feedforward:
   tau_ff: 0.0
   v_des: 0.0
 
-# Smooth gravity-support bias for loaded sit/stand. Keep this map at the
-# previously transmitted +/-8 Nm envelope; larger values inferred from static
-# measured torque distorted the stance when the packet field was widened for
-# policy-only virtual joint-stop reactions. The remaining load stays with PD.
+# Smooth gravity-support bias for loaded sit/stand. The Aug 5 19:07 loaded
+# stand used only 35 Nm median / 46 Nm peak but retained 0.15-0.24 rad calf
+# error. Add a small amount of support while staying well below the earlier
+# 14-38 Nm map that distorted the pose. The remaining load stays with PD.
 pose_support:
   enabled: true
   stand_joint_tau_ff:
@@ -140,14 +142,14 @@ pose_support:
     BR_hip_joint: 6.70
     FL_hip_joint: -1.83
     FR_hip_joint: -4.35
-    BL_thigh_joint: 8.00
-    BR_thigh_joint: -8.00
+    BL_thigh_joint: 12.00
+    BR_thigh_joint: -12.00
     FL_thigh_joint: 7.82
-    FR_thigh_joint: -8.00
-    BL_calf_joint: -8.00
-    BR_calf_joint: 8.00
-    FL_calf_joint: -6.44
-    FR_calf_joint: 8.00
+    FR_thigh_joint: -12.00
+    BL_calf_joint: -12.00
+    BR_calf_joint: 12.00
+    FL_calf_joint: -8.00
+    FR_calf_joint: 12.00
 
 # Isaac/MuJoCo computes actuator torque from the raw policy target before the
 # physical joint constraint is solved. On hardware we keep q_des inside the
