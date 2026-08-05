@@ -168,6 +168,7 @@ def replay_policy(args, rows, runner, safety, layer):
                     safe,
                     phase="policy",
                     feedback_by_joint=feedback_snapshot(runner.policy_order, q, qd),
+                    prelimit_q_target=requested,
                     previous_command_q=previous_target,
                     max_command_delta=safety.dq_max,
                 )

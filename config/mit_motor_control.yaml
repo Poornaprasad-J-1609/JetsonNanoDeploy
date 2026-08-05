@@ -157,4 +157,7 @@ pose_support:
 # applies after this contribution is added.
 virtual_joint_stop:
   enabled: true
-  max_preload_nm: 8.0
+  # The model_11078 real run requested 26-45 Nm at the simulated calf stops.
+  # Preserve that constraint reaction while the common total PD + damping +
+  # feedforward estimator remains capped at 100 Nm.
+  max_preload_nm: 50.0

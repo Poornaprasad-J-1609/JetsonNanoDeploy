@@ -807,6 +807,7 @@ def test_loaded_pose_support_is_complete_and_enters_torque_budget():
     )[0]
 
     assert command["joint_tau_ff"] == pytest.approx(38.24, abs=1.0e-5)
+    assert command["tau_ff"] == pytest.approx(38.24, abs=0.05)
     assert command["tau_pd_est"] == pytest.approx(38.24, abs=0.05)
     assert abs(command["tau_pd_est"]) < command["torque_limit_effective"]
 
@@ -1235,9 +1236,11 @@ def test_virtual_joint_stop_preserves_bounded_policy_torque_at_physical_limit(
     assert command["q_des"] == pytest.approx(0.0)
     assert command["q_prelimit_requested"] == pytest.approx(actor_target)
     assert command["joint_limit_preload_error"] == pytest.approx(actor_target)
-    assert abs(command["joint_limit_preload_tau_ff"]) == pytest.approx(8.0)
+    # The per-phase 14 Nm authority is tighter than the configured 50 Nm
+    # preload range, so this test remains bounded by its phase limit.
+    assert abs(command["joint_limit_preload_tau_ff"]) == pytest.approx(14.0)
     assert np.sign(command["joint_limit_preload_tau_ff"]) == expected_preload_sign
-    assert abs(command["tau_ff"]) == pytest.approx(8.0)
+    assert abs(command["tau_ff"]) == pytest.approx(14.0)
     assert np.sign(command["tau_ff"]) == (
         expected_preload_sign * layer.joint_directions[joint_name]
     )

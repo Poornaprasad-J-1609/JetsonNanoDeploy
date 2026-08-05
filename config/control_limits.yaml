@@ -100,11 +100,12 @@ mit_parameters:
   kp_max: 200.0
   kd_min: 0.0
   kd_max: 10.0
-  # Must accommodate virtual_joint_stop.max_preload_nm. Total estimated
-  # position + damping + feedforward torque remains bounded independently by
-  # the selected policy torque stage.
-  tau_ff_min: -8.0
-  tau_ff_max: 8.0
+  # Accommodate loaded-pose gravity support and the simulated one-sided joint
+  # stop reaction. Total position + damping + feedforward torque remains
+  # bounded by the selected 100 Nm phase limit; this is only the packet-field
+  # range and does not raise overall torque authority.
+  tau_ff_min: -50.0
+  tau_ff_max: 50.0
 
 telemetry:
   compact_only: true
