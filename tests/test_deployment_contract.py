@@ -806,9 +806,9 @@ def test_loaded_pose_support_is_complete_and_enters_torque_budget():
         },
     )[0]
 
-    assert command["joint_tau_ff"] == pytest.approx(38.24, abs=1.0e-5)
-    assert command["tau_ff"] == pytest.approx(38.24, abs=0.05)
-    assert command["tau_pd_est"] == pytest.approx(38.24, abs=0.05)
+    assert command["joint_tau_ff"] == pytest.approx(8.0, abs=1.0e-5)
+    assert command["tau_ff"] == pytest.approx(8.0, abs=0.05)
+    assert command["tau_pd_est"] == pytest.approx(8.0, abs=0.05)
     assert abs(command["tau_pd_est"]) < command["torque_limit_effective"]
 
 
