@@ -45,6 +45,7 @@ from main_controller import (
     validate_required_policy_imu,
     validate_torque_profile,
     smoothstep,
+    synchronized_pose_trajectory_state,
 )
 from motor_command_layer import (
     MotorCommandLayer,
@@ -72,6 +73,25 @@ def load_yaml(path):
 def test_all_yaml_files_parse():
     for path in sorted((ROOT / "config").glob("*.yaml")):
         assert load_yaml(path) is not None, path
+
+
+def test_synchronized_pose_trajectory_provides_continuous_velocity_target():
+    start = np.array([0.0, -0.2], dtype=np.float32)
+    target = np.array([1.0, 0.6], dtype=np.float32)
+
+    q0, qd0, alpha0 = synchronized_pose_trajectory_state(start, target, 0.0, 2.0)
+    qm, qdm, alpham = synchronized_pose_trajectory_state(start, target, 1.0, 2.0)
+    q1, qd1, alpha1 = synchronized_pose_trajectory_state(start, target, 2.0, 2.0)
+
+    np.testing.assert_allclose(q0, start)
+    np.testing.assert_allclose(qd0, 0.0)
+    assert alpha0 == pytest.approx(0.0)
+    np.testing.assert_allclose(qm, 0.5 * (start + target))
+    np.testing.assert_allclose(qdm, 0.75 * (target - start))
+    assert alpham == pytest.approx(0.5)
+    np.testing.assert_allclose(q1, target)
+    np.testing.assert_allclose(qd1, 0.0)
+    assert alpha1 == pytest.approx(1.0)
 
 
 def test_policy_walking_has_no_hardcoded_gait_target_substitution():
@@ -728,9 +748,12 @@ def test_configured_pose_path_uses_official_physical_gain_units():
     )
     q_target = np.zeros(12, dtype=np.float32)
     q_target[joint_index] = 0.40
+    qd_target = np.zeros(12, dtype=np.float32)
+    qd_target[joint_index] = 0.25
     command = layer.build_mit_commands(
         q_target,
         phase="stand",
+        joint_velocity_target=qd_target,
         feedback_by_joint={
             joint_name: {
                 "position_raw": 0.0,
@@ -743,6 +766,7 @@ def test_configured_pose_path_uses_official_physical_gain_units():
     assert layer.pose_pd_torque_limits()["stand"] == pytest.approx(100.0)
     assert command["command_encoding"] == "official"
     assert command["q_des"] == pytest.approx(0.40)
+    assert command["joint_v_des"] == pytest.approx(0.25)
     assert not command["torque_limited"]
     assert command["kp"] == pytest.approx(110.0)
     assert command["kd"] == pytest.approx(4.0)

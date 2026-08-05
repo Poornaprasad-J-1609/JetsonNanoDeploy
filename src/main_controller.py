@@ -267,12 +267,28 @@ def runtime_stand_command_phase(policy_has_started, walking_armed):
 
 def synchronized_pose_trajectory(start, target, elapsed_s, duration_s):
     """Interpolate every joint with one smooth phase so they finish together."""
+    position, _, alpha = synchronized_pose_trajectory_state(
+        start,
+        target,
+        elapsed_s,
+        duration_s,
+    )
+    return position, alpha
+
+
+def synchronized_pose_trajectory_state(start, target, elapsed_s, duration_s):
+    """Return synchronized smoothstep position and analytic velocity targets."""
     start = np.asarray(start, dtype=np.float32)
     target = np.asarray(target, dtype=np.float32)
     duration_s = max(float(duration_s), 1.0e-6)
     alpha = float(np.clip(float(elapsed_s) / duration_s, 0.0, 1.0))
     blend = smoothstep(alpha)
-    return (start + blend * (target - start)).astype(np.float32), alpha
+    blend_rate = 6.0 * alpha * (1.0 - alpha) / duration_s
+    position = (start + blend * (target - start)).astype(np.float32)
+    velocity = (blend_rate * (target - start)).astype(np.float32)
+    if alpha >= 1.0:
+        velocity.fill(0.0)
+    return position, velocity, alpha
 
 
 def fake_start_pose_array(runner, name):
@@ -4074,6 +4090,7 @@ def run_policy_loop(
     pose_transition_mode = None
     pose_transition_start = np.asarray(q_previous_target, dtype=np.float32).copy()
     pose_transition_target = pose_transition_start.copy()
+    pose_transition_velocity_target = np.zeros_like(pose_transition_start)
     pose_transition_elapsed_s = 0.0
     pose_transition_duration_s = float(pose_transition_min_seconds)
 
@@ -4125,14 +4142,16 @@ def run_policy_loop(
 
     def current_pose_transition_target(mode_name, current_step):
         nonlocal pose_transition_mode
+        nonlocal pose_transition_velocity_target
         if pose_transition_mode != mode_name:
             begin_pose_transition(mode_name, q_previous_target, current_step)
-        target_q, _ = synchronized_pose_trajectory(
+        target_q, velocity_q, _ = synchronized_pose_trajectory_state(
             pose_transition_start,
             pose_transition_target,
             pose_transition_elapsed_s,
             pose_transition_duration_s,
         )
+        pose_transition_velocity_target = velocity_q
         return target_q
 
     print("\n" + "#" * 80)
@@ -4269,6 +4288,7 @@ def run_policy_loop(
         q_target,
         phase,
         feedback_by_joint=None,
+        joint_velocity_target=None,
         prelimit_q_target=None,
         gain_blend_from_phase=None,
         gain_blend_alpha=1.0,
@@ -4281,6 +4301,7 @@ def run_policy_loop(
             q_target,
             phase=phase,
             feedback_by_joint=feedback_by_joint,
+            joint_velocity_target=joint_velocity_target,
             prelimit_q_target=prelimit_q_target,
             gain_blend_from_phase=gain_blend_from_phase,
             gain_blend_alpha=gain_blend_alpha,
@@ -5172,6 +5193,7 @@ def run_policy_loop(
                 q_safe_target,
                 phase=stand_command_phase,
                 feedback_by_joint=fresh_feedback_for_commands,
+                joint_velocity_target=pose_transition_velocity_target,
                 gain_blend_from_phase=pose_gain_blend_from_phase,
                 gain_blend_alpha=pose_gain_blend_alpha,
             )
@@ -5195,6 +5217,7 @@ def run_policy_loop(
                 q_safe_target,
                 phase="sit",
                 feedback_by_joint=fresh_feedback_for_commands,
+                joint_velocity_target=pose_transition_velocity_target,
                 gain_blend_from_phase=pose_gain_blend_from_phase,
                 gain_blend_alpha=pose_gain_blend_alpha,
             )
