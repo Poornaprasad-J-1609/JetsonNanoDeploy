@@ -744,10 +744,10 @@ def test_configured_pose_path_uses_official_physical_gain_units():
     assert command["command_encoding"] == "official"
     assert command["q_des"] == pytest.approx(0.40)
     assert not command["torque_limited"]
-    assert command["kp"] == pytest.approx(50.0)
-    assert command["kd"] == pytest.approx(1.8)
-    assert command["kp_effective"] == pytest.approx(50.0, abs=0.1)
-    assert command["kd_effective"] == pytest.approx(1.8, abs=0.01)
+    assert command["kp"] == pytest.approx(110.0)
+    assert command["kd"] == pytest.approx(4.0)
+    assert command["kp_effective"] == pytest.approx(110.0, abs=0.1)
+    assert command["kd_effective"] == pytest.approx(4.0, abs=0.01)
 
 
 def test_policy_and_pose_use_official_physical_gains():
@@ -785,8 +785,8 @@ def test_policy_and_pose_use_official_physical_gains():
     assert policy_command["kp_effective"] == pytest.approx(110.0, abs=0.1)
     assert policy_command["kd_effective"] == pytest.approx(6.5, abs=0.01)
     assert pose_command["command_encoding"] == "official"
-    assert pose_command["kp_effective"] == pytest.approx(75.0, abs=0.1)
-    assert pose_command["kd_effective"] == pytest.approx(1.8, abs=0.01)
+    assert pose_command["kp_effective"] == pytest.approx(110.0, abs=0.1)
+    assert pose_command["kd_effective"] == pytest.approx(4.0, abs=0.01)
 
     back_joint = "BL_calf_joint"
     back_command = MotorCommandLayer(
@@ -920,11 +920,11 @@ def test_pose_recovery_blends_effective_policy_gains_without_a_gain_step(
     assert recovery_start["gain_blend_from_phase"] == "policy"
     assert recovery_start["kp_effective"] == pytest.approx(110.0, abs=0.2)
     assert recovery_start["kd_effective"] == pytest.approx(6.5, abs=0.02)
-    assert recovery_middle["kp_effective"] == pytest.approx(92.5, abs=0.2)
-    assert recovery_middle["kd_effective"] == pytest.approx(4.15, abs=0.02)
+    assert recovery_middle["kp_effective"] == pytest.approx(110.0, abs=0.2)
+    assert recovery_middle["kd_effective"] == pytest.approx(5.25, abs=0.02)
     assert recovery_end["gain_blend_from_phase"] is None
-    assert recovery_end["kp_effective"] == pytest.approx(75.0, abs=0.2)
-    assert recovery_end["kd_effective"] == pytest.approx(1.8, abs=0.02)
+    assert recovery_end["kp_effective"] == pytest.approx(110.0, abs=0.2)
+    assert recovery_end["kd_effective"] == pytest.approx(4.0, abs=0.02)
 
 
 def test_policy_entry_policy_gains_remain_inside_policy_torque_limit():

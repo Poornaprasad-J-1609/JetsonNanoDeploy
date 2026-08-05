@@ -87,8 +87,10 @@ args=(
     --measured-torque-soft-hip 100.0
     --measured-torque-soft-thigh 100.0
     --measured-torque-soft-calf 100.0
-    --pose-transition-speed-rad-s 0.55
-    --pose-transition-min-seconds 1.2
+    # The Aug 5 pose log showed clean monotonic targets but underdamped loaded
+    # tracking. Keep the shared transition phase and reduce its peak speed.
+    --pose-transition-speed-rad-s 0.40
+    --pose-transition-min-seconds 1.5
     --pose-pd-torque-limit 100
     --stand-ready-error-rad 0.25
     --stand-ready-velocity-rad-s 0.15

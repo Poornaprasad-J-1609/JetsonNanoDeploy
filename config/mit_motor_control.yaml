@@ -66,25 +66,25 @@ gains:
   # operation-control range.
   startup:
     hip:
-      kp: 75.0
-      kd: 1.8
+      kp: 80.0
+      kd: 4.0
     thigh:
-      kp: 50.0
-      kd: 1.8
+      kp: 110.0
+      kd: 4.0
     calf:
-      kp: 75.0
-      kd: 1.8
+      kp: 110.0
+      kd: 4.0
 
   hold:
     hip:
-      kp: 75.0
-      kd: 1.8
+      kp: 80.0
+      kd: 4.0
     thigh:
-      kp: 50.0
-      kd: 1.8
+      kp: 110.0
+      kd: 4.0
     calf:
-      kp: 75.0
-      kd: 1.8
+      kp: 110.0
+      kd: 4.0
 
   policy:
     hip:
