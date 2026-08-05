@@ -806,6 +806,7 @@ class MotorCommandLayer:
         phase="policy",
         feedback_by_joint=None,
         joint_velocity_target=None,
+        joint_feedforward_torque_target=None,
         prelimit_q_target=None,
         gain_blend_from_phase=None,
         gain_blend_alpha=1.0,
@@ -844,6 +845,21 @@ class MotorCommandLayer:
                 )
             if not np.all(np.isfinite(joint_velocity_target)):
                 raise ValueError("joint_velocity_target contains NaN or Inf")
+        if joint_feedforward_torque_target is not None:
+            joint_feedforward_torque_target = np.asarray(
+                joint_feedforward_torque_target,
+                dtype=np.float32,
+            )
+            if joint_feedforward_torque_target.shape != q_target.shape:
+                raise ValueError(
+                    "joint_feedforward_torque_target has shape "
+                    f"{list(joint_feedforward_torque_target.shape)}, expected "
+                    f"{list(q_target.shape)}"
+                )
+            if not np.all(np.isfinite(joint_feedforward_torque_target)):
+                raise ValueError(
+                    "joint_feedforward_torque_target contains NaN or Inf"
+                )
         if previous_command_q is not None:
             previous_command_q = np.asarray(previous_command_q, dtype=np.float32)
             if previous_command_q.shape != q_target.shape:
@@ -1052,6 +1068,11 @@ class MotorCommandLayer:
                     )
             joint_tau_ff = (
                 float(self.feedforward["tau_ff"])
+                + (
+                    0.0
+                    if joint_feedforward_torque_target is None
+                    else float(joint_feedforward_torque_target[i])
+                )
                 + joint_limit_preload_tau_ff
             )
             joint_tau_ff_effective = self._effective_signed_wire_value(

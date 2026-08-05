@@ -129,6 +129,27 @@ feedforward:
   tau_ff: 0.0
   v_des: 0.0
 
+# Smooth gravity-support bias measured from the stable tail of the Aug 5
+# loaded stand. Values are 75% of the observed equilibrium torque, leaving the
+# remaining load to PD feedback. The controller blends this map with the same
+# smooth phase used by sit/stand and keeps total estimated torque below the
+# common 100 Nm phase limit.
+pose_support:
+  enabled: true
+  stand_joint_tau_ff:
+    BL_hip_joint: -1.30
+    BR_hip_joint: 6.70
+    FL_hip_joint: -1.83
+    FR_hip_joint: -4.35
+    BL_thigh_joint: 27.95
+    BR_thigh_joint: -24.52
+    FL_thigh_joint: 7.82
+    FR_thigh_joint: -17.81
+    BL_calf_joint: -24.80
+    BR_calf_joint: 38.24
+    FL_calf_joint: -6.44
+    FR_calf_joint: 13.87
+
 # Isaac/MuJoCo computes actuator torque from the raw policy target before the
 # physical joint constraint is solved. On hardware we keep q_des inside the
 # measured envelope and reproduce only that discarded position error as a

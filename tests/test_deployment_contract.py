@@ -774,6 +774,51 @@ def test_configured_pose_path_uses_official_physical_gain_units():
     assert command["kd_effective"] == pytest.approx(4.0, abs=0.01)
 
 
+def test_loaded_pose_support_is_complete_and_enters_torque_budget():
+    runner = PolicyRunner()
+    motor_ids = load_yaml(ROOT / "config" / "motor_ids.yaml")["motor_ids"]
+    control_cfg = load_yaml(ROOT / "config" / "mit_motor_control.yaml")
+    support_cfg = control_cfg["pose_support"]
+
+    assert support_cfg["enabled"] is True
+    assert set(support_cfg["stand_joint_tau_ff"]) == set(runner.policy_order)
+
+    joint_name = "BR_calf_joint"
+    joint_index = runner.policy_order.index(joint_name)
+    support_tau = np.zeros(12, dtype=np.float32)
+    support_tau[joint_index] = support_cfg["stand_joint_tau_ff"][joint_name]
+    layer = MotorCommandLayer(
+        runner.policy_order,
+        motor_ids,
+        active_joints=[joint_name],
+        joint_can_bus=resolve_joint_can_bus(runner.policy_order, 1),
+    )
+    command = layer.build_mit_commands(
+        np.zeros(12, dtype=np.float32),
+        phase="stand",
+        joint_feedforward_torque_target=support_tau,
+        feedback_by_joint={
+            joint_name: {
+                "position_raw": 0.0,
+                "joint_position": 0.0,
+                "joint_velocity": 0.0,
+            }
+        },
+    )[0]
+
+    assert command["joint_tau_ff"] == pytest.approx(38.24, abs=1.0e-5)
+    assert command["tau_pd_est"] == pytest.approx(38.24, abs=0.05)
+    assert abs(command["tau_pd_est"]) < command["torque_limit_effective"]
+
+
+def test_pose_mode_handoff_preserves_last_transmitted_support_target():
+    controller_source = (ROOT / "src" / "main_controller.py").read_text(
+        encoding="utf-8"
+    )
+    assert "begin_pose_transition(control_mode, q_previous_target, step)" in controller_source
+    assert "begin_pose_transition(control_mode, q_current, step)" not in controller_source
+
+
 def test_policy_and_pose_use_official_physical_gains():
     runner = PolicyRunner()
     motor_ids = load_yaml(ROOT / "config" / "motor_ids.yaml")["motor_ids"]

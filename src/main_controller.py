@@ -4091,6 +4091,18 @@ def run_policy_loop(
     pose_transition_start = np.asarray(q_previous_target, dtype=np.float32).copy()
     pose_transition_target = pose_transition_start.copy()
     pose_transition_velocity_target = np.zeros_like(pose_transition_start)
+    pose_support_cfg = dict(motor_layer.cfg.get("pose_support", {}) or {})
+    pose_support_enabled = bool(pose_support_cfg.get("enabled", False))
+    pose_support_map = dict(pose_support_cfg.get("stand_joint_tau_ff", {}) or {})
+    pose_support_tau_target = np.asarray(
+        [float(pose_support_map.get(name, 0.0)) for name in runner.policy_order],
+        dtype=np.float32,
+    )
+    if not pose_support_enabled:
+        pose_support_tau_target.fill(0.0)
+    pose_support_scale = 1.0 if control_mode == "stand" else 0.0
+    pose_transition_support_start = pose_support_scale
+    pose_transition_support_target = pose_support_scale
     pose_transition_elapsed_s = 0.0
     pose_transition_duration_s = float(pose_transition_min_seconds)
 
@@ -4117,6 +4129,8 @@ def run_policy_loop(
         nonlocal pose_transition_target
         nonlocal pose_transition_elapsed_s
         nonlocal pose_transition_duration_s
+        nonlocal pose_transition_support_start
+        nonlocal pose_transition_support_target
 
         target_q = np.asarray(final_pose_target(mode_name), dtype=np.float32)
         start_q = np.asarray(start_q, dtype=np.float32).copy()
@@ -4133,6 +4147,8 @@ def run_policy_loop(
         pose_transition_target = target_q
         pose_transition_elapsed_s = 0.0
         pose_transition_duration_s = duration
+        pose_transition_support_start = float(pose_support_scale)
+        pose_transition_support_target = 1.0 if mode_name == "stand" else 0.0
         print(
             f"[POSE] synchronized {mode_name} transition: "
             f"distance={active_distance:.3f} rad duration={duration:.2f}s "
@@ -4143,15 +4159,21 @@ def run_policy_loop(
     def current_pose_transition_target(mode_name, current_step):
         nonlocal pose_transition_mode
         nonlocal pose_transition_velocity_target
+        nonlocal pose_support_scale
         if pose_transition_mode != mode_name:
             begin_pose_transition(mode_name, q_previous_target, current_step)
-        target_q, velocity_q, _ = synchronized_pose_trajectory_state(
+        target_q, velocity_q, alpha = synchronized_pose_trajectory_state(
             pose_transition_start,
             pose_transition_target,
             pose_transition_elapsed_s,
             pose_transition_duration_s,
         )
         pose_transition_velocity_target = velocity_q
+        pose_support_scale = (
+            pose_transition_support_start
+            + smoothstep(alpha)
+            * (pose_transition_support_target - pose_transition_support_start)
+        )
         return target_q
 
     print("\n" + "#" * 80)
@@ -4289,6 +4311,7 @@ def run_policy_loop(
         phase,
         feedback_by_joint=None,
         joint_velocity_target=None,
+        joint_feedforward_torque_target=None,
         prelimit_q_target=None,
         gain_blend_from_phase=None,
         gain_blend_alpha=1.0,
@@ -4302,6 +4325,7 @@ def run_policy_loop(
             phase=phase,
             feedback_by_joint=feedback_by_joint,
             joint_velocity_target=joint_velocity_target,
+            joint_feedforward_torque_target=joint_feedforward_torque_target,
             prelimit_q_target=prelimit_q_target,
             gain_blend_from_phase=gain_blend_from_phase,
             gain_blend_alpha=gain_blend_alpha,
@@ -4825,7 +4849,11 @@ def run_policy_loop(
                     last_walk_command_step = -10**9
                     walk_stop_candidate_step = -1
                 if control_mode in ("stand", "sit"):
-                    begin_pose_transition(control_mode, q_current, step)
+                    # Preserve the last transmitted target across pose changes.
+                    # Starting from the sagged measured pose would erase the
+                    # supporting PD error and briefly unload a weight-bearing
+                    # leg before the new trajectory rebuilt that error.
+                    begin_pose_transition(control_mode, q_previous_target, step)
                 else:
                     pose_transition_mode = None
                     scheduler.request_resync(f"{control_mode} mode initialized")
@@ -5194,6 +5222,9 @@ def run_policy_loop(
                 phase=stand_command_phase,
                 feedback_by_joint=fresh_feedback_for_commands,
                 joint_velocity_target=pose_transition_velocity_target,
+                joint_feedforward_torque_target=(
+                    pose_support_scale * pose_support_tau_target
+                ),
                 gain_blend_from_phase=pose_gain_blend_from_phase,
                 gain_blend_alpha=pose_gain_blend_alpha,
             )
@@ -5218,6 +5249,9 @@ def run_policy_loop(
                 phase="sit",
                 feedback_by_joint=fresh_feedback_for_commands,
                 joint_velocity_target=pose_transition_velocity_target,
+                joint_feedforward_torque_target=(
+                    pose_support_scale * pose_support_tau_target
+                ),
                 gain_blend_from_phase=pose_gain_blend_from_phase,
                 gain_blend_alpha=pose_gain_blend_alpha,
             )
@@ -5303,6 +5337,13 @@ def run_policy_loop(
                 (not bool(exact_policy_after_entry) and not policy_sim_match)
                 or float(policy_entry_scale) < 0.999
             )
+            # Keep the loaded stand supported while actor targets take over,
+            # then remove the pose-only gravity bias with the existing smooth
+            # policy-entry ramp. This avoids a support-torque discontinuity.
+            policy_pose_support_tau = (
+                max(0.0, 1.0 - float(policy_entry_scale))
+                * pose_support_tau_target
+            )
             # Blend only the position target during policy entry. All phases
             # now use official physical gain units; policy impedance starts on
             # the first actor packet and pose recovery blends gains explicitly.
@@ -5338,6 +5379,7 @@ def run_policy_loop(
                     q_safe_target,
                     phase="policy",
                     feedback_by_joint=fresh_feedback_for_commands,
+                    joint_feedforward_torque_target=policy_pose_support_tau,
                     prelimit_q_target=q_policy_target,
                     previous_command_q=q_previous_target,
                     max_command_delta=safety.dq_max,
@@ -5458,6 +5500,7 @@ def run_policy_loop(
                         q_safe_target,
                         phase="policy",
                         feedback_by_joint=fresh_feedback_for_commands,
+                        joint_feedforward_torque_target=policy_pose_support_tau,
                         prelimit_q_target=q_policy_target,
                         previous_command_q=q_previous_target,
                         max_command_delta=safety.dq_max,
