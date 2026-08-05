@@ -62,8 +62,11 @@ args=(
     # Observation slots 36:48 always retain the previous raw actor output,
     # matching the Isaac training contract.
     --policy-hip-action-scale 0.30
-    --policy-action-smoothing 0.35
-    --policy-action-delta-limit 0.20
+    # Keep deployment conditioning inside the range used to train model_11078.
+    # The previous 0.35/0.20 pair attenuated nearly every actor update in the
+    # Aug 5 walk log and made the already low-speed command look stationary.
+    --policy-action-smoothing 0.20
+    --policy-action-delta-limit 0.30
     --policy-entry-ramp-seconds 2.0
     # Keep motor-facing conditioning enabled after policy entry. This switch
     # controls target filtering only; previous_action remains the raw actor.
