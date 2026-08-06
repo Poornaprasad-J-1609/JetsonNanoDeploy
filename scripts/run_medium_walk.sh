@@ -56,21 +56,15 @@ args=(
     --policy-command-vx-max 0.20
     --policy-command-vy-max 0.12
     --policy-command-yaw-max 0
-    --policy-action-clip 3.2
-    # The Aug 1 loaded runs showed 0.50-0.62 rad real hip travel versus
-    # 0.24-0.36 rad in simulation. Reduce only the motor-facing hip action.
-    # Observation slots 36:48 always retain the previous raw actor output,
-    # matching the Isaac training contract.
-    --policy-hip-action-scale 0.30
-    # Keep deployment conditioning inside the range used to train model_11078.
-    # The previous 0.35/0.20 pair attenuated nearly every actor update in the
-    # Aug 5 walk log and made the already low-speed command look stationary.
-    --policy-action-smoothing 0.20
-    --policy-action-delta-limit 0.30
+    # Preserve the validated actor-to-target equation after policy entry.
+    # A two-second position blend handles takeover; physical joint and torque
+    # guards remain the final protection layer.
+    --policy-action-clip 0
+    --policy-hip-action-scale 1.0
+    --policy-action-smoothing 0
+    --policy-action-delta-limit 0
     --policy-entry-ramp-seconds 2.0
-    # Keep motor-facing conditioning enabled after policy entry. This switch
-    # controls target filtering only; previous_action remains the raw actor.
-    --no-exact-policy-after-entry
+    --exact-policy-after-entry
     # Use the requested common 100 Nm authority ceiling for every joint. This
     # does not command 100 Nm continuously; Kp/Kd and tracking error determine
     # actual torque. The independent measured-feedback stop remains at 110 Nm.

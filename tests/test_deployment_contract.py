@@ -175,13 +175,14 @@ def test_policy_contract_observation_and_action():
         base_ang_vel_b=np.array([0.1, -0.2, 0.3], dtype=np.float32),
         projected_gravity_b=np.array([0.0, 0.0, -1.0], dtype=np.float32),
         command=command,
-        q_current=runner.q_default.copy(),
+        q_current=runner.q_policy_reference.copy(),
         qd_current=np.zeros(12, dtype=np.float32),
         previous_action=previous,
     )
     assert obs.shape == (48,)
     np.testing.assert_array_equal(obs[0:3], np.zeros(3, dtype=np.float32))
     np.testing.assert_array_equal(obs[9:12], command)
+    np.testing.assert_array_equal(obs[12:24], np.zeros(12, dtype=np.float32))
     np.testing.assert_allclose(obs[36:48], previous)
 
     action = runner.infer_action(obs)
@@ -246,7 +247,7 @@ def test_live_imu_and_velocity_command_populate_exact_policy_slots():
         base_ang_vel_b=gyro,
         projected_gravity_b=gravity,
         command=command,
-        q_current=runner.q_default.copy(),
+        q_current=runner.q_policy_reference.copy(),
         qd_current=np.zeros(12, dtype=np.float32),
         previous_action=previous,
     )
@@ -263,7 +264,7 @@ def test_nonzero_base_linear_velocity_slots_are_rejected_before_inference():
         base_ang_vel_b=np.zeros(3, dtype=np.float32),
         projected_gravity_b=np.array([0.0, 0.0, -1.0], dtype=np.float32),
         command=np.zeros(3, dtype=np.float32),
-        q_current=runner.q_default,
+        q_current=runner.q_policy_reference,
         qd_current=np.zeros(12, dtype=np.float32),
         previous_action=np.zeros(12, dtype=np.float32),
     )
@@ -281,6 +282,27 @@ def test_uniform_action_scale_applies_in_grouped_policy_joint_order():
         np.full(12, 0.25, dtype=np.float32),
         atol=1.0e-7,
     )
+
+
+def test_calf_policy_reference_is_inside_one_sided_hardware_limits():
+    runner = PolicyRunner()
+    limits = load_yaml(ROOT / "config" / "joint_limits.yaml")["joint_limits"]
+
+    for joint_name in (
+        "BL_calf_joint",
+        "BR_calf_joint",
+        "FL_calf_joint",
+        "FR_calf_joint",
+    ):
+        index = runner.policy_order.index(joint_name)
+        value = float(runner.q_policy_reference[index])
+        lower = float(limits[joint_name]["min"])
+        upper = float(limits[joint_name]["max"])
+        assert min(value - lower, upper - value) == pytest.approx(
+            0.25,
+            abs=1.0e-7,
+        )
+        assert runner.q_stand[index] == pytest.approx(value)
 
 
 def test_policy_frame_origin_offsets_observation_and_motor_target_symmetrically():
@@ -1837,8 +1859,12 @@ def test_medium_walk_uses_loaded_per_joint_support_profile():
         encoding="utf-8"
     )
     assert "--joint-velocity-source finite-difference" in launcher
-    assert "--no-exact-policy-after-entry" in launcher
-    assert "--policy-hip-action-scale 0.30" in launcher
+    assert "--exact-policy-after-entry" in launcher
+    assert "--no-exact-policy-after-entry" not in launcher
+    assert "--policy-action-clip 0" in launcher
+    assert "--policy-hip-action-scale 1.0" in launcher
+    assert "--policy-action-smoothing 0" in launcher
+    assert "--policy-action-delta-limit 0" in launcher
     assert "--torque-profile-stage stage100" in launcher
     assert "--acknowledge-100nm-loaded-ground-test" in launcher
     assert "--policy-pd-torque-profile" in launcher

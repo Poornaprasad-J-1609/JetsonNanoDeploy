@@ -1,6 +1,6 @@
-# The RobStride hardware zero is set once with the robot physically standing.
-# RL default and stand therefore stay exactly zero. Edit only crouch_pose to
-# tune the keyboard C target in this fixed stand-zero coordinate frame.
+# The RobStride hardware zero remains fixed. The policy uses a software stand
+# origin inside the calves' one-sided physical ranges, leaving useful target
+# authority on both sides of policy zero.
 # All values in this file use IsaacSim/URDF joint coordinates. Do not manually
 # invert hip or thigh signs here: config/motor_directions.yaml converts between
 # these policy coordinates and the real encoder/motor convention.
@@ -31,10 +31,10 @@ stand_pose:
   FL_thigh_joint: 0.0
   FR_thigh_joint: 0.0
 
-  BL_calf_joint: 0.0
-  BR_calf_joint: 0.0
-  FL_calf_joint: 0.0
-  FR_calf_joint: 0.0
+  BL_calf_joint: 0.25
+  BR_calf_joint: -0.25
+  FL_calf_joint: 0.25
+  FR_calf_joint: -0.25
 
 crouch_pose:
   BL_hip_joint: 0.0
