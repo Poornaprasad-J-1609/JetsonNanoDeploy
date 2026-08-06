@@ -75,6 +75,36 @@ def socketcan_with_fake_bus(messages, fail_on_extra=False):
     return transport
 
 
+def test_socketcan_transport_state_exists_before_filter_configuration():
+    transport = SocketCan(channel="slcan0")
+    transport.send_raw = lambda can_id, data=b"": (int(can_id), bytes(data))
+
+    assert transport.send_raw_sequence([(0x101, b"\x01")]) == [
+        (0x101, b"\x01")
+    ]
+    transport.close()
+
+
+def test_feedback_filter_configuration_does_not_reset_transport_state():
+    class FilterBus:
+        def __init__(self):
+            self.filters = None
+
+        def set_filters(self, filters):
+            self.filters = filters
+
+    transport = SocketCan(channel="slcan0")
+    original_lock = transport._send_lock
+    transport.backpressure_events = 7
+    transport.bus = FilterBus()
+
+    transport.configure_feedback_filters()
+
+    assert transport.bus.filters
+    assert transport._send_lock is original_lock
+    assert transport.backpressure_events == 7
+
+
 def test_feedback_collector_returns_immediately_after_all_expected_ids():
     transport = socketcan_with_fake_bus(
         [FakeCanMessage(1), FakeCanMessage(2)],

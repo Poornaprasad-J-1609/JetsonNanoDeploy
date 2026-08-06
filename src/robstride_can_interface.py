@@ -251,6 +251,19 @@ class SocketCan:
         self.tx_retry_delay = float(max(0.0, tx_retry_delay))
         self.driver = None
         self.bus = None
+        self.tx_queue_len = None
+        self.last_sequence_duration_s = 0.0
+        self.max_sequence_duration_s = 0.0
+        self.last_frame_timings = []
+        self.backpressure_events = 0
+        self.last_sequence_backpressure_events = 0
+        self.transport_failed_batches = 0
+        self.transport_qualification_failed = False
+        self._last_tx_stall_warning_s = -float("inf")
+        self._send_lock = threading.Lock()
+        self._periodic_tasks = {}
+        self._periodic_frames = {}
+        self._periodic_period_s = None
 
     def configure_feedback_filters(self, communication_types=(2, 24)):
         """Discard SLCAN transmit echoes before they reach the Python reader."""
@@ -266,19 +279,6 @@ class SocketCan:
             for comm_type in communication_types
         ]
         self.bus.set_filters(filters)
-        self.tx_queue_len = None
-        self.last_sequence_duration_s = 0.0
-        self.max_sequence_duration_s = 0.0
-        self.last_frame_timings = []
-        self.backpressure_events = 0
-        self.last_sequence_backpressure_events = 0
-        self.transport_failed_batches = 0
-        self.transport_qualification_failed = False
-        self._last_tx_stall_warning_s = -float("inf")
-        self._send_lock = threading.Lock()
-        self._periodic_tasks = {}
-        self._periodic_frames = {}
-        self._periodic_period_s = None
 
     def open(self):
         from robstride_dynamics import RobstrideBus
