@@ -149,7 +149,7 @@ def sample_policy(command, runner, safety):
         base_ang_vel_b=np.zeros(3, dtype=np.float32),
         projected_gravity_b=np.array([0.0, 0.0, -1.0], dtype=np.float32),
         command=effective_command,
-        q_current=runner.q_default,
+        q_current=runner.q_policy_reference,
         qd_current=np.zeros(len(runner.policy_order), dtype=np.float32),
         previous_action=np.zeros(len(runner.policy_order), dtype=np.float32),
     )
@@ -161,7 +161,7 @@ def sample_policy(command, runner, safety):
     # retain dq_max_per_step, while policy mode skips only that deploy-only slew.
     q_safe = safety.safety_filter(
         q_raw,
-        runner.q_default,
+        runner.q_policy_reference,
         apply_rate_limit=False,
         use_policy_limits=True,
     )
@@ -249,8 +249,8 @@ def check_motor_commands(
 def check_extreme_target_enforcement(runner, safety, motor_layer, limits):
     q_min, q_max, dq_max = array_limits_by_joint(runner, limits)
     signs = np.where(np.arange(len(runner.policy_order)) % 2 == 0, 1.0, -1.0).astype(np.float32)
-    q_extreme = runner.q_default + signs * 100.0
-    q_safe = safety.safety_filter(q_extreme, runner.q_default)
+    q_extreme = runner.q_policy_reference + signs * 100.0
+    q_safe = safety.safety_filter(q_extreme, runner.q_policy_reference)
 
     violations = []
     final_ok = within_limits(q_safe, q_min, q_max)
@@ -262,7 +262,7 @@ def check_extreme_target_enforcement(runner, safety, motor_layer, limits):
                     f"q={q_safe[i]:+.4f} outside [{q_min[i]:+.4f},{q_max[i]:+.4f}]"
                 )
 
-    dq = np.abs(q_safe - runner.q_default)
+    dq = np.abs(q_safe - runner.q_policy_reference)
     rate_ok = dq <= dq_max + EPS
     if safety.joint_rate_enabled and not bool(np.all(rate_ok)):
         for i, ok in enumerate(rate_ok):
@@ -336,7 +336,12 @@ def main():
     failures = []
     failures += check_observation_layout(runner)
     failures += check_imu_upright_frame()
-    failures += check_pose("default_pose", runner.q_default, runner, limits)
+    failures += check_pose(
+        "policy_reference_pose",
+        runner.q_policy_reference,
+        runner,
+        limits,
+    )
     failures += check_pose("stand_pose", runner.q_stand, runner, limits)
     failures += check_pose("crouch_pose", runner.q_crouch, runner, limits)
     print_control_limits()

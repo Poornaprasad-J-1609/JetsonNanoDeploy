@@ -232,6 +232,18 @@ class PolicyRunner:
             raise ValueError(
                 "The validated locomotion policy requires an all-zero default_pose"
             )
+        origin_cfg = self.joint_cfg.get("policy_frame_origin_pose")
+        if origin_cfg is None:
+            origin_cfg = {name: 0.0 for name in self.policy_order}
+        if not isinstance(origin_cfg, dict):
+            raise ValueError("policy_frame_origin_pose must be a joint-name mapping")
+        self.policy_frame_origin = self.pose_to_array(origin_cfg)
+        self.q_policy_reference = self.policy_frame_origin + self.q_default
+        if not np.allclose(self.q_stand, self.q_policy_reference, rtol=0.0, atol=1.0e-7):
+            raise ValueError(
+                "stand_pose must equal policy_frame_origin_pose + default_pose. "
+                "This keeps stand-to-policy takeover in the trained coordinate frame."
+            )
 
         self.observation_layout = self.joint_cfg["observation_layout"]
         self.policy_path = resolve_policy_path(self.root, policy_path=policy_path)
@@ -349,7 +361,7 @@ class PolicyRunner:
             "command": np.asarray(command, dtype=np.float32),
             "joint_pos_relative": (
                 self.policy_joint_signs
-                * (np.asarray(q_current, dtype=np.float32) - self.q_default)
+                * (np.asarray(q_current, dtype=np.float32) - self.q_policy_reference)
             ),
             "joint_vel": self.policy_joint_signs * np.asarray(qd_current, dtype=np.float32),
             "previous_action": np.asarray(previous_action, dtype=np.float32),
@@ -415,7 +427,7 @@ class PolicyRunner:
             )
         if not np.all(np.isfinite(action)):
             raise ValueError("Policy action contains NaN or Inf")
-        return self.q_default + self.action_scale * action
+        return self.q_policy_reference + self.action_scale * action
 
     def array_to_joint_dict(self, q):
         q = np.asarray(q, dtype=np.float32)
@@ -435,5 +447,7 @@ if __name__ == "__main__":
     for i, name in enumerate(runner.policy_order):
         print(f"{i:02d}: {name}")
     print("Q_DEFAULT:", runner.q_default)
+    print("POLICY_FRAME_ORIGIN:", runner.policy_frame_origin)
+    print("Q_POLICY_REFERENCE:", runner.q_policy_reference)
     print("Q_STAND:", runner.q_stand)
     print("Q_CROUCH:", runner.q_crouch)

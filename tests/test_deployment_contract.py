@@ -29,7 +29,9 @@ from main_controller import (
     PolicyTorqueRamp,
     action_equivalent_for_q_target,
     clip_policy_hip_actions,
+    imu_telemetry_fields,
     policy_previous_action_observation,
+    policy_prelimit_target_for_commands,
     compact_telemetry_record,
     constant_joint_map,
     requires_calf_endpoint_gate,
@@ -275,10 +277,77 @@ def test_uniform_action_scale_applies_in_grouped_policy_joint_order():
     action = np.ones(12, dtype=np.float32)
     target = runner.action_to_q_target(action)
     np.testing.assert_allclose(
-        target - runner.q_default,
+        target - runner.q_policy_reference,
         np.full(12, 0.25, dtype=np.float32),
         atol=1.0e-7,
     )
+
+
+def test_policy_frame_origin_offsets_observation_and_motor_target_symmetrically():
+    runner = PolicyRunner()
+    origin = np.linspace(-0.2, 0.2, 12, dtype=np.float32)
+    runner.policy_frame_origin = origin.copy()
+    runner.q_policy_reference = origin + runner.q_default
+    joint_delta = np.linspace(-0.1, 0.1, 12, dtype=np.float32)
+
+    obs = runner.build_observation(
+        base_ang_vel_b=np.zeros(3, dtype=np.float32),
+        projected_gravity_b=np.array([0.0, 0.0, -1.0], dtype=np.float32),
+        command=np.zeros(3, dtype=np.float32),
+        q_current=runner.q_policy_reference + joint_delta,
+        qd_current=np.zeros(12, dtype=np.float32),
+        previous_action=np.zeros(12, dtype=np.float32),
+    )
+    np.testing.assert_allclose(obs[12:24], joint_delta, atol=1.0e-7)
+
+    action = np.linspace(-0.5, 0.5, 12, dtype=np.float32)
+    target = runner.action_to_q_target(action)
+    np.testing.assert_allclose(
+        target,
+        runner.q_policy_reference + 0.25 * action,
+        atol=1.0e-7,
+    )
+    np.testing.assert_allclose(
+        action_equivalent_for_q_target(runner, target),
+        action,
+        atol=1.0e-7,
+    )
+
+
+def test_exact_policy_commands_do_not_request_virtual_stop_preload():
+    actor_target = np.linspace(-0.5, 0.5, 12, dtype=np.float32)
+    safe_target = np.clip(actor_target, -0.2, 0.2)
+
+    np.testing.assert_array_equal(
+        policy_prelimit_target_for_commands(actor_target, safe_target, True),
+        safe_target,
+    )
+    np.testing.assert_array_equal(
+        policy_prelimit_target_for_commands(actor_target, safe_target, False),
+        actor_target,
+    )
+
+
+def test_complete_imu_telemetry_includes_absolute_yaw_and_raw_gyro():
+    class Estimator:
+        base_ang_vel_b = np.array([0.10, -0.20, 0.30], dtype=np.float32)
+        last_imu_reading = ImuReading(
+            base_ang_vel_b=np.array([0.11, -0.22, 0.33], dtype=np.float32),
+            projected_gravity_b=np.array([0.0, 0.0, -1.0], dtype=np.float32),
+            base_lin_vel_b=np.zeros(3, dtype=np.float32),
+            timestamp=time.monotonic(),
+            quaternion_wxyz=np.array([0.9, 0.1, 0.2, 0.3], dtype=np.float32),
+            rpy_abs_deg=np.array([1.0, 2.0, 37.5], dtype=np.float32),
+        )
+
+    fields = imu_telemetry_fields(Estimator())
+    assert fields["imu_yaw_deg"] == pytest.approx(37.5)
+    assert fields["imu_gyro_raw_z"] == pytest.approx(0.33)
+    assert fields["imu_gyro_policy_z"] == pytest.approx(0.30)
+    assert fields["imu_quat_w"] == pytest.approx(0.9)
+    assert fields["imu_abs_rpy_yaw_deg"] == pytest.approx(37.5)
+    for field in fields:
+        assert field in CsvRunLogger.BASE_FIELDNAMES
 
 
 def test_imu_reading_quality_accepts_valid_and_rejects_bad_vectors():

@@ -49,7 +49,7 @@ def main():
         base_ang_vel_b=np.zeros(3, dtype=np.float32),
         projected_gravity_b=np.array([0.0, 0.0, -1.0], dtype=np.float32),
         command=command,
-        q_current=runner.q_default.copy(),
+        q_current=runner.q_policy_reference.copy(),
         qd_current=np.zeros(EXPECTED_ACTION_DIM, dtype=np.float32),
         previous_action=np.zeros(EXPECTED_ACTION_DIM, dtype=np.float32),
     )
@@ -76,14 +76,17 @@ def main():
     if not np.array_equal(obs[9:12], command):
         failures.append("velocity command slots do not match [vx, vy, yaw]")
     probe_action = np.linspace(-2.0, 2.0, EXPECTED_ACTION_DIM, dtype=np.float32)
-    expected_target = runner.q_default + 0.25 * probe_action
+    expected_target = runner.q_policy_reference + 0.25 * probe_action
     if not np.allclose(
         runner.action_to_q_target(probe_action),
         expected_target,
         rtol=0.0,
         atol=1.0e-7,
     ):
-        failures.append("action target formula is not q_default + 0.25 * raw_action")
+        failures.append(
+            "hardware action target formula is not "
+            "policy_frame_origin + q_default + 0.25 * raw_action"
+        )
 
     print("Policy:", runner.policy_path)
     print("SHA256:", runner.policy_sha256)
@@ -97,7 +100,10 @@ def main():
     print("[1,45] rejected:", not model_accepts_shape(runner.policy, 45))
     print("obs[0:3]:", obs[0:3].tolist())
     print("obs[9:12]:", obs[9:12].tolist())
-    print("Action target formula: q_default + 0.25 * raw_action")
+    print(
+        "Hardware action target formula: "
+        "policy_frame_origin + q_default + 0.25 * raw_action"
+    )
 
     if failures:
         print("\nPOLICY CONTRACT FAILED:")

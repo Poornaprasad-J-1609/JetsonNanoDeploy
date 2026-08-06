@@ -214,7 +214,7 @@ def print_joint_coordinate_contract(mapping, runner, estimator):
             f"{float(runner.q_stand[index]):+9.5f} "
             f"{route.encoder_offset:+9.5f} "
             f"{float(q_current[index]):+9.5f} "
-            f"{float(q_current[index] - runner.q_default[index]):+9.5f}"
+            f"{float(q_current[index] - runner.q_policy_reference[index]):+9.5f}"
         )
 
 
@@ -452,7 +452,24 @@ def action_equivalent_for_q_target(runner, q_target):
         )
     if not np.all(np.isfinite(q_target)):
         raise ValueError("q_target contains NaN or Inf")
-    return ((q_target - runner.q_default) / runner.action_scale).astype(np.float32)
+    return ((q_target - runner.q_policy_reference) / runner.action_scale).astype(np.float32)
+
+
+def policy_prelimit_target_for_commands(
+    q_policy_target,
+    q_safe_target,
+    exact_policy_after_entry,
+):
+    """Prevent exact-policy mode from synthesizing virtual-stop feedforward."""
+    q_policy_target = np.asarray(q_policy_target, dtype=np.float32)
+    q_safe_target = np.asarray(q_safe_target, dtype=np.float32)
+    if q_policy_target.shape != q_safe_target.shape:
+        raise ValueError("policy and safe targets must have identical shapes")
+    return (
+        q_safe_target.copy()
+        if bool(exact_policy_after_entry)
+        else q_policy_target.copy()
+    )
 
 
 def projected_gravity_to_roll_pitch(projected_gravity_b):
@@ -461,6 +478,47 @@ def projected_gravity_to_roll_pitch(projected_gravity_b):
     # produces positive gravity-X. These signs match IsaacLab and the Xsens
     # world-from-body quaternion conversion in imu_interface.py.
     return policy_frame_roll_pitch_from_gravity(projected_gravity_b)
+
+
+def imu_telemetry_fields(estimator):
+    """Return raw and policy-frame IMU telemetry in every controller mode."""
+    reading = getattr(estimator, "last_imu_reading", None)
+
+    def vector(value, length):
+        if value is None:
+            return None
+        arr = np.asarray(value, dtype=np.float32).reshape(-1)
+        if arr.shape != (length,) or not np.all(np.isfinite(arr)):
+            return None
+        return arr
+
+    policy_gyro = vector(getattr(estimator, "base_ang_vel_b", None), 3)
+    raw_gyro = vector(
+        None if reading is None else getattr(reading, "base_ang_vel_b", None),
+        3,
+    )
+    quat = vector(
+        None if reading is None else getattr(reading, "quaternion_wxyz", None),
+        4,
+    )
+    rpy = vector(
+        None if reading is None else getattr(reading, "rpy_abs_deg", None),
+        3,
+    )
+
+    fields = {}
+    for prefix, values, names in (
+        ("imu_gyro_raw", raw_gyro, ("x", "y", "z")),
+        ("imu_gyro_policy", policy_gyro, ("x", "y", "z")),
+        ("imu_quat", quat, ("w", "x", "y", "z")),
+        ("imu_abs_rpy", rpy, ("roll_deg", "pitch_deg", "yaw_deg")),
+    ):
+        for index, name in enumerate(names):
+            fields[f"{prefix}_{name}"] = (
+                None if values is None else float(values[index])
+            )
+    fields["imu_yaw_deg"] = None if rpy is None else float(rpy[2])
+    return fields
 
 
 def imu_posture_correction(projected_gravity_b, policy_order, cfg):
@@ -1409,6 +1467,7 @@ def compact_telemetry_record(
         "tracking_error_max": "",
         "policy_authority_loss_max": "",
     }
+    record.update(imu_telemetry_fields(estimator))
     if tau_fb is not None:
         record["tau_fb"] = float(tau_fb[0])
         record["tau_fb_max"] = float(tau_fb[1])
@@ -2021,6 +2080,20 @@ class CsvRunLogger:
         "gravity_z",
         "imu_roll_deg",
         "imu_pitch_deg",
+        "imu_yaw_deg",
+        "imu_gyro_raw_x",
+        "imu_gyro_raw_y",
+        "imu_gyro_raw_z",
+        "imu_gyro_policy_x",
+        "imu_gyro_policy_y",
+        "imu_gyro_policy_z",
+        "imu_quat_w",
+        "imu_quat_x",
+        "imu_quat_y",
+        "imu_quat_z",
+        "imu_abs_rpy_roll_deg",
+        "imu_abs_rpy_pitch_deg",
+        "imu_abs_rpy_yaw_deg",
         "imu_correction_abs_max",
         "act_max",
         "tau_cmd",
@@ -2115,6 +2188,7 @@ class CsvRunLogger:
         "runtime_control_hz",
         "policy_action_scale",
         "policy_action_formula",
+        "policy_frame_origin",
         "exact_policy_after_entry",
         "previous_action_source",
         "can_topology",
@@ -3530,7 +3604,10 @@ def run_joint_routing_test(
     )
 
     motor_layer.set_policy_pd_torque_limit(torque_limit_nm)
-    fallback = np.asarray(getattr(estimator, "q_current", runner.q_default), dtype=np.float32)
+    fallback = np.asarray(
+        getattr(estimator, "q_current", runner.q_policy_reference),
+        dtype=np.float32,
+    )
     (
         q_hold,
         feedback_count,
@@ -5380,7 +5457,11 @@ def run_policy_loop(
                     phase="policy",
                     feedback_by_joint=fresh_feedback_for_commands,
                     joint_feedforward_torque_target=policy_pose_support_tau,
-                    prelimit_q_target=q_policy_target,
+                    prelimit_q_target=policy_prelimit_target_for_commands(
+                        q_policy_target,
+                        q_safe_target,
+                        exact_policy_after_entry=exact_policy_after_entry,
+                    ),
                     previous_command_q=q_previous_target,
                     max_command_delta=safety.dq_max,
                 )
@@ -7542,11 +7623,17 @@ def main():
         f"ramp={float(args.policy_torque_ramp_seconds):.2f}s",
         f"require_clean={bool(args.policy_torque_ramp_require_clean)}",
     )
+    if args.exact_policy_after_entry:
+        virtual_stop_status = "suppressed after exact-policy entry"
+    else:
+        virtual_stop_status = (
+            "enabled" if motor_layer.virtual_joint_stop_enabled else "disabled"
+        )
     print(
         "Virtual joint-stop preload:",
-        "enabled" if motor_layer.virtual_joint_stop_enabled else "disabled",
+        virtual_stop_status,
         f"max={motor_layer.virtual_joint_stop_max_preload_nm:.2f} Nm",
-        "(policy only; fresh feedback required)",
+        "(conditioned policy path only; fresh feedback required)",
     )
     pose_torque_limits = motor_layer.pose_pd_torque_limits()
     if args.pose_pd_torque_limit > 0.0:
@@ -7602,6 +7689,8 @@ def main():
     print("Policy hash verified:", runner.policy_hash_matches)
     print("Policy format:", runner.policy_format)
     print("Policy obs/actions:", runner.observation_dim, runner.action_dim)
+    print("Policy frame origin:", runner.policy_frame_origin.tolist())
+    print("Policy reference pose:", runner.q_policy_reference.tolist())
     print("Policy Torch CPU threads:", runner.torch_thread_count)
     print(
         "Control rate:",
@@ -7686,7 +7775,13 @@ def main():
                 "command_line": " ".join(sys.argv),
                 "runtime_control_hz": f"{runtime_control_hz:.6f}",
                 "policy_action_scale": f"{runner.action_scale:.6f}",
-                "policy_action_formula": "q_default + 0.25 * raw_action",
+                "policy_action_formula": (
+                    "policy_frame_origin + q_default + 0.25 * raw_action"
+                ),
+                "policy_frame_origin": json.dumps(
+                    [float(value) for value in runner.policy_frame_origin],
+                    separators=(",", ":"),
+                ),
                 "policy_hip_action_clip": f"{args.policy_hip_action_clip:.6f}",
                 "policy_hip_action_scale": f"{args.policy_hip_action_scale:.6f}",
                 "exact_policy_after_entry": str(bool(args.exact_policy_after_entry)),
@@ -7808,7 +7903,7 @@ def main():
                 imu_sensor=imu_sensor,
                 imu_filter_cfg=imu_policy_filter_cfg,
                 pose_references={
-                    "default": runner.q_default,
+                    "default": runner.q_policy_reference,
                     "stand": runner.q_stand,
                     "crouch": runner.q_crouch,
                 },

@@ -1,7 +1,27 @@
 control_dt: 0.02
-# Exact JointPositionAction scale used by the validated locomotion policy:
-# q_target = q_default + 0.25 * raw_action.
+# Exact JointPositionAction scale used by the validated locomotion policy.
+# In policy coordinates: q_target = q_default + 0.25 * raw_action.
+# At the hardware boundary policy_frame_origin_pose is added once.
 policy_action_scale: 0.25
+
+# Hardware joint-coordinate pose that represents the policy's zero/default
+# frame. Keep this at zero for the currently validated all-zero checkpoint.
+# For a newly trained interior-default policy, write the measured load-bearing
+# stand pose here and to stand_pose in config/default_pose.yaml; the RobStride
+# hardware zero does not need to be changed.
+policy_frame_origin_pose:
+  BL_hip_joint: 0.0
+  BR_hip_joint: 0.0
+  FL_hip_joint: 0.0
+  FR_hip_joint: 0.0
+  BL_thigh_joint: 0.0
+  BR_thigh_joint: 0.0
+  FL_thigh_joint: 0.0
+  FR_thigh_joint: 0.0
+  BL_calf_joint: 0.0
+  BR_calf_joint: 0.0
+  FL_calf_joint: 0.0
+  FR_calf_joint: 0.0
 
 # Policy output/observation joint order.
 #
