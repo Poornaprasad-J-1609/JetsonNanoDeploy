@@ -92,11 +92,6 @@ def main():
         print(f"FAIL: policy control_dt is {runner.control_dt}, expected 0.02")
         return 2
 
-    four_bar_cfg = load_yaml(ROOT / "config" / "four_bar_transmission.yaml")
-    if bool(four_bar_cfg["four_bar_transmission"].get("enabled", False)):
-        print("FAIL: four-bar transmission is enabled; replay expects 1:1 path")
-        return 2
-
     motor_cfg = load_yaml(ROOT / "config" / "motor_ids.yaml")
     motor_layer = MotorCommandLayer(
         runner.policy_order,

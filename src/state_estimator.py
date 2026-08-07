@@ -286,42 +286,19 @@ class MitFeedbackStateEstimator(FakeStateEstimator):
             velocity_raw = float(feedback["velocity"])
             torque_raw = float(feedback["torque"])
 
-            if hasattr(self.motor_layer, "decode_joint_feedback"):
-                mapped = self.motor_layer.decode_joint_feedback(
-                    joint_name=joint_name,
-                    position_raw=position_raw,
-                    velocity_raw=velocity_raw,
-                    torque_raw=torque_raw,
-                )
-                q_joint = float(mapped["joint_position"])
-                qd_joint = float(mapped["joint_velocity"])
-                tau_joint = float(mapped["joint_torque"])
-                motor_position = float(mapped["motor_position"])
-                motor_velocity = float(mapped["motor_velocity"])
-                motor_torque = float(mapped["motor_torque"])
-                transmission_jacobian = float(
-                    mapped["transmission_jacobian"]
-                )
-                transmission_efficiency = float(
-                    mapped["transmission_efficiency"]
-                )
-                transmission_enabled = bool(
-                    mapped["transmission_enabled"]
-                )
-            else:
-                q_joint = motor_position_to_joint_angle(
-                    position_raw,
-                    offset=offset,
-                    direction=direction,
-                )
-                qd_joint = direction * velocity_raw
-                tau_joint = direction * torque_raw
-                motor_position = q_joint
-                motor_velocity = qd_joint
-                motor_torque = tau_joint
-                transmission_jacobian = 1.0
-                transmission_efficiency = 1.0
-                transmission_enabled = False
+            q_joint = motor_position_to_joint_angle(
+                position_raw,
+                offset=offset,
+                direction=direction,
+            )
+            qd_joint = direction * velocity_raw
+            tau_joint = direction * torque_raw
+            motor_position = q_joint
+            motor_velocity = qd_joint
+            motor_torque = tau_joint
+            transmission_jacobian = 1.0
+            transmission_efficiency = 1.0
+            transmission_enabled = False
 
             qd_mit = float(qd_joint)
             previous_q = self._previous_position_by_joint.get(joint_name)

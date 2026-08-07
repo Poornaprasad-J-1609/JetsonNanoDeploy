@@ -1794,11 +1794,6 @@ def test_runtime_hold_does_not_clear_can_stream_before_snapshot():
     assert 'can_streamer is not None and mode_request != "hold"' in source
 
 
-def test_four_bar_transmission_is_inactive():
-    cfg = load_yaml(ROOT / "config" / "four_bar_transmission.yaml")
-    assert cfg["four_bar_transmission"]["enabled"] is False
-
-
 def test_extended_can_id_and_mit_pack_decode_quantization():
     proto = load_yaml(ROOT / "config" / "mit_motor_control.yaml")["mit_protocol"]
     can_id = mit_can_id(0x7F, proto, tau_ff=0.25)

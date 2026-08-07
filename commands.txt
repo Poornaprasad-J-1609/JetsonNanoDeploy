@@ -227,7 +227,6 @@ hardware set-zero key so pressing s cannot write zero to the RobStride motors.
   --disable-set-zero-key \
   --disable-crouch-key \
   --gui-only
-  
 
 Keyboard while this command is running:
 

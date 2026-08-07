@@ -17,7 +17,6 @@ try:
 except ImportError as exc:
     raise ImportError("Install PyYAML first: pip3 install pyyaml") from exc
 
-from four_bar_motor_command_layer import FourBarMotorCommandLayer
 from motor_command_layer import (
     MotorCommandLayer as DirectMotorCommandLayer,
     decode_mit_feedback_frame,
@@ -193,36 +192,19 @@ def resolve_feedback_joint_positions(
         offset = float(layer.joint_offsets.get(joint_name, 0.0))
         direction = float(layer.joint_directions.get(joint_name, 1.0))
 
-        if hasattr(layer, "decode_joint_feedback"):
-            mapped = layer.decode_joint_feedback(
-                joint_name=joint_name,
-                position_raw=raw_position,
-                velocity_raw=velocity_raw,
-                torque_raw=torque_raw,
-            )
-            q_joint = float(mapped["joint_position"])
-            qd_joint = float(mapped["joint_velocity"])
-            tau_joint = float(mapped["joint_torque"])
-            motor_position = float(mapped["motor_position"])
-            motor_velocity = float(mapped["motor_velocity"])
-            motor_torque = float(mapped["motor_torque"])
-            transmission_jacobian = float(mapped["transmission_jacobian"])
-            transmission_efficiency = float(mapped["transmission_efficiency"])
-            transmission_enabled = bool(mapped["transmission_enabled"])
-        else:
-            q_joint = motor_position_to_joint_angle(
-                raw_position,
-                offset=offset,
-                direction=direction,
-            )
-            qd_joint = direction * velocity_raw
-            tau_joint = direction * torque_raw
-            motor_position = q_joint
-            motor_velocity = qd_joint
-            motor_torque = tau_joint
-            transmission_jacobian = 1.0
-            transmission_efficiency = 1.0
-            transmission_enabled = False
+        q_joint = motor_position_to_joint_angle(
+            raw_position,
+            offset=offset,
+            direction=direction,
+        )
+        qd_joint = direction * velocity_raw
+        tau_joint = direction * torque_raw
+        motor_position = q_joint
+        motor_velocity = qd_joint
+        motor_torque = tau_joint
+        transmission_jacobian = 1.0
+        transmission_efficiency = 1.0
+        transmission_enabled = False
 
         joint_positions[joint_name] = q_joint
         feedback["position_raw"] = raw_position
@@ -240,7 +222,7 @@ def resolve_feedback_joint_positions(
         feedback["transmission_jacobian"] = transmission_jacobian
         feedback["transmission_efficiency"] = transmission_efficiency
         feedback["transmission_enabled"] = transmission_enabled
-
+    
 
 def estimate_pose_from_angles(joints, angles, poses):
     if not angles:
@@ -771,10 +753,6 @@ def main():
                         help="UDP port used by the GUI")
     parser.add_argument("--no-clear", action="store_true",
                         help="do not clear/redraw the terminal table")
-    parser.add_argument("--disable-four-bar-transmission", action="store_true",
-                        help="force direct motor-angle decoding")
-    parser.add_argument("--enable-four-bar-transmission", action="store_true",
-                        help="opt in to four-bar encoder decoding from config/four_bar_transmission.yaml")
     args = parser.parse_args()
     if not math.isclose(float(args.set_zero_value_rad), 0.0, abs_tol=1e-12):
         parser.error("--set-zero-value-rad must be 0.0 for persistent motor hardware zero")
@@ -795,28 +773,12 @@ def main():
     motor_ids = motor_cfg["motor_ids"]
     display_joints = connection_display_order(joints, motor_ids)
     joint_can_bus = resolve_joint_can_bus(policy_order, args.can_count)
-    use_four_bar = bool(args.enable_four_bar_transmission) and not bool(args.disable_four_bar_transmission)
-    layer_cls = FourBarMotorCommandLayer if use_four_bar else DirectMotorCommandLayer
-    try:
-        layer = layer_cls(
-            policy_order=policy_order,
-            motor_ids=motor_ids,
-            active_joints=joints,
-            joint_can_bus=joint_can_bus,
-        )
-    except Exception as exc:
-        if not use_four_bar:
-            raise
-        print("ERROR: four-bar transmission configuration is not usable:", exc)
-        print(
-            "For calibration-data collection, rerun this checker with "
-            "--disable-four-bar-transmission so it prints raw encoder/Motor th values."
-        )
-        print(
-            "For four-bar validation, fill at least 3 strictly monotonic "
-            "motor_angle_rad and knee_angle_rad samples in config/four_bar_transmission.yaml."
-        )
-        return 2
+    layer = DirectMotorCommandLayer(
+        policy_order=policy_order,
+        motor_ids=motor_ids,
+        active_joints=joints,
+        joint_can_bus=joint_can_bus,
+    )
     active_port_by_bus = ports_for_active_joints(
         port_by_bus,
         joint_can_bus,

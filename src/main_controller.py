@@ -39,7 +39,6 @@ from gait_diagnostics import (
 from joint_mapping import AuthoritativeJointMapping
 from gait_phase_analysis import classify_diagonal_trot
 from policy_qualification import (
-    calf_calibration_gate,
     replay_policy_csv,
     root_cause_report_lines,
 )
@@ -778,14 +777,6 @@ TORQUE_PROFILE_STAGES = {
     "stage36": (14.0, 36.0),
     "stage40": (14.0, 40.0),
 }
-
-
-def requires_calf_endpoint_gate(four_bar_enabled, final_torque_limits):
-    """Require linkage calibration only for an active nonlinear transmission."""
-    return bool(four_bar_enabled) and max(
-        (float(value) for value in final_torque_limits.values()),
-        default=0.0,
-    ) > 14.0
 
 
 def constant_joint_map(policy_order, value):
@@ -2744,7 +2735,7 @@ def run_calf_range_check(
     print("CALF RANGE CHECK: READ ONLY")
     print("################################################################################")
     print("No motor enable frames, MIT commands, pose commands, or policy commands are sent.")
-    print("This validates the current converted calf feedback and four-bar range.")
+    print("This validates the current converted calf feedback and joint range.")
 
     for _ in range(max(1, int(samples))):
         try:
@@ -2757,9 +2748,7 @@ def run_calf_range_check(
         except Exception as exc:
             print("\nERROR: calf feedback decode failed:", exc)
             print(
-                "If this is a four-bar range error, expand or recalibrate the measured "
-                "calf lookup before walking. For raw capture, use check_motor_connections "
-                "with four-bar disabled."
+                "Verify calf joint offsets/direction and encoder wiring before walking."
             )
             return False
 
@@ -6878,11 +6867,6 @@ def main():
         default="stage14",
     )
     parser.add_argument(
-        "--calf-calibration-recommendation",
-        default=str(ROOT / "config" / "calf_endpoint_recommendation.yaml"),
-        help="passive endpoint recommendation required for stages above stage14",
-    )
-    parser.add_argument(
         "--acknowledge-40nm-suspension-test",
         action="store_true",
         help="explicitly acknowledge a suspended stage40 test",
@@ -7275,10 +7259,6 @@ def main():
         active_joints=active_joints,
         joint_can_bus=joint_can_bus,
     )
-    four_bar_cfg = load_yaml(ROOT / "config" / "four_bar_transmission.yaml")
-    four_bar_enabled = bool(
-        (four_bar_cfg or {}).get("four_bar_transmission", {}).get("enabled", False)
-    )
     joint_mapping = AuthoritativeJointMapping(
         motor_ids=motor_ids,
         motor_directions=motor_layer.joint_directions,
@@ -7334,25 +7314,6 @@ def main():
                 joint_name: float(value) * float(args.policy_pd_torque_scale)
                 for joint_name, value in torque_final_by_joint.items()
             }
-    calibration_required = requires_calf_endpoint_gate(
-        four_bar_enabled,
-        torque_final_by_joint,
-    )
-    calibration_ok = True
-    calibration_reason = "not required for disabled nonlinear transmission"
-    if calibration_required:
-        calibration_ok, calibration_reason = calf_calibration_gate(
-            args.calf_calibration_recommendation,
-            joint_name="FL_calf_joint",
-        )
-        if not calibration_ok:
-            print("ERROR: torque stages above stage14 are locked.")
-            print("FL calf calibration gate:", calibration_reason)
-            print(
-                "Run scripts/calibrate_calf_endpoints.py passively and review "
-                "the recommendation before selecting stage18 or higher."
-            )
-            return 1
     try:
         validate_torque_profile(
             torque_start_by_joint,
@@ -7396,12 +7357,6 @@ def main():
         )
     except ValueError as exc:
         print("ERROR:", exc)
-        return 1
-    if four_bar_enabled:
-        print(
-            "ERROR: four-bar transmission is enabled, but this deployment "
-            "contract requires the active walking path to remain 1:1."
-        )
         return 1
     try:
         for bus_name, port in active_port_by_bus.items():
@@ -7607,7 +7562,6 @@ def main():
         print(line)
     print("CAN backend:", args.can_backend)
     print("CAN bitrate:", args.can_bitrate)
-    print("Four-bar transmission:", "enabled" if four_bar_enabled else "disabled")
     if args.can_backend == "serial-at" or any(
         str(port).startswith("/dev/tty") for port in port_by_bus.values()
     ):
