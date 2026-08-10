@@ -137,6 +137,10 @@ feedforward:
 # 14-38 Nm map that distorted the pose. The remaining load stays with PD.
 pose_support:
   enabled: true
+  # Keep the calibrated gravity bias during zero-command policy takeover and
+  # walking. This does not alter q_default or actor targets; it only prevents
+  # the loaded 50 kg body support from vanishing when entry reaches 100%.
+  policy_scale: 1.0
   stand_joint_tau_ff:
     BL_hip_joint: -1.30
     BR_hip_joint: 6.70

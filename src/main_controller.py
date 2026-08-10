@@ -3443,6 +3443,18 @@ def automatic_policy_takeover_requested(enabled, walking_armed, control_mode):
     return bool(enabled and walking_armed and control_mode == "stand")
 
 
+def policy_pose_support_scale(policy_entry_scale, support_floor):
+    """Blend pose support continuously from stand into its policy-mode floor."""
+    entry = float(policy_entry_scale)
+    floor = float(support_floor)
+    if not np.isfinite(entry) or not np.isfinite(floor):
+        raise ValueError("policy pose-support scales must be finite")
+    if floor < 0.0 or floor > 1.0:
+        raise ValueError("pose_support.policy_scale must be within 0.0..1.0")
+    entry = float(np.clip(entry, 0.0, 1.0))
+    return 1.0 - entry * (1.0 - floor)
+
+
 def constant_pose_like(runner, value):
     return np.full(len(runner.policy_order), float(value), dtype=np.float32)
 
@@ -4176,6 +4188,11 @@ def run_policy_loop(
     pose_transition_velocity_target = np.zeros_like(pose_transition_start)
     pose_support_cfg = dict(motor_layer.cfg.get("pose_support", {}) or {})
     pose_support_enabled = bool(pose_support_cfg.get("enabled", False))
+    policy_pose_support_floor = float(pose_support_cfg.get("policy_scale", 0.0))
+    if not np.isfinite(policy_pose_support_floor) or not (
+        0.0 <= policy_pose_support_floor <= 1.0
+    ):
+        raise ValueError("pose_support.policy_scale must be finite and within 0.0..1.0")
     pose_support_map = dict(pose_support_cfg.get("stand_joint_tau_ff", {}) or {})
     pose_support_tau_target = np.asarray(
         [float(pose_support_map.get(name, 0.0)) for name in runner.policy_order],
@@ -4347,6 +4364,7 @@ def run_policy_loop(
     print("suspension_status_seconds:", float(suspension_status_seconds))
     print("pose_transition_speed_rad_s:", float(pose_transition_speed_rad_s))
     print("pose_transition_min_seconds:", float(pose_transition_min_seconds))
+    print("policy_pose_support_scale:", float(policy_pose_support_floor))
     print("crouch_calibration_value:", float(crouch_calibration_value))
     print("stand_calibration_value:", float(stand_calibration_value))
     if stand_zero_pending:
@@ -5426,11 +5444,14 @@ def run_policy_loop(
                 (not bool(exact_policy_after_entry) and not policy_sim_match)
                 or float(policy_entry_scale) < 0.999
             )
-            # Keep the loaded stand supported while actor targets take over,
-            # then remove the pose-only gravity bias with the existing smooth
-            # policy-entry ramp. This avoids a support-torque discontinuity.
+            # Preserve a configured part of the measured loaded-stand support
+            # during policy control. This keeps q_default=0 while preventing
+            # the gravity bias from disappearing at the end of entry blending.
             policy_pose_support_tau = (
-                max(0.0, 1.0 - float(policy_entry_scale))
+                policy_pose_support_scale(
+                    policy_entry_scale,
+                    policy_pose_support_floor,
+                )
                 * pose_support_tau_target
             )
             # Blend only the position target during policy entry. All phases

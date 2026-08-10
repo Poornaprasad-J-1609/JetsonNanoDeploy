@@ -32,6 +32,7 @@ from main_controller import (
     clip_policy_hip_actions,
     imu_telemetry_fields,
     policy_previous_action_observation,
+    policy_pose_support_scale,
     policy_prelimit_target_for_commands,
     compact_telemetry_record,
     constant_joint_map,
@@ -873,6 +874,7 @@ def test_loaded_pose_support_is_complete_and_enters_torque_budget():
     support_cfg = control_cfg["pose_support"]
 
     assert support_cfg["enabled"] is True
+    assert support_cfg["policy_scale"] == pytest.approx(1.0)
     assert set(support_cfg["stand_joint_tau_ff"]) == set(runner.policy_order)
 
     joint_name = "BR_calf_joint"
@@ -902,6 +904,15 @@ def test_loaded_pose_support_is_complete_and_enters_torque_budget():
     assert command["tau_ff"] == pytest.approx(12.0, abs=0.05)
     assert command["tau_pd_est"] == pytest.approx(12.0, abs=0.05)
     assert abs(command["tau_pd_est"]) < command["torque_limit_effective"]
+
+
+def test_loaded_pose_support_remains_bumpless_through_policy_entry():
+    assert policy_pose_support_scale(0.0, 0.35) == pytest.approx(1.0)
+    assert policy_pose_support_scale(0.5, 0.35) == pytest.approx(0.675)
+    assert policy_pose_support_scale(1.0, 0.35) == pytest.approx(0.35)
+    assert policy_pose_support_scale(1.0, 1.0) == pytest.approx(1.0)
+    with pytest.raises(ValueError, match="policy_scale"):
+        policy_pose_support_scale(1.0, 1.01)
 
 
 def test_pose_mode_handoff_preserves_last_transmitted_support_target():
