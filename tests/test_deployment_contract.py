@@ -1925,7 +1925,7 @@ def test_medium_walk_uses_loaded_per_joint_support_profile():
     assert CAN_FEEDBACK_RECEIVE_EVERY_N_CYCLES == 2
 
 
-def test_mevius_style_launcher_uses_direct_actor_and_uniform_pd():
+def test_mevius_style_launcher_uses_direct_actor_and_simulation_pd():
     launcher = (ROOT / "scripts" / "run_mevius_style_walk.sh").read_text(
         encoding="utf-8"
     )
@@ -1937,8 +1937,8 @@ def test_mevius_style_launcher_uses_direct_actor_and_uniform_pd():
     assert "--policy-action-smoothing 0" in launcher
     assert "--policy-action-delta-limit 0" in launcher
     assert "--policy-entry-ramp-seconds 3.0" in launcher
-    assert "--policy-kp-override 50" in launcher
-    assert "--policy-kd-override 2" in launcher
+    assert "--policy-kp-override" not in launcher
+    assert "--policy-kd-override" not in launcher
 
 
 def test_hold_snapshot_uses_fresh_joint_feedback_without_waiting():
