@@ -6945,6 +6945,18 @@ def main():
             "config/control_limits.yaml, including per-joint limits"
         ),
     )
+    parser.add_argument(
+        "--policy-kp-override",
+        type=float,
+        default=None,
+        help="uniform physical RS04 Kp for policy mode; pose gains are unchanged",
+    )
+    parser.add_argument(
+        "--policy-kd-override",
+        type=float,
+        default=None,
+        help="uniform physical RS04 Kd for policy mode; pose gains are unchanged",
+    )
     parser.add_argument("--policy-pd-torque-limit-start", type=float, default=14.0)
     parser.add_argument("--policy-pd-torque-limit-final", type=float, default=14.0)
     parser.add_argument("--policy-torque-ramp-delay-seconds", type=float, default=2.0)
@@ -7371,6 +7383,13 @@ def main():
         active_joints=active_joints,
         joint_can_bus=joint_can_bus,
     )
+    try:
+        motor_layer.set_policy_gains(
+            kp=args.policy_kp_override,
+            kd=args.policy_kd_override,
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
     four_bar_cfg = load_yaml(ROOT / "config" / "four_bar_transmission.yaml")
     four_bar_enabled = bool(
         (four_bar_cfg or {}).get("four_bar_transmission", {}).get("enabled", False)
@@ -7600,6 +7619,11 @@ def main():
     print("Policy action smoothing:", f"{args.policy_action_smoothing:.2f}")
     print("Policy action delta limit:", f"{args.policy_action_delta_limit:.3f}")
     print("Policy entry ramp:", f"{args.policy_entry_ramp_seconds:.2f} s")
+    print(
+        "Policy MIT gain override:",
+        f"Kp={args.policy_kp_override if args.policy_kp_override is not None else 'config'}",
+        f"Kd={args.policy_kd_override if args.policy_kd_override is not None else 'config'}",
+    )
     print("TORQUE QUALIFICATION STAGE:", args.torque_profile_stage)
     print("Previous lower torque stage must have passed.")
     if args.torque_profile_stage == "stage40":

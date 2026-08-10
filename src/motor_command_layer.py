@@ -267,6 +267,31 @@ class MotorCommandLayer:
     def close(self):
         return None
 
+    def set_policy_gains(self, kp=None, kd=None):
+        """Override walking MIT gains uniformly without changing pose gains."""
+        if kp is None and kd is None:
+            return
+        values = {"kp": kp, "kd": kd}
+        for field, value in values.items():
+            if value is None:
+                continue
+            value = float(value)
+            if not math.isfinite(value) or value < 0.0:
+                raise ValueError(f"policy {field} override must be finite and >= 0")
+            protocol_max = float(self.proto[f"{field}_max"])
+            if value > protocol_max:
+                raise ValueError(
+                    f"policy {field} override {value} exceeds RS04 maximum "
+                    f"{protocol_max}"
+                )
+            for group in ("hip", "thigh", "calf"):
+                self.gains["policy"].setdefault(group, {})[field] = value
+            for joint_name in self.policy_order:
+                self.gains["policy"].setdefault("joints", {}).setdefault(
+                    joint_name,
+                    {},
+                )[field] = value
+
     def _load_official_mit_ranges(self, model):
         try:
             from robstride_dynamics.table import (

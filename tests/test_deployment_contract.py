@@ -970,6 +970,44 @@ def test_policy_and_pose_use_official_physical_gains():
     assert back_command["kd_effective"] == pytest.approx(8.0, abs=0.01)
 
 
+def test_uniform_policy_gain_override_does_not_change_pose_gains():
+    runner = PolicyRunner()
+    motor_ids = load_yaml(ROOT / "config" / "motor_ids.yaml")["motor_ids"]
+    joint_name = "FR_calf_joint"
+    layer = MotorCommandLayer(
+        runner.policy_order,
+        motor_ids,
+        active_joints=[joint_name],
+        joint_can_bus=resolve_joint_can_bus(runner.policy_order, 1),
+    )
+    layer.set_policy_gains(kp=50.0, kd=2.0)
+    feedback = {
+        joint_name: {
+            "position_raw": 0.0,
+            "joint_position": 0.0,
+            "joint_velocity": 0.0,
+        }
+    }
+
+    policy_command = layer.build_mit_commands(
+        np.zeros(12, dtype=np.float32),
+        phase="policy",
+        feedback_by_joint=feedback,
+    )[0]
+    pose_command = layer.build_mit_commands(
+        np.zeros(12, dtype=np.float32),
+        phase="stand",
+        feedback_by_joint=feedback,
+    )[0]
+
+    assert policy_command["kp_effective"] == pytest.approx(50.0, abs=0.1)
+    assert policy_command["kd_effective"] == pytest.approx(2.0, abs=0.01)
+    assert policy_command["joint_v_des"] == pytest.approx(0.0)
+    assert policy_command["joint_tau_ff"] == pytest.approx(0.0)
+    assert pose_command["kp_effective"] == pytest.approx(130.0, abs=0.1)
+    assert pose_command["kd_effective"] == pytest.approx(4.0, abs=0.01)
+
+
 def test_policy_entry_uses_official_policy_gains_while_target_ramps():
     runner = PolicyRunner()
     motor_ids = load_yaml(ROOT / "config" / "motor_ids.yaml")["motor_ids"]
@@ -1885,6 +1923,22 @@ def test_medium_walk_uses_loaded_per_joint_support_profile():
         profile["final_nm"],
     ).is_fixed
     assert CAN_FEEDBACK_RECEIVE_EVERY_N_CYCLES == 2
+
+
+def test_mevius_style_launcher_uses_direct_actor_and_uniform_pd():
+    launcher = (ROOT / "scripts" / "run_mevius_style_walk.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "run_medium_walk.sh" in launcher
+    assert "--exact-policy-after-entry" in launcher
+    assert "--policy-action-clip 100" in launcher
+    assert "--policy-hip-action-clip 0" in launcher
+    assert "--policy-hip-action-scale 1" in launcher
+    assert "--policy-action-smoothing 0" in launcher
+    assert "--policy-action-delta-limit 0" in launcher
+    assert "--policy-entry-ramp-seconds 3.0" in launcher
+    assert "--policy-kp-override 50" in launcher
+    assert "--policy-kd-override 2" in launcher
 
 
 def test_hold_snapshot_uses_fresh_joint_feedback_without_waiting():
