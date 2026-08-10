@@ -16,4 +16,5 @@ exec "$ROOT_DIR/scripts/run_medium_walk.sh" \
   --policy-action-smoothing 0 \
   --policy-action-delta-limit 0 \
   --policy-entry-ramp-seconds 3.0 \
+  --auto-policy-after-stand \
   "$@"

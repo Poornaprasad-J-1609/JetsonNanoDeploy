@@ -3438,6 +3438,11 @@ def should_validate_stand_state_for_policy_entry(
     )
 
 
+def automatic_policy_takeover_requested(enabled, walking_armed, control_mode):
+    """Enter policy mode with a zero command as soon as stand is settled."""
+    return bool(enabled and walking_armed and control_mode == "stand")
+
+
 def constant_pose_like(runner, value):
     return np.full(len(runner.policy_order), float(value), dtype=np.float32)
 
@@ -4072,6 +4077,7 @@ def run_policy_loop(
     policy_entry_ramp_seconds,
     policy_sim_match,
     exact_policy_after_entry,
+    auto_policy_after_stand,
     stand_policy_stabilization,
     hold_capture_seconds,
     hold_command_repeats,
@@ -4975,6 +4981,12 @@ def run_policy_loop(
                 walk_stop_candidate_step = -1
         elif not previous_walk_requested:
             walk_stop_candidate_step = -1
+        if automatic_policy_takeover_requested(
+            enabled=auto_policy_after_stand,
+            walking_armed=walking_armed,
+            control_mode=control_mode,
+        ):
+            walk_requested = True
         if walk_requested:
             required_imu_fault = validate_required_policy_imu(
                 estimator,
@@ -5837,7 +5849,12 @@ def run_policy_loop(
                 stand_ready_settle_count = 0
                 previous_raw_action = np.zeros(action_dim, dtype=np.float32)
                 previous_sent_action = np.zeros(action_dim, dtype=np.float32)
-                if stand_policy_stabilization:
+                if auto_policy_after_stand:
+                    print(
+                        "[POSE] stand settled. Automatic zero-command policy "
+                        "takeover starts on the next control cycle."
+                    )
+                elif stand_policy_stabilization:
                     print(
                         "[POSE] stand settled. Differential RL IMU stabilization "
                         "is active; policy walking is armed."
@@ -7035,6 +7052,15 @@ def main():
         ),
     )
     parser.add_argument(
+        "--auto-policy-after-stand",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "start policy inference with a zero velocity command immediately "
+            "after measured stand readiness passes"
+        ),
+    )
+    parser.add_argument(
         "--suspension-status-seconds",
         type=float,
         default=0.5,
@@ -7619,6 +7645,7 @@ def main():
     print("Policy action smoothing:", f"{args.policy_action_smoothing:.2f}")
     print("Policy action delta limit:", f"{args.policy_action_delta_limit:.3f}")
     print("Policy entry ramp:", f"{args.policy_entry_ramp_seconds:.2f} s")
+    print("Automatic policy takeover after stand:", bool(args.auto_policy_after_stand))
     print(
         "Policy MIT gain override:",
         f"Kp={args.policy_kp_override if args.policy_kp_override is not None else 'config'}",
@@ -8210,6 +8237,7 @@ def main():
             policy_entry_ramp_seconds=args.policy_entry_ramp_seconds,
             policy_sim_match=bool(args.policy_sim_match),
             exact_policy_after_entry=bool(args.exact_policy_after_entry),
+            auto_policy_after_stand=bool(args.auto_policy_after_stand),
             stand_policy_stabilization=bool(args.stand_policy_stabilization),
             hold_capture_seconds=max(0.02, args.hold_capture_seconds),
             hold_command_repeats=max(1, args.hold_command_repeats),

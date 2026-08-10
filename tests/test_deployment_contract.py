@@ -28,6 +28,7 @@ from main_controller import (
     MeasuredTorqueSupervisor,
     PolicyTorqueRamp,
     action_equivalent_for_q_target,
+    automatic_policy_takeover_requested,
     clip_policy_hip_actions,
     imu_telemetry_fields,
     policy_previous_action_observation,
@@ -1937,8 +1938,16 @@ def test_mevius_style_launcher_uses_direct_actor_and_simulation_pd():
     assert "--policy-action-smoothing 0" in launcher
     assert "--policy-action-delta-limit 0" in launcher
     assert "--policy-entry-ramp-seconds 3.0" in launcher
+    assert "--auto-policy-after-stand" in launcher
     assert "--policy-kp-override" not in launcher
     assert "--policy-kd-override" not in launcher
+
+
+def test_automatic_policy_takeover_requires_settled_stand():
+    assert automatic_policy_takeover_requested(True, True, "stand")
+    assert not automatic_policy_takeover_requested(False, True, "stand")
+    assert not automatic_policy_takeover_requested(True, False, "stand")
+    assert not automatic_policy_takeover_requested(True, True, "sit")
 
 
 def test_hold_snapshot_uses_fresh_joint_feedback_without_waiting():
