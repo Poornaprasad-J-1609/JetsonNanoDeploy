@@ -85,7 +85,7 @@ def main():
     ):
         failures.append(
             "hardware action target formula is not "
-            "policy_frame_origin + q_default + 0.25 * raw_action"
+            "q_policy_reference + 0.25 * raw_action"
         )
 
     print("Policy:", runner.policy_path)
@@ -102,7 +102,7 @@ def main():
     print("obs[9:12]:", obs[9:12].tolist())
     print(
         "Hardware action target formula: "
-        "policy_frame_origin + q_default + 0.25 * raw_action"
+        "q_policy_reference + 0.25 * raw_action"
     )
 
     if failures:

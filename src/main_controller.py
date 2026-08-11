@@ -7848,7 +7848,7 @@ def main():
                 "runtime_control_hz": f"{runtime_control_hz:.6f}",
                 "policy_action_scale": f"{runner.action_scale:.6f}",
                 "policy_action_formula": (
-                    "policy_frame_origin + q_default + 0.25 * raw_action"
+                    "q_policy_reference + 0.25 * raw_action"
                 ),
                 "policy_frame_origin": json.dumps(
                     [float(value) for value in runner.policy_frame_origin],

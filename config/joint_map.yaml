@@ -1,7 +1,7 @@
 control_dt: 0.02
 # Exact JointPositionAction scale used by the validated locomotion policy.
-# In policy coordinates: q_target = q_default + 0.25 * raw_action.
-# At the hardware boundary policy_frame_origin_pose is added once.
+# q_policy_reference is policy_frame_origin_pose + q_default, formed once.
+# Hardware target: q_target = q_policy_reference + 0.25 * raw_action.
 policy_action_scale: 0.25
 
 # Hardware joint-coordinate pose that represents the policy's zero/default
