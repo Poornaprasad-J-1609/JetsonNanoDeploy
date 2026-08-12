@@ -29,7 +29,14 @@ sit_stand_gain_test:
       hip:   {kp: 100.0, kd: 4.0}
       thigh: {kp: 200.0, kd: 4.0}
       calf:  {kp: 200.0, kd: 4.0}
-      joints: {}
+      # The Kp=200 loaded trace left 0.10-0.15 rad static error only in the
+      # rear load-bearing thigh/calf joints. Raise those four independently;
+      # the front joints already tracked within about 0.03 rad.
+      joints:
+        BL_thigh_joint: {kp: 300.0, kd: 4.0}
+        BR_thigh_joint: {kp: 300.0, kd: 4.0}
+        BL_calf_joint:  {kp: 300.0, kd: 4.0}
+        BR_calf_joint:  {kp: 300.0, kd: 4.0}
 
   # Optional per-joint syntax under either phase:
   # joints:
