@@ -156,3 +156,26 @@ def test_streamer_can_collect_feedback_on_every_worker_cycle():
         assert streamer.fault_reason is None
     finally:
         streamer.stop()
+
+
+def test_streamer_calls_low_level_trace_callback_each_can_cycle():
+    traced = []
+
+    def trace_callback(**snapshot):
+        traced.append(snapshot)
+
+    streamer = CanCommandStreamer(
+        send_callback=lambda _commands: None,
+        cycle_callback=trace_callback,
+        command_dt_s=0.005,
+        stale_timeout_s=0.100,
+    )
+    streamer.start()
+    try:
+        streamer.submit([{"target": 1.0}])
+        assert wait_until(lambda: len(traced) >= 3)
+        assert [item["cycle_index"] for item in traced[:3]] == [1, 2, 3]
+        assert all(item["commands"][0]["target"] == 1.0 for item in traced[:3])
+        assert streamer.fault_reason is None
+    finally:
+        streamer.stop()

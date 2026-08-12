@@ -31,6 +31,7 @@ from imu_interface import (
 from motor_command_layer import MotorCommandLayer, print_mit_commands
 from timing_scheduler import DeadlineScheduler, timing_qualification_passed
 from can_command_streamer import CanCommandStreamer
+from sit_stand_trace_logger import SitStandTraceLogger
 from gait_diagnostics import (
     calculate_tracking_errors,
     command_targets_in_policy_order,
@@ -4121,6 +4122,7 @@ def run_policy_loop(
     csv_logger=None,
     can_streamer=None,
     pose_test_only=False,
+    sit_stand_trace_logger=None,
 ):
     dt = runner.control_dt
     live_feedback_max_age_s = (
@@ -5661,6 +5663,51 @@ def run_policy_loop(
             if active_control_mode == "hold"
             else 1
         )
+        if sit_stand_trace_logger is not None:
+            if (
+                active_control_mode in ("stand", "sit")
+                and pose_transition_mode == active_control_mode
+            ):
+                transition_progress = min(
+                    1.0,
+                    max(
+                        0.0,
+                        float(pose_transition_elapsed_s)
+                        / max(float(pose_transition_duration_s), 1.0e-9),
+                    ),
+                )
+                trace_phase = (
+                    f"{active_control_mode}_transition"
+                    if transition_progress < 0.999
+                    else active_control_mode
+                )
+                stand_progress = (
+                    transition_progress
+                    if active_control_mode == "stand"
+                    else 1.0 - transition_progress
+                )
+            else:
+                transition_progress = 1.0
+                trace_phase = active_control_mode
+                stand_progress = 1.0 if active_control_mode == "stand" else 0.0
+            sit_stand_trace_logger.update_context(
+                estimator=estimator,
+                controller_phase=trace_phase,
+                transition_progress=transition_progress,
+                stand_progress=stand_progress,
+                transition_duration_s=pose_transition_duration_s,
+                control_frequency_hz=1.0 / float(dt),
+                can_frequency_hz=(
+                    1.0 / float(can_streamer.command_dt_s)
+                    if can_streamer is not None
+                    else 1.0 / float(dt)
+                ),
+                battery_voltage=getattr(
+                    sit_stand_trace_logger,
+                    "battery_voltage_start",
+                    None,
+                ),
+            )
         command_send_timestamp = time.monotonic() if commands else None
         if (
             command_send_timestamp is not None
@@ -7118,6 +7165,24 @@ def main():
         help="dedicated sit/stand gain YAML used only by --pose-test-only",
     )
     parser.add_argument(
+        "--sit-stand-trace-200hz",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="write the dedicated per-CAN-cycle sit/stand trace",
+    )
+    parser.add_argument("--robot-mass-kg", type=float, default=50.0)
+    parser.add_argument(
+        "--battery-voltage-start",
+        type=float,
+        default=None,
+        help="manually measured starting battery voltage; blank when omitted",
+    )
+    parser.add_argument(
+        "--motor-firmware-version",
+        default="unknown",
+        help="motor firmware/version text stored in trace metadata",
+    )
+    parser.add_argument(
         "--suspension-status-seconds",
         type=float,
         default=0.5,
@@ -7890,6 +7955,7 @@ def main():
     gui_proc = None
     csv_logger = None
     can_streamer = None
+    sit_stand_trace_logger = None
     startup_zero_calibrated = False
     root_cause_results = {
         "policy_joint_order": "PASS",
@@ -8212,6 +8278,47 @@ def main():
             return 0 if ok else 1
 
         if args.mode in ("signal", "mit-signal") and not args.policy_shadow_mode:
+            if args.pose_test_only and args.sit_stand_trace_200hz:
+                trace_metadata = {
+                    "robot_mass_kg": float(args.robot_mass_kg),
+                    "battery_voltage_start": args.battery_voltage_start,
+                    "kp_kd_configuration": (
+                        None if pose_gain_profile is None else pose_gain_profile["gains"]
+                    ),
+                    "torque_limit_nm": pose_torque_limits,
+                    "sit_pose_rad_policy_order": [
+                        float(value) for value in runner.q_crouch
+                    ],
+                    "stand_pose_rad_policy_order": [
+                        float(value) for value in runner.q_stand
+                    ],
+                    "pose_transition_speed_rad_s": float(args.pose_transition_speed_rad_s),
+                    "pose_transition_min_seconds": float(args.pose_transition_min_seconds),
+                    "control_frequency_hz": runtime_control_hz,
+                    "can_frequency_hz": float(args.can_command_hz),
+                    "motor_firmware_version": str(args.motor_firmware_version),
+                    "command_encoding": str(motor_layer.command_encoding),
+                    "protocol": "RobStride extended-CAN MIT operation control",
+                    "base_height_available": False,
+                    "foot_contacts_available": False,
+                }
+                sit_stand_trace_logger = SitStandTraceLogger(
+                    log_dir=args.log_dir,
+                    motor_layer=motor_layer,
+                    metadata=trace_metadata,
+                )
+                sit_stand_trace_logger.battery_voltage_start = (
+                    None
+                    if args.battery_voltage_start is None
+                    else float(args.battery_voltage_start)
+                )
+                print("Sit/stand 200 Hz trace:", sit_stand_trace_logger.path)
+                print("Sit/stand trace metadata:", sit_stand_trace_logger.metadata_path)
+                print(
+                    "WARNING: RS04 MIT feedback has no motor-current or bus-voltage "
+                    "fields; those trace columns remain blank."
+                )
+
             def send_latest_can_snapshot(command_snapshot):
                 if args.mode == "signal":
                     motor_layer.send_harmless_frames(buses, command_snapshot)
@@ -8253,6 +8360,11 @@ def main():
                 stale_timeout_s=float(args.can_command_stale_timeout),
                 fault_consecutive_overruns=int(args.can_command_fault_consecutive),
                 transport_label=f"{int(args.can_count)}-ADAPTER",
+                cycle_callback=(
+                    None
+                    if sit_stand_trace_logger is None
+                    else sit_stand_trace_logger.record_can_cycle
+                ),
             )
             can_streamer.start()
             if hasattr(estimator, "update_from_frames"):
@@ -8354,6 +8466,7 @@ def main():
             csv_logger=csv_logger,
             can_streamer=can_streamer,
             pose_test_only=bool(args.pose_test_only),
+            sit_stand_trace_logger=sit_stand_trace_logger,
         )
 
     except KeyboardInterrupt:
@@ -8365,6 +8478,13 @@ def main():
             imu_sensor.close()
         if can_streamer is not None:
             can_streamer.stop()
+        if sit_stand_trace_logger is not None:
+            sit_stand_trace_logger.close()
+            print(
+                "Sit/stand 200 Hz trace saved:",
+                sit_stand_trace_logger.path,
+                f"({sit_stand_trace_logger.rows_written} rows)",
+            )
         if buses is not None:
             if args.mode == "mit-signal":
                 try:

@@ -26,6 +26,7 @@ class CanCommandStreamer:
         stale_timeout_s=0.250,
         fault_consecutive_overruns=3,
         transport_label="CAN",
+        cycle_callback=None,
         clock=time.monotonic,
         sleep=time.sleep,
     ):
@@ -39,6 +40,7 @@ class CanCommandStreamer:
         self.stale_timeout_s = float(stale_timeout_s)
         self.fault_consecutive_overruns = int(fault_consecutive_overruns)
         self.transport_label = str(transport_label).strip() or "CAN"
+        self.cycle_callback = cycle_callback
         if not math.isfinite(self.command_dt_s) or self.command_dt_s <= 0.0:
             raise ValueError("command_dt_s must be finite and > 0")
         if not math.isfinite(self.stale_timeout_s) or self.stale_timeout_s <= 0.0:
@@ -258,6 +260,7 @@ class CanCommandStreamer:
                 continue
 
             self._cycle_count += 1
+            received = []
             if (
                 self.receive_callback is not None
                 and self._cycle_count % self.receive_every_n_cycles == 0
@@ -285,6 +288,19 @@ class CanCommandStreamer:
                         self._maximum_receive_duration_s,
                         receive_duration,
                     )
+            if self.cycle_callback is not None:
+                try:
+                    self.cycle_callback(
+                        timestamp=self.clock(),
+                        cycle_index=self._cycle_count,
+                        generation=generation,
+                        commands=commands,
+                        received_frames=received,
+                    )
+                except Exception as exc:
+                    self._set_fault(f"CAN cycle logging failed: {exc}")
+                    self._io_idle.set()
+                    continue
             self._io_idle.set()
 
             # Feedback draining is part of this worker's cycle. Scheduling

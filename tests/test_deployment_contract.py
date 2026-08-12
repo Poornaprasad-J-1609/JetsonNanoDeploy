@@ -2,6 +2,7 @@ import argparse
 import contextlib
 import csv
 import io
+import json
 import queue
 import py_compile
 import threading
@@ -64,6 +65,7 @@ from policy_runner import (
     PolicyRunner,
 )
 from safety_monitor import SafetyMonitor
+from sit_stand_trace_logger import SitStandTraceLogger, TRACE_JOINT_ORDER
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -821,6 +823,78 @@ def test_sit_stand_logger_prefix_and_torque_columns(tmp_path):
         assert "BL_calf_joint_cmd_kd_effective" in logger.fieldnames
     finally:
         logger.close()
+
+
+def test_200hz_sit_stand_trace_has_requested_order_raw_data_and_pd_terms(tmp_path):
+    runner = PolicyRunner()
+    motor_ids = load_yaml(ROOT / "config" / "motor_ids.yaml")["motor_ids"]
+    layer = MotorCommandLayer(
+        runner.policy_order,
+        motor_ids,
+        active_joints=[],
+        joint_can_bus=resolve_joint_can_bus(runner.policy_order, 2),
+    )
+    trace = SitStandTraceLogger(tmp_path, layer, {"robot_mass_kg": 50.0})
+
+    class Estimator:
+        last_imu_reading = None
+        base_ang_vel_b = np.array([0.1, 0.2, 0.3], dtype=np.float32)
+
+    class Frame:
+        bus_name = "front"
+        timestamp = time.monotonic()
+
+    joint_name = "FL_hip_joint"
+    motor_id = int(motor_ids[joint_name])
+    proto = layer.proto
+    frame = Frame()
+    frame.can_id = int(proto["comm_type_feedback"]) << 24 | motor_id << 8
+    frame.data = (
+        signed_offset_to_uint(-0.05, proto["p_min"], proto["p_max"]).to_bytes(2, "big")
+        + signed_offset_to_uint(0.0, proto["v_min"], proto["v_max"]).to_bytes(2, "big")
+        + signed_offset_to_uint(-2.0, proto["tau_min"], proto["tau_max"]).to_bytes(2, "big")
+        + int(350).to_bytes(2, "big")
+    )
+    trace.update_context(
+        estimator=Estimator(),
+        controller_phase="stand_transition",
+        transition_progress=0.5,
+        stand_progress=0.5,
+        transition_duration_s=3.0,
+        control_frequency_hz=50.0,
+        can_frequency_hz=200.0,
+    )
+    trace.record_can_cycle(
+        timestamp=time.monotonic(),
+        cycle_index=1,
+        generation=2,
+        commands=[{
+            "joint_name": joint_name,
+            "q_des": 0.10,
+            "joint_v_des": 0.0,
+            "kp_effective": 80.0,
+            "kd_effective": 4.0,
+            "tau_ff": 1.0,
+            "tau_pd_est": 5.0,
+        }],
+        received_frames=[frame],
+    )
+    trace.close()
+
+    with trace.path.open(newline="", encoding="utf-8") as stream:
+        rows = list(csv.DictReader(stream))
+    metadata = json.loads(trace.metadata_path.read_text(encoding="utf-8"))
+    assert len(rows) == 1
+    row = rows[0]
+    assert metadata["joint_order"] == list(TRACE_JOINT_ORDER)
+    assert metadata["motor_current_available"] is False
+    assert row["controller_phase"] == "stand_transition"
+    assert float(row["stand_progress"]) == pytest.approx(0.5)
+    assert row["FL_hip_raw_CAN_payload"] == bytes(frame.data).hex()
+    assert row["FL_hip_motor_current"] == ""
+    assert float(row["FL_hip_position_error"]) == pytest.approx(0.05, abs=0.002)
+    assert float(row["FL_hip_tau_p_predicted"]) == pytest.approx(4.0, abs=0.2)
+    assert float(row["FL_hip_tau_total_predicted"]) == pytest.approx(5.0, abs=0.2)
 
 
 def test_periodic_commands_update_independent_can_adapters_in_can_owner_thread():

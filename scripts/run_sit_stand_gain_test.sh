@@ -25,6 +25,8 @@ exec /usr/bin/python3 src/main_controller.py \
   --can-command-hz 200 \
   --pose-test-only \
   --pose-gains-config "$ROOT_DIR/config/sit_stand_test_gains.yaml" \
+  --sit-stand-trace-200hz \
+  --robot-mass-kg 50 \
   --start-control-mode idle \
   --startup-action hold \
   --initial-zero-frame stand \
