@@ -911,7 +911,16 @@ def test_loaded_stand_profile_raises_stiffness_without_raising_damping_or_torque
     assert profile["gains"]["stand"]["hip"] == {"kp": 100.0, "kd": 4.0}
     assert profile["gains"]["stand"]["thigh"] == {"kp": 200.0, "kd": 4.0}
     assert profile["gains"]["stand"]["calf"] == {"kp": 200.0, "kd": 4.0}
-    assert profile["gains"]["stand"]["joints"] == {}
+    for joint_name in (
+        "BL_thigh_joint",
+        "BR_thigh_joint",
+        "BL_calf_joint",
+        "BR_calf_joint",
+    ):
+        assert profile["gains"]["stand"]["joints"][joint_name] == {
+            "kp": 250.0,
+            "kd": 4.0,
+        }
 
 
 def test_periodic_commands_update_independent_can_adapters_in_can_owner_thread():

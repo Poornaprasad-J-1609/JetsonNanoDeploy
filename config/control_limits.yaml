@@ -95,9 +95,10 @@ mit_parameters:
   v_min: -15.0
   v_max: 15.0
   kp_min: 0.0
-  # Bound configured physical gains above the largest policy gain (130) while
-  # preventing a legacy-range regression from silently commanding 500-750.
-  kp_max: 200.0
+  # Permit the independently tested loaded-stand profile to use Kp=250 on the
+  # rear load-bearing joints. This remains far below the accidental effective
+  # Kp of the legacy encoding path.
+  kp_max: 250.0
   kd_min: 0.0
   kd_max: 10.0
   # Accommodate loaded-pose gravity support and the simulated one-sided joint
