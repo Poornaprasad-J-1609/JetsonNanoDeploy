@@ -292,6 +292,102 @@ class MotorCommandLayer:
                     {},
                 )[field] = value
 
+    def apply_sit_stand_gain_profile(self, path):
+        """Load isolated sit/stand gains without changing policy gains."""
+        profile_path = Path(path).expanduser().resolve()
+        cfg = load_yaml(profile_path) or {}
+        profile = cfg.get("sit_stand_gain_test", {})
+        gains = profile.get("gains", {})
+        if not isinstance(gains, dict):
+            raise ValueError("sit_stand_gain_test.gains must be a mapping")
+
+        resolved = {}
+        for phase in ("sit", "stand"):
+            phase_cfg = gains.get(phase)
+            if not isinstance(phase_cfg, dict):
+                raise ValueError(
+                    f"sit_stand_gain_test.gains.{phase} must be a mapping"
+                )
+            resolved_phase = {}
+            for group in ("hip", "thigh", "calf"):
+                group_cfg = phase_cfg.get(group)
+                if not isinstance(group_cfg, dict):
+                    raise ValueError(
+                        f"sit_stand_gain_test.gains.{phase}.{group} "
+                        "must be a mapping"
+                    )
+                resolved_group = {}
+                for field in ("kp", "kd"):
+                    value = float(group_cfg.get(field, float("nan")))
+                    limit = float(self.proto[f"{field}_max"])
+                    if not math.isfinite(value) or value < 0.0 or value > limit:
+                        raise ValueError(
+                            f"{phase}.{group}.{field} must be finite within "
+                            f"[0, {limit}]"
+                        )
+                    resolved_group[field] = value
+                resolved_phase[group] = resolved_group
+
+            joint_overrides = phase_cfg.get("joints", {}) or {}
+            if not isinstance(joint_overrides, dict):
+                raise ValueError(
+                    f"sit_stand_gain_test.gains.{phase}.joints must be a mapping"
+                )
+            unknown = sorted(set(joint_overrides) - set(self.policy_order))
+            if unknown:
+                raise KeyError(
+                    f"Unknown {phase} gain override joint(s): " + ", ".join(unknown)
+                )
+            resolved_phase["joints"] = {}
+            for joint_name, joint_cfg in joint_overrides.items():
+                if not isinstance(joint_cfg, dict):
+                    raise ValueError(f"{phase}.{joint_name} gain override must be a mapping")
+                group = joint_group(joint_name)
+                resolved_joint = dict(resolved_phase[group])
+                for field in ("kp", "kd"):
+                    if field not in joint_cfg:
+                        continue
+                    value = float(joint_cfg[field])
+                    limit = float(self.proto[f"{field}_max"])
+                    if not math.isfinite(value) or value < 0.0 or value > limit:
+                        raise ValueError(
+                            f"{phase}.{joint_name}.{field} must be finite within "
+                            f"[0, {limit}]"
+                        )
+                    resolved_joint[field] = value
+                resolved_phase["joints"][joint_name] = resolved_joint
+            resolved[phase] = resolved_phase
+
+        torque_limit = float(profile.get("torque_limit_nm", float("nan")))
+        protocol_limit = max(abs(float(self.proto["tau_min"])), abs(float(self.proto["tau_max"])))
+        if (
+            not math.isfinite(torque_limit)
+            or torque_limit < 0.0
+            or torque_limit > protocol_limit
+        ):
+            raise ValueError(
+                "sit_stand_gain_test.torque_limit_nm must be finite within "
+                f"[0, {protocol_limit}]"
+            )
+
+        self.gains["sit"] = resolved["sit"]
+        self.gains["stand"] = resolved["stand"]
+        self.set_pose_pd_torque_limit(torque_limit)
+        self.sit_stand_gain_profile_path = str(profile_path)
+        return {
+            "path": str(profile_path),
+            "torque_limit_nm": torque_limit,
+            "gains": resolved,
+        }
+
+    def _resolved_gain_phase(self, phase):
+        phase = str(phase)
+        if phase in self.gains:
+            return phase
+        if phase in ("sit", "stand"):
+            return "startup"
+        return phase
+
     def _load_official_mit_ranges(self, model):
         try:
             from robstride_dynamics.table import (
@@ -913,7 +1009,7 @@ class MotorCommandLayer:
         commands = []
         feedback_by_joint = feedback_by_joint or {}
 
-        gain_phase = "startup" if phase in ("sit", "stand") else phase
+        gain_phase = self._resolved_gain_phase(phase)
         if gain_phase not in self.gains:
             raise ValueError(f"Unknown phase {phase}. Expected one of {list(self.gains.keys())}")
         command_proto = self.command_proto_for_phase(gain_phase)
@@ -927,10 +1023,8 @@ class MotorCommandLayer:
             raise ValueError("gain_blend_alpha must be finite")
         gain_blend_alpha = clip_scalar(gain_blend_alpha, 0.0, 1.0)
         if gain_blend_from_phase is not None and gain_blend_alpha < 1.0:
-            gain_blend_source_phase = (
-                "startup"
-                if gain_blend_from_phase in ("sit", "stand")
-                else str(gain_blend_from_phase)
+            gain_blend_source_phase = self._resolved_gain_phase(
+                gain_blend_from_phase
             )
             if gain_blend_source_phase not in self.gains:
                 raise ValueError(

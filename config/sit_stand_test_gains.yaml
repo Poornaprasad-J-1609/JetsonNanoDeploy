@@ -1,0 +1,33 @@
+# Dedicated loaded-robot sit/stand tuning profile.
+#
+# The controller uses the same production MIT impedance equation:
+#   tau_est = Kp * (q_des - q_measured)
+#           + Kd * (qd_des - qd_measured)
+#           + tau_ff
+# During a transition qd_des is the synchronized pose-trajectory velocity; it
+# becomes zero after settling. Existing gravity-support feedforward, physical
+# joint limits, feedback freshness, temperature/fault, tilt, and absolute
+# torque safety remain active. Policy inference and walking are disabled by
+# scripts/run_sit_stand_gain_test.sh.
+sit_stand_gain_test:
+  # Total estimated PD + damping + feedforward ceiling for every joint.
+  # This is a limit, not a commanded torque. Do not exceed the RS04 120 Nm
+  # protocol range. Review motor temperature between loaded tests.
+  torque_limit_nm: 100.0
+
+  gains:
+    sit:
+      hip:   {kp: 80.0,  kd: 4.0}
+      thigh: {kp: 130.0, kd: 4.0}
+      calf:  {kp: 130.0, kd: 4.0}
+      joints: {}
+
+    stand:
+      hip:   {kp: 80.0,  kd: 4.0}
+      thigh: {kp: 130.0, kd: 4.0}
+      calf:  {kp: 130.0, kd: 4.0}
+      joints: {}
+
+  # Optional per-joint syntax under either phase:
+  # joints:
+  #   BL_calf_joint: {kp: 120.0, kd: 3.5}

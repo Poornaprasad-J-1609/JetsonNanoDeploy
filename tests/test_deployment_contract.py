@@ -736,6 +736,93 @@ def test_policy_and_pose_pd_torque_limits_are_separate():
     assert layer.policy_pd_torque_limit_for_joint(runner.policy_order[0]) == pytest.approx(21.0)
 
 
+def test_sit_stand_gain_profile_is_independent_and_keeps_policy_gains(tmp_path):
+    runner = PolicyRunner()
+    motor_ids = load_yaml(ROOT / "config" / "motor_ids.yaml")["motor_ids"]
+    layer = MotorCommandLayer(
+        runner.policy_order,
+        motor_ids,
+        active_joints=[],
+        joint_can_bus=resolve_joint_can_bus(runner.policy_order, 1),
+    )
+    policy_gains_before = layer._joint_gains(
+        "policy", "FR_thigh_joint", "thigh"
+    )
+    profile_path = tmp_path / "pose_gains.yaml"
+    profile_path.write_text(
+        """
+sit_stand_gain_test:
+  torque_limit_nm: 42.0
+  gains:
+    sit:
+      hip: {kp: 61.0, kd: 2.1}
+      thigh: {kp: 71.0, kd: 2.2}
+      calf: {kp: 81.0, kd: 2.3}
+      joints: {}
+    stand:
+      hip: {kp: 91.0, kd: 3.1}
+      thigh: {kp: 101.0, kd: 3.2}
+      calf: {kp: 111.0, kd: 3.3}
+      joints:
+        BL_calf_joint: {kp: 112.0, kd: 3.4}
+""",
+        encoding="utf-8",
+    )
+
+    profile = layer.apply_sit_stand_gain_profile(profile_path)
+
+    assert layer._resolved_gain_phase("sit") == "sit"
+    assert layer._resolved_gain_phase("stand") == "stand"
+    assert layer._joint_gains("sit", "FR_thigh_joint", "thigh") == pytest.approx(
+        (71.0, 2.2)
+    )
+    assert layer._joint_gains("stand", "FR_thigh_joint", "thigh") == pytest.approx(
+        (101.0, 3.2)
+    )
+    assert layer._joint_gains("stand", "BL_calf_joint", "calf") == pytest.approx(
+        (112.0, 3.4)
+    )
+    assert layer._joint_gains("policy", "FR_thigh_joint", "thigh") == policy_gains_before
+    assert layer.pose_pd_torque_limits() == {
+        "startup": 42.0,
+        "sit": 42.0,
+        "stand": 42.0,
+        "hold": 42.0,
+    }
+    assert profile["path"] == str(profile_path.resolve())
+
+
+def test_sit_stand_gain_test_launcher_is_pose_only_and_logs_every_step():
+    launcher = (ROOT / "scripts" / "run_sit_stand_gain_test.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "--pose-test-only" in launcher
+    assert "--pose-gains-config" in launcher
+    assert "--no-auto-policy-after-stand" in launcher
+    assert "--log-every 1" in launcher
+    assert "--log-prefix sit_stand_gain_test" in launcher
+    assert "--control-hz 50" in launcher
+    assert "--can-command-hz 200" in launcher
+
+
+def test_sit_stand_logger_prefix_and_torque_columns(tmp_path):
+    logger = CsvRunLogger(
+        enabled=True,
+        log_dir=tmp_path,
+        policy_order=PolicyRunner().policy_order,
+        log_prefix="sit_stand_gain_test",
+        async_enabled=False,
+    )
+    try:
+        assert logger.path.name.startswith("sit_stand_gain_test_")
+        assert "BL_calf_joint_estimated_pd_torque" in logger.fieldnames
+        assert "BL_calf_joint_fb_torque" in logger.fieldnames
+        assert "BL_calf_joint_cmd_kp_effective" in logger.fieldnames
+        assert "BL_calf_joint_cmd_kd_effective" in logger.fieldnames
+    finally:
+        logger.close()
+
+
 def test_periodic_commands_update_independent_can_adapters_in_can_owner_thread():
     class PeriodicBus:
         def __init__(self):

@@ -2198,6 +2198,8 @@ class CsvRunLogger:
         "policy_torque_final_max_nm",
         "policy_torque_ramp_delay_s",
         "policy_torque_ramp_seconds",
+        "pose_test_only",
+        "pose_gains_config",
     ]
     BASE_FIELDNAMES += [f"obs_{index:03d}" for index in range(48)]
     BASE_FIELDNAMES += [f"action_{index:02d}" for index in range(12)]
@@ -2239,6 +2241,7 @@ class CsvRunLogger:
         policy_order=None,
         flush_every=1,
         run_metadata=None,
+        log_prefix="grallator_run",
         async_enabled=True,
         queue_size=500,
         flush_seconds=1.0,
@@ -2272,8 +2275,13 @@ class CsvRunLogger:
             self.run_id = self.path.stem
         else:
             directory = Path(log_dir).expanduser() if log_dir else ROOT / "logs"
-            self.path = self._unique_log_path(directory, f"grallator_run_{self.run_id}")
-            self.run_id = self.path.stem.removeprefix("grallator_run_")
+            safe_prefix = "".join(
+                char for char in str(log_prefix) if char.isalnum() or char in "_.-"
+            ).strip("._-")
+            if not safe_prefix:
+                raise ValueError("log_prefix must contain a filename-safe character")
+            self.path = self._unique_log_path(directory, f"{safe_prefix}_{self.run_id}")
+            self.run_id = self.path.stem.removeprefix(f"{safe_prefix}_")
 
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._file = open(self.path, "w", newline="")
@@ -4112,6 +4120,7 @@ def run_policy_loop(
     telemetry=None,
     csv_logger=None,
     can_streamer=None,
+    pose_test_only=False,
 ):
     dt = runner.control_dt
     live_feedback_max_age_s = (
@@ -4281,6 +4290,7 @@ def run_policy_loop(
     print("#" * 80)
     print("mode:", mode)
     print("policy_shadow_mode:", bool(policy_shadow_mode))
+    print("pose_test_only:", bool(pose_test_only))
     if policy_shadow_mode:
         print("[SHADOW] Motors remain passive; no MIT movement command is transmitted.")
     print("Joystick buttons:")
@@ -4288,16 +4298,19 @@ def run_policy_loop(
     print("  button 5    -> STAND pose")
     print("  buttons 0-3 -> EMERGENCY STOP")
     print("  D-pad zero request -> ignored while fixed hardware stand-zero is active")
-    print("Joystick axes:")
-    print("  left stick Y  -> forward/back vx")
-    print("  left stick X  -> left/right vy")
-    print("  right stick X -> turn/yaw")
     print("Terminal keys:")
-    print("  w/s -> straight vx, a/d -> lateral vy, combine for xy diagonal")
-    print("  q/e -> positive/negative yaw; combine with translation if needed")
     print("  c -> SIT/CROUCH, space -> STAND")
-    print("  up/down arrows -> increase/decrease speed scale")
     print("  h -> HOLD current position, x -> EMERGENCY STOP")
+    if pose_test_only:
+        print("  policy and walking commands are disabled for this test")
+    else:
+        print("Joystick axes:")
+        print("  left stick Y  -> forward/back vx")
+        print("  left stick X  -> left/right vy")
+        print("  right stick X -> turn/yaw")
+        print("  w/s -> straight vx, a/d -> lateral vy, combine for xy diagonal")
+        print("  q/e -> positive/negative yaw; combine with translation if needed")
+        print("  up/down arrows -> increase/decrease speed scale")
     print("start_control_mode:", control_mode)
     print("walk_command_threshold:", walk_command_threshold)
     print("walk_command_grace_seconds:", float(walk_command_grace_seconds))
@@ -4699,6 +4712,9 @@ def run_policy_loop(
             break
 
         mode_request = command_source.get_mode_request()
+        if pose_test_only and mode_request == "policy":
+            print("[POSE TEST] policy request blocked; use C, SPACE, H, or X only.")
+            mode_request = None
         if mode_request == control_mode and mode_request in ("stand", "sit", "hold"):
             # Ignore terminal auto-repeat and duplicate controller events. A
             # repeated pose request must not recapture feedback and restart the
@@ -4961,12 +4977,17 @@ def run_policy_loop(
                 print(f"\n[MODE CHANGE] control_mode -> {control_mode}")
 
         command = command_source.read()
+        if pose_test_only:
+            command = np.zeros(3, dtype=np.float32)
         command_input_s += time.monotonic() - command_input_start
         if step < calibration_hold_until_step:
             command = np.zeros(3, dtype=np.float32)
         raw_walk_requested = bool(
-            policy_shadow_mode
-            or joystick_walk_requested(command, walk_command_threshold)
+            not pose_test_only
+            and (
+                policy_shadow_mode
+                or joystick_walk_requested(command, walk_command_threshold)
+            )
         )
         walk_requested = raw_walk_requested
         if raw_walk_requested:
@@ -4999,7 +5020,7 @@ def run_policy_loop(
                 walk_stop_candidate_step = -1
         elif not previous_walk_requested:
             walk_stop_candidate_step = -1
-        if automatic_policy_takeover_requested(
+        if not pose_test_only and automatic_policy_takeover_requested(
             enabled=auto_policy_after_stand,
             walking_armed=walking_armed,
             control_mode=control_mode,
@@ -5865,12 +5886,16 @@ def run_policy_loop(
             else:
                 stand_ready_settle_count = 0
             if stand_ready_settle_count >= int(stand_zero_settle_steps):
-                walking_armed = True
+                walking_armed = not pose_test_only
                 stand_ready_pending = False
                 stand_ready_settle_count = 0
                 previous_raw_action = np.zeros(action_dim, dtype=np.float32)
                 previous_sent_action = np.zeros(action_dim, dtype=np.float32)
-                if auto_policy_after_stand:
+                if pose_test_only:
+                    print(
+                        "[POSE TEST] stand settled. Policy and walking remain disabled."
+                    )
+                elif auto_policy_after_stand:
                     print(
                         "[POSE] stand settled. Automatic zero-command policy "
                         "takeover starts on the next control cycle."
@@ -7082,6 +7107,17 @@ def main():
         ),
     )
     parser.add_argument(
+        "--pose-test-only",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="allow only sit, stand, hold, and emergency-stop motor modes",
+    )
+    parser.add_argument(
+        "--pose-gains-config",
+        default=None,
+        help="dedicated sit/stand gain YAML used only by --pose-test-only",
+    )
+    parser.add_argument(
         "--suspension-status-seconds",
         type=float,
         default=0.5,
@@ -7129,6 +7165,11 @@ def main():
         help="exact CSV log file path; overrides --log-dir",
     )
     parser.add_argument(
+        "--log-prefix",
+        default="grallator_run",
+        help="filename prefix for timestamped CSV logs",
+    )
+    parser.add_argument(
         "--csv-flush-every",
         type=int,
         default=25,
@@ -7150,6 +7191,14 @@ def main():
     )
 
     args = parser.parse_args()
+    if args.pose_test_only:
+        if args.start_control_mode == "policy" or args.policy_shadow_mode:
+            parser.error("--pose-test-only cannot start in policy mode")
+        if not args.pose_gains_config:
+            parser.error("--pose-test-only requires --pose-gains-config")
+        args.auto_policy_after_stand = False
+    elif args.pose_gains_config:
+        parser.error("--pose-gains-config is valid only with --pose-test-only")
     if args.policy_shadow_mode:
         args.startup_action = "hold"
         args.start_control_mode = "policy"
@@ -7430,6 +7479,14 @@ def main():
         active_joints=active_joints,
         joint_can_bus=joint_can_bus,
     )
+    pose_gain_profile = None
+    if args.pose_gains_config:
+        try:
+            pose_gain_profile = motor_layer.apply_sit_stand_gain_profile(
+                args.pose_gains_config
+            )
+        except (KeyError, OSError, ValueError) as exc:
+            parser.error(f"invalid sit/stand gain profile: {exc}")
     try:
         motor_layer.set_policy_gains(
             kp=args.policy_kp_override,
@@ -7708,6 +7765,18 @@ def main():
         "(conditioned policy path only; fresh feedback required)",
     )
     pose_torque_limits = motor_layer.pose_pd_torque_limits()
+    if pose_gain_profile is not None:
+        print("Sit/stand gain-test profile:", pose_gain_profile["path"])
+        for phase_name in ("sit", "stand"):
+            phase_gains = pose_gain_profile["gains"][phase_name]
+            print(
+                f"  {phase_name} gains:",
+                " ".join(
+                    f"{group}=Kp{phase_gains[group]['kp']:.1f}/"
+                    f"Kd{phase_gains[group]['kd']:.1f}"
+                    for group in ("hip", "thigh", "calf")
+                ),
+            )
     if args.pose_pd_torque_limit > 0.0:
         print("Pose PD torque limit:", f"{args.pose_pd_torque_limit:.2f} Nm override")
     else:
@@ -7843,6 +7912,7 @@ def main():
             async_enabled=bool(args.async_csv),
             queue_size=int(args.csv_queue_size),
             flush_seconds=float(args.csv_flush_seconds),
+            log_prefix=args.log_prefix,
             run_metadata={
                 "command_line": " ".join(sys.argv),
                 "runtime_control_hz": f"{runtime_control_hz:.6f}",
@@ -7867,6 +7937,8 @@ def main():
                 "policy_torque_final_max_nm": f"{max(torque_final_by_joint.values()):.6f}",
                 "policy_torque_ramp_delay_s": f"{float(args.policy_torque_ramp_delay_seconds):.6f}",
                 "policy_torque_ramp_seconds": f"{float(args.policy_torque_ramp_seconds):.6f}",
+                "pose_test_only": str(bool(args.pose_test_only)),
+                "pose_gains_config": str(args.pose_gains_config or ""),
             },
         )
         if csv_logger.enabled:
@@ -8281,6 +8353,7 @@ def main():
             telemetry=telemetry,
             csv_logger=csv_logger,
             can_streamer=can_streamer,
+            pose_test_only=bool(args.pose_test_only),
         )
 
     except KeyboardInterrupt:
