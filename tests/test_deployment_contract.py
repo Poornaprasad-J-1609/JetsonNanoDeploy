@@ -288,7 +288,7 @@ def test_uniform_action_scale_applies_in_grouped_policy_joint_order():
     )
 
 
-def test_calf_policy_reference_is_inside_one_sided_hardware_limits():
+def test_calf_policy_reference_matches_calibrated_hardware_stand_zero():
     runner = PolicyRunner()
     limits = load_yaml(ROOT / "config" / "joint_limits.yaml")["joint_limits"]
 
@@ -300,12 +300,10 @@ def test_calf_policy_reference_is_inside_one_sided_hardware_limits():
     ):
         index = runner.policy_order.index(joint_name)
         value = float(runner.q_policy_reference[index])
-        lower = float(limits[joint_name]["min"])
-        upper = float(limits[joint_name]["max"])
-        assert min(value - lower, upper - value) == pytest.approx(
-            0.25,
-            abs=1.0e-7,
-        )
+        assert value == pytest.approx(0.0, abs=1.0e-7)
+        assert float(runner.q_stand[index]) == pytest.approx(0.0, abs=1.0e-7)
+        assert float(limits[joint_name]["min"]) <= value
+        assert value <= float(limits[joint_name]["max"])
         assert runner.q_stand[index] == pytest.approx(value)
 
 
@@ -793,6 +791,12 @@ sit_stand_gain_test:
     }
     assert profile["path"] == str(profile_path.resolve())
 
+    # A pose profile must never appear to load successfully when the runtime
+    # MIT guard would silently reduce its gains before packet encoding.
+    layer.mit_parameter_limits["kp_max"] = 100.0
+    with pytest.raises(ValueError, match=r"stand\.thigh\.kp.*\[0, 100\.0\]"):
+        layer.apply_sit_stand_gain_profile(profile_path)
+
 
 def test_sit_stand_gain_test_launcher_is_pose_only_and_logs_every_step():
     launcher = (ROOT / "scripts" / "run_sit_stand_gain_test.sh").read_text(
@@ -907,16 +911,7 @@ def test_loaded_stand_profile_raises_stiffness_without_raising_damping_or_torque
     assert profile["gains"]["stand"]["hip"] == {"kp": 100.0, "kd": 4.0}
     assert profile["gains"]["stand"]["thigh"] == {"kp": 200.0, "kd": 4.0}
     assert profile["gains"]["stand"]["calf"] == {"kp": 200.0, "kd": 4.0}
-    for joint_name in (
-        "BL_thigh_joint",
-        "BR_thigh_joint",
-        "BL_calf_joint",
-        "BR_calf_joint",
-    ):
-        assert profile["gains"]["stand"]["joints"][joint_name] == {
-            "kp": 300.0,
-            "kd": 4.0,
-        }
+    assert profile["gains"]["stand"]["joints"] == {}
 
 
 def test_periodic_commands_update_independent_can_adapters_in_can_owner_thread():

@@ -319,7 +319,13 @@ class MotorCommandLayer:
                 resolved_group = {}
                 for field in ("kp", "kd"):
                     value = float(group_cfg.get(field, float("nan")))
-                    limit = float(self.proto[f"{field}_max"])
+                    protocol_limit = float(self.proto[f"{field}_max"])
+                    runtime_limit = (
+                        float(self.mit_parameter_limits[f"{field}_max"])
+                        if self.mit_parameter_limits_enabled
+                        else protocol_limit
+                    )
+                    limit = min(protocol_limit, runtime_limit)
                     if not math.isfinite(value) or value < 0.0 or value > limit:
                         raise ValueError(
                             f"{phase}.{group}.{field} must be finite within "
@@ -348,7 +354,13 @@ class MotorCommandLayer:
                     if field not in joint_cfg:
                         continue
                     value = float(joint_cfg[field])
-                    limit = float(self.proto[f"{field}_max"])
+                    protocol_limit = float(self.proto[f"{field}_max"])
+                    runtime_limit = (
+                        float(self.mit_parameter_limits[f"{field}_max"])
+                        if self.mit_parameter_limits_enabled
+                        else protocol_limit
+                    )
+                    limit = min(protocol_limit, runtime_limit)
                     if not math.isfinite(value) or value < 0.0 or value > limit:
                         raise ValueError(
                             f"{phase}.{joint_name}.{field} must be finite within "

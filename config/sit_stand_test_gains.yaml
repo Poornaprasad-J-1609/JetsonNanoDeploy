@@ -23,20 +23,13 @@ sit_stand_gain_test:
       joints: {}
 
     stand:
-      # Loaded Aug-12 traces proved Kp=130 reached only 43-59 Nm while the
-      # 100 Nm ceiling remained dormant. Raise stiffness for less static sag;
-      # retain Kd=4 and the synchronized trajectory to avoid a damping step.
+      # The physical stand target is the calibrated all-zero hardware frame.
+      # Kp=200/Kd=4 was stable in the Aug-12 loaded trace. Re-test that gain
+      # against the corrected target before increasing stiffness further.
       hip:   {kp: 100.0, kd: 4.0}
       thigh: {kp: 200.0, kd: 4.0}
       calf:  {kp: 200.0, kd: 4.0}
-      # The Kp=200 loaded trace left 0.10-0.15 rad static error only in the
-      # rear load-bearing thigh/calf joints. Raise those four independently;
-      # the front joints already tracked within about 0.03 rad.
-      joints:
-        BL_thigh_joint: {kp: 300.0, kd: 4.0}
-        BR_thigh_joint: {kp: 300.0, kd: 4.0}
-        BL_calf_joint:  {kp: 300.0, kd: 4.0}
-        BR_calf_joint:  {kp: 300.0, kd: 4.0}
+      joints: {}
 
   # Optional per-joint syntax under either phase:
   # joints:

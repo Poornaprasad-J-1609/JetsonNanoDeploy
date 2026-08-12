@@ -5,9 +5,8 @@ control_dt: 0.02
 policy_action_scale: 0.25
 
 # Hardware joint-coordinate pose that represents the policy's zero/default
-# frame. The calf origins sit inside their one-sided measured ranges so normal
-# actor motion has room on both sides of policy zero. The RobStride hardware
-# zero remains unchanged; stand_pose must match this software reference.
+# frame. Hardware zero was calibrated in the physical stand pose, so this must
+# remain all zero. Real motor polarity is applied downstream.
 policy_frame_origin_pose:
   BL_hip_joint: 0.0
   BR_hip_joint: 0.0
@@ -17,10 +16,10 @@ policy_frame_origin_pose:
   BR_thigh_joint: 0.0
   FL_thigh_joint: 0.0
   FR_thigh_joint: 0.0
-  BL_calf_joint: 0.25
-  BR_calf_joint: -0.25
-  FL_calf_joint: 0.25
-  FR_calf_joint: -0.25
+  BL_calf_joint: 0.0
+  BR_calf_joint: 0.0
+  FL_calf_joint: 0.0
+  FR_calf_joint: 0.0
 
 # Policy output/observation joint order.
 #
