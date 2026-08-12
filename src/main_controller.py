@@ -4123,6 +4123,7 @@ def run_policy_loop(
     can_streamer=None,
     pose_test_only=False,
     sit_stand_trace_logger=None,
+    pose_test_max_temperature_c=75.0,
 ):
     dt = runner.control_dt
     live_feedback_max_age_s = (
@@ -4666,6 +4667,41 @@ def run_policy_loop(
                 break
 
         safety_check_start = time.monotonic()
+        if pose_test_only and float(pose_test_max_temperature_c) > 0.0:
+            feedback = getattr(estimator, "last_feedback_by_joint", {}) or {}
+            hot_joints = []
+            for joint_name in motor_layer.active_joints:
+                temperature = (feedback.get(joint_name, {}) or {}).get(
+                    "temperature_c"
+                )
+                try:
+                    temperature = float(temperature)
+                except (TypeError, ValueError):
+                    continue
+                if np.isfinite(temperature) and temperature >= float(
+                    pose_test_max_temperature_c
+                ):
+                    hot_joints.append((joint_name, temperature))
+            if hot_joints:
+                reason = "pose-test motor temperature limit reached: " + ", ".join(
+                    f"{name}={temperature:.1f}C" for name, temperature in hot_joints
+                )
+                print("\nEMERGENCY STOP:", reason)
+                command = command_source.read()
+                publish_safety_fault(
+                    telemetry=telemetry,
+                    csv_logger=csv_logger,
+                    step=step,
+                    mode="thermal_fault",
+                    command=command,
+                    command_source=command_source,
+                    commands=[],
+                    estimator=estimator,
+                    reason=reason,
+                    action=np.zeros(action_dim, dtype=np.float32),
+                    phase="pose",
+                )
+                break
         stop, reason = safety.emergency_stop_check(
             projected_gravity_b=projected_gravity_b,
             base_ang_vel_b=base_ang_vel_b,
@@ -7183,6 +7219,12 @@ def main():
         help="motor firmware/version text stored in trace metadata",
     )
     parser.add_argument(
+        "--pose-test-max-temperature-c",
+        type=float,
+        default=75.0,
+        help="stop the isolated pose test when any reported motor reaches this temperature; 0 disables",
+    )
+    parser.add_argument(
         "--suspension-status-seconds",
         type=float,
         default=0.5,
@@ -8467,6 +8509,7 @@ def main():
             can_streamer=can_streamer,
             pose_test_only=bool(args.pose_test_only),
             sit_stand_trace_logger=sit_stand_trace_logger,
+            pose_test_max_temperature_c=float(args.pose_test_max_temperature_c),
         )
 
     except KeyboardInterrupt:

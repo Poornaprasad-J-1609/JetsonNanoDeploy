@@ -23,9 +23,12 @@ sit_stand_gain_test:
       joints: {}
 
     stand:
-      hip:   {kp: 80.0,  kd: 4.0}
-      thigh: {kp: 130.0, kd: 4.0}
-      calf:  {kp: 130.0, kd: 4.0}
+      # Loaded Aug-12 traces proved Kp=130 reached only 43-59 Nm while the
+      # 100 Nm ceiling remained dormant. Raise stiffness for less static sag;
+      # retain Kd=4 and the synchronized trajectory to avoid a damping step.
+      hip:   {kp: 100.0, kd: 4.0}
+      thigh: {kp: 200.0, kd: 4.0}
+      calf:  {kp: 200.0, kd: 4.0}
       joints: {}
 
   # Optional per-joint syntax under either phase:

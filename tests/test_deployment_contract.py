@@ -805,6 +805,7 @@ def test_sit_stand_gain_test_launcher_is_pose_only_and_logs_every_step():
     assert "--log-prefix sit_stand_gain_test" in launcher
     assert "--control-hz 50" in launcher
     assert "--can-command-hz 200" in launcher
+    assert "--pose-test-max-temperature-c 75" in launcher
 
 
 def test_sit_stand_logger_prefix_and_torque_columns(tmp_path):
@@ -895,6 +896,17 @@ def test_200hz_sit_stand_trace_has_requested_order_raw_data_and_pd_terms(tmp_pat
     assert float(row["FL_hip_position_error"]) == pytest.approx(0.05, abs=0.002)
     assert float(row["FL_hip_tau_p_predicted"]) == pytest.approx(4.0, abs=0.2)
     assert float(row["FL_hip_tau_total_predicted"]) == pytest.approx(5.0, abs=0.2)
+
+
+def test_loaded_stand_profile_raises_stiffness_without_raising_damping_or_torque_limit():
+    profile = load_yaml(ROOT / "config" / "sit_stand_test_gains.yaml")[
+        "sit_stand_gain_test"
+    ]
+    assert profile["torque_limit_nm"] == pytest.approx(100.0)
+    assert profile["gains"]["sit"]["thigh"] == {"kp": 130.0, "kd": 4.0}
+    assert profile["gains"]["stand"]["hip"] == {"kp": 100.0, "kd": 4.0}
+    assert profile["gains"]["stand"]["thigh"] == {"kp": 200.0, "kd": 4.0}
+    assert profile["gains"]["stand"]["calf"] == {"kp": 200.0, "kd": 4.0}
 
 
 def test_periodic_commands_update_independent_can_adapters_in_can_owner_thread():

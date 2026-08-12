@@ -39,7 +39,7 @@ class SitStandTraceLogger:
     )
     JOINT_FIELDS = (
         "q_des", "q_meas", "dq_des", "dq_meas", "dq_meas_mit",
-        "kp_cmd", "kd_cmd", "tau_ff_cmd", "position_error",
+        "kp_cmd", "kd_cmd", "tau_ff_cmd", "tau_ff_motor_cmd", "position_error",
         "velocity_error", "tau_p_predicted", "tau_d_predicted",
         "tau_pd_predicted", "tau_total_predicted", "tau_command_estimated",
         "tau_est", "motor_current", "motor_voltage", "motor_temperature",
@@ -254,7 +254,10 @@ class SitStandTraceLogger:
             dq_des = command.get("joint_v_des", command.get("v_des"))
             kp = command.get("kp_effective", command.get("kp"))
             kd = command.get("kd_effective", command.get("kd"))
-            tau_ff = command.get("tau_ff")
+            tau_ff = command.get(
+                "joint_tau_ff_effective",
+                command.get("joint_tau_ff", command.get("tau_ff")),
+            )
             q_meas = feedback.get("q_meas")
             dq_meas = feedback.get("dq_meas")
             values = {
@@ -262,6 +265,7 @@ class SitStandTraceLogger:
                 "dq_des": dq_des, "dq_meas": dq_meas,
                 "dq_meas_mit": feedback.get("dq_meas_mit"),
                 "kp_cmd": kp, "kd_cmd": kd, "tau_ff_cmd": tau_ff,
+                "tau_ff_motor_cmd": command.get("tau_ff"),
                 "tau_command_estimated": command.get("tau_pd_est"),
                 "tau_est": feedback.get("tau_est"),
                 "motor_current": "", "motor_voltage": "", "raw_current": "",
