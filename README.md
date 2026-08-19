@@ -1,5 +1,18 @@
 # XERA Quadruped → robot_viewer live bridge
 
+## Single-actuator RS04 bench
+
+The reusable 200 Hz RS04 actuator characterization, system-identification, and
+PD tuning application lives in [`rs04_bench/`](rs04_bench/README.md). Start in
+motor-free mock mode:
+
+```bash
+export PYTHONPATH="$PWD:$PWD/src"
+python3 -m rs04_bench --mock
+```
+
+Read the bench README before connecting or enabling real hardware.
+
 Mirror your real robot's commanded joint angles onto the URDF in
 [fan-ziqi/robot_viewer](https://github.com/fan-ziqi/robot_viewer) in real time.
 

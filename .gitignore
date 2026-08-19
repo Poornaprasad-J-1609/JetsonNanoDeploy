@@ -3,6 +3,7 @@ __pycache__/
 *.log
 logs/*.csv
 logs/*.txt
+logs/rs04_bench/
 .DS_Store
 .vscode/*
 !.vscode/settings.json
