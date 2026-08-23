@@ -824,7 +824,14 @@ class MotorCommandLayer:
         commands = []
         feedback_by_joint = feedback_by_joint or {}
 
-        gain_phase = "startup" if phase in ("sit", "stand") else phase
+        # Historical configurations share startup gains between sit and stand.
+        # A stand-specific block may override them without changing sit behavior.
+        if phase == "stand" and "stand" in self.gains:
+            gain_phase = "stand"
+        elif phase in ("sit", "stand"):
+            gain_phase = "startup"
+        else:
+            gain_phase = phase
         if gain_phase not in self.gains:
             raise ValueError(f"Unknown phase {phase}. Expected one of {list(self.gains.keys())}")
         command_proto = self.command_proto_for_phase(gain_phase)

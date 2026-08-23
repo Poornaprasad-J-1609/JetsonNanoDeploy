@@ -61,9 +61,7 @@ communication:
   frame_gap_s: 0.0010
 
 gains:
-  # These are the same config-side MIT gains used by the known-good pre-
-  # SocketCAN path at commit 9b03a77 for startup/hold. Policy and leveling
-  # phases below are official-unit gains.
+  # Sit retains the known-good startup gains from commit 0c17450.
   startup:
     hip:
       kp: 75
@@ -74,6 +72,18 @@ gains:
     calf:
       kp: 75.0
       kd: 1.8
+
+  # Stand-only override. Other phases retain the 0c17450 gains below.
+  stand:
+    hip:
+      kp: 150.0
+      kd: 3.0
+    thigh:
+      kp: 150.0
+      kd: 3.0
+    calf:
+      kp: 150.0
+      kd: 3.0
 
   hold:
     hip:
