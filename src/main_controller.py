@@ -3122,6 +3122,14 @@ def stand_ready_for_walking(
     )
 
 
+def policy_takeover_requested(control_mode, walking_armed, walk_requested):
+    """Keep policy control active after a verified stand, even at zero command."""
+    return bool(
+        walk_requested
+        or (str(control_mode) == "policy" and bool(walking_armed))
+    )
+
+
 def constant_pose_like(runner, value):
     return np.full(len(runner.policy_order), float(value), dtype=np.float32)
 
@@ -4581,7 +4589,13 @@ def run_policy_loop(
                 walk_stop_candidate_step = -1
         elif not previous_walk_requested:
             walk_stop_candidate_step = -1
-        if walk_requested:
+        policy_control_requested = policy_takeover_requested(
+            control_mode,
+            walking_armed,
+            walk_requested,
+        )
+        policy_imu_ready = True
+        if policy_control_requested:
             required_imu_fault = validate_required_policy_imu(
                 estimator,
                 max_roll_pitch_deg=imu_active_max_roll_pitch_deg,
@@ -4590,6 +4604,7 @@ def run_policy_loop(
                 if step % max(1, print_every) == 0:
                     print(f"[IMU] walking command blocked: {required_imu_fault}")
                 walk_requested = False
+                policy_imu_ready = False
         policy_command = scaled_policy_command(
             command=command,
             gain=policy_command_gain,
@@ -4629,7 +4644,10 @@ def run_policy_loop(
                 walk_requested = False
         if control_mode == "sit":
             active_control_mode = "sit"
-        elif walk_requested:
+        elif (
+            policy_takeover_requested(control_mode, walking_armed, walk_requested)
+            and policy_imu_ready
+        ):
             active_control_mode = "policy"
         elif control_mode == "policy":
             active_control_mode = "hold"
@@ -4703,13 +4721,14 @@ def run_policy_loop(
                     live_feedback_max_age_s,
                 )
 
+        policy_cycle_active = active_control_mode == "policy"
         policy_was_started = bool(policy_has_started)
-        if walk_requested:
+        if policy_cycle_active:
             has_motion_target = True
             policy_has_started = True
 
-        walk_just_stopped = bool(previous_walk_requested and not walk_requested)
-        if walk_requested:
+        walk_just_stopped = bool(previous_walk_requested and not policy_cycle_active)
+        if policy_cycle_active:
             if not previous_walk_requested:
                 policy_entry_restart_count += 1
                 policy_entry_restart_reason = (
@@ -4731,7 +4750,7 @@ def run_policy_loop(
         else:
             policy_entry_elapsed_s = 0.0
             policy_entry_scale = 0.0
-        previous_walk_requested = bool(walk_requested)
+        previous_walk_requested = bool(policy_cycle_active)
 
         if walk_just_stopped and control_mode == "stand":
             # A terminal movement key can briefly time out between key-repeat
@@ -5291,8 +5310,11 @@ def run_policy_loop(
                 walking_armed = True
                 stand_ready_pending = False
                 stand_ready_settle_count = 0
+                control_mode = "policy"
+                has_motion_target = True
                 previous_raw_action = np.zeros(action_dim, dtype=np.float32)
                 previous_sent_action = np.zeros(action_dim, dtype=np.float32)
+                scheduler.request_resync("automatic stand-to-policy takeover")
                 if stand_policy_stabilization:
                     print(
                         "[POSE] stand settled. Differential RL IMU stabilization "
@@ -5305,8 +5327,8 @@ def run_policy_loop(
                     )
                 else:
                     print(
-                        "[POSE] stand settled. Policy walking is armed; "
-                        "stand target remains fixed until a movement command."
+                        "[POSE] stand settled. Policy took control with a zero "
+                        "motion command; movement keys now update policy input."
                     )
 
         if active_control_mode == "sit" and sit_zero_pending:

@@ -27,6 +27,7 @@ from main_controller import (
     action_equivalent_for_q_target,
     compact_telemetry_record,
     constant_joint_map,
+    policy_takeover_requested,
     requires_calf_endpoint_gate,
     shifted_safety_filter_with_diagnostics,
     stand_ready_for_walking,
@@ -394,6 +395,13 @@ def test_loaded_stand_readiness_is_separate_from_zero_calibration():
     assert stand_ready_for_walking(0.0, 0.1983, 3.64, 3.64, 0.25)
     assert not stand_ready_for_walking(0.0, 0.251, 3.64, 3.64, 0.25)
     assert not stand_ready_for_walking(0.0, 0.1983, 3.64, 3.64, 0.08)
+
+
+def test_policy_takeover_latches_after_verified_stand_at_zero_command():
+    assert not policy_takeover_requested("stand", False, False)
+    assert not policy_takeover_requested("stand", True, False)
+    assert policy_takeover_requested("policy", True, False)
+    assert policy_takeover_requested("stand", False, True)
 
 
 def test_policy_and_pose_pd_torque_limits_are_separate():
