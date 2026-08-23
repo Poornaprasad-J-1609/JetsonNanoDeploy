@@ -48,31 +48,33 @@ args=(
     --no-imu-stabilization
     --no-gait-assist
     --walk-command-threshold 0.02
-    --max-vx 1.80
+    # W now represents an actual +0.60 m/s policy command at scale 1.0.
+    --max-vx 0.60
     --max-vy 0.80
     --max-yaw 0
-    --speed-scale-initial 0.08
-    --speed-scale-min 0.04
-    --speed-scale-max 0.12
-    --speed-scale-step 0.01
+    --speed-scale-initial 1.0
+    --speed-scale-min 0.25
+    --speed-scale-max 1.0
+    --speed-scale-step 0.05
     --keyboard-command-timeout 0.20
     --walk-command-grace-seconds 0.20
-    --policy-command-gain 1.5
-    --policy-command-vx-max 0.20
+    --policy-command-gain 1.0
+    --policy-command-vx-max 0.60
     --policy-command-vy-max 0.12
     --policy-command-yaw-max 0
     --policy-action-clip 3.2
     --policy-action-smoothing 0.35
     --policy-action-delta-limit 0.20
     --policy-entry-ramp-seconds 2.0
-    # The July 23 run saturated BR/FL calf authority on 97%/80% of forward
-    # cycles at fixed 14 Nm. This stage starts at 14 Nm and ramps to 18 Nm only
-    # while feedback, timing, IMU, tracking, and measured torque remain clean.
-    --torque-profile-stage stage18
+    # Requested per-joint estimated PD ceiling for loaded ground testing.
+    # The independent 95 Nm measured-feedback emergency stop remains active.
+    --policy-pd-torque-limit 50
+    --policy-absolute-torque-ceiling 50
     --pose-transition-speed-rad-s 0.55
     --pose-transition-min-seconds 1.2
-    --stand-ready-error-rad 0.25
-    --pose-pd-torque-limit 16
+    # Do not arm walking until measured stand error is close to the zero target.
+    --stand-ready-error-rad 0.12
+    --pose-pd-torque-limit 50
     --feedback-timeout 0.05
     --fresh-feedback-max-age 0.08
     --policy-steps 0
