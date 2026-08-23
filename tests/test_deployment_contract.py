@@ -27,6 +27,7 @@ from main_controller import (
     action_equivalent_for_q_target,
     compact_telemetry_record,
     constant_joint_map,
+    policy_takeover_requested,
     requires_calf_endpoint_gate,
     runtime_stand_command_phase,
     policy_entry_gain_blend_scale,
@@ -399,6 +400,13 @@ def test_loaded_stand_readiness_is_separate_from_zero_calibration():
     assert stand_ready_for_walking(0.0, 0.1983, 3.64, 3.64, 0.25)
     assert not stand_ready_for_walking(0.0, 0.251, 3.64, 3.64, 0.25)
     assert not stand_ready_for_walking(0.0, 0.1983, 3.64, 3.64, 0.08)
+
+
+def test_policy_takeover_latches_after_verified_stand_at_zero_command():
+    assert not policy_takeover_requested("stand", False, False)
+    assert not policy_takeover_requested("stand", True, False)
+    assert policy_takeover_requested("policy", True, False)
+    assert policy_takeover_requested("stand", False, True)
 
 
 def test_policy_entry_revalidates_current_stand_position_and_velocity():
