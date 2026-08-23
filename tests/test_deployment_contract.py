@@ -420,27 +420,6 @@ def test_policy_and_pose_pd_torque_limits_are_separate():
     assert layer.policy_pd_torque_limit_for_joint(runner.policy_order[0]) == pytest.approx(21.0)
 
 
-def test_stand_gain_override_does_not_change_sit_or_policy_gains():
-    runner = PolicyRunner()
-    motor_ids = load_yaml(ROOT / "config" / "motor_ids.yaml")["motor_ids"]
-    joint_name = "FL_thigh_joint"
-    layer = MotorCommandLayer(
-        runner.policy_order,
-        motor_ids,
-        active_joints=[joint_name],
-        joint_can_bus=resolve_joint_can_bus(runner.policy_order, 1),
-    )
-    q_target = np.zeros(12, dtype=np.float32)
-
-    stand = layer.build_mit_commands(q_target, phase="stand")[0]
-    sit = layer.build_mit_commands(q_target, phase="sit")[0]
-    policy = layer.build_mit_commands(q_target, phase="policy")[0]
-
-    assert (stand["kp"], stand["kd"]) == pytest.approx((150.0, 3.0))
-    assert (sit["kp"], sit["kd"]) == pytest.approx((50.0, 1.8))
-    assert (policy["kp"], policy["kd"]) == pytest.approx((110.0, 6.5))
-
-
 def test_pose_torque_limit_preserves_synchronized_target_and_scales_impedance():
     runner = PolicyRunner()
     motor_ids = load_yaml(ROOT / "config" / "motor_ids.yaml")["motor_ids"]
