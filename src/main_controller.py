@@ -19,6 +19,7 @@ except ImportError as exc:
     raise ImportError("Install PyYAML first: pip3 install pyyaml") from exc
 
 from policy_runner import PolicyRunner
+from hardcoded_gait import HardcodedGaitPlayer
 from safety_monitor import SafetyMonitor
 from state_estimator import FakeStateEstimator, MitFeedbackStateEstimator
 from joystick_interface import CommandSource, load_joystick_defaults, load_speed_scale_defaults
@@ -4124,6 +4125,7 @@ def run_policy_loop(
     pose_test_only=False,
     sit_stand_trace_logger=None,
     pose_test_max_temperature_c=75.0,
+    hardcoded_gait_player=None,
 ):
     dt = runner.control_dt
     live_feedback_max_age_s = (
@@ -5227,6 +5229,8 @@ def run_policy_loop(
             policy_has_started = True
 
         walk_just_stopped = bool(previous_walk_requested and not walk_requested)
+        if walk_just_stopped and hardcoded_gait_player is not None:
+            hardcoded_gait_player.reset()
         if walk_requested:
             if not previous_walk_requested:
                 policy_entry_restart_count += 1
@@ -5440,13 +5444,22 @@ def run_policy_loop(
             )
             observation_build_s += time.monotonic() - observation_build_start
 
-            policy_inference_start = time.monotonic()
-            raw_action = runner.infer_action(obs)
-            policy_inference_s = time.monotonic() - policy_inference_start
             observation_for_log = obs.copy()
             root_observation_seen = True
             target_conversion_start = time.monotonic()
-            q_actor_target = runner.action_to_q_target(raw_action)
+            if hardcoded_gait_player is not None:
+                q_actor_target = hardcoded_gait_player.update(
+                    direction=float(policy_command[0]),
+                    dt=float(dt),
+                    current_target=q_previous_target,
+                )
+                raw_action = action_equivalent_for_q_target(runner, q_actor_target)
+                policy_inference_s = 0.0
+            else:
+                policy_inference_start = time.monotonic()
+                raw_action = runner.infer_action(obs)
+                policy_inference_s = time.monotonic() - policy_inference_start
+                q_actor_target = runner.action_to_q_target(raw_action)
             q_actor_target_for_log = q_actor_target.copy()
             if policy_shadow_mode:
                 policy_entry_scale = 1.0
@@ -6386,7 +6399,11 @@ def run_policy_loop(
             values = values * runner.action_scale
         return classify_diagonal_trot(values, 1.0 / float(dt))[0]
 
-    raw_status = gait_status(root_raw_signals, actor_actions=True)
+    raw_status = (
+        "BYPASSED"
+        if hardcoded_gait_player is not None
+        else gait_status(root_raw_signals, actor_actions=True)
+    )
     transmitted_status = "UNKNOWN" if policy_shadow_mode else gait_status(root_transmitted_signals)
     measured_status = "UNKNOWN" if policy_shadow_mode else gait_status(root_measured_signals)
     selected_joint_velocity_source = str(
@@ -6419,6 +6436,9 @@ def run_policy_loop(
         "joint_velocity_validation": velocity_status,
         "observation_contract": "PASS" if root_observation_seen else "UNKNOWN",
         "actor_gait_preserved": (
+            "NOT APPLICABLE"
+            if hardcoded_gait_player is not None
+            else
             "UNKNOWN"
             if raw_status == "UNKNOWN" or transmitted_status == "UNKNOWN"
             else "PASS"
@@ -6498,6 +6518,26 @@ def main():
         help="only send motor commands to these joint names; default uses config/motor_ids.yaml",
     )
     parser.add_argument("--policy-path", default=None)
+    parser.add_argument(
+        "--hardcoded-gait-config",
+        default=None,
+        help=(
+            "experimental forward/backward joint trajectory YAML; bypasses "
+            "actor inference while preserving the normal motor safety path"
+        ),
+    )
+    parser.add_argument(
+        "--hardcoded-gait-amplitude-scale",
+        type=float,
+        default=None,
+        help="trajectory amplitude fraction in (0, 1]; YAML default is used when omitted",
+    )
+    parser.add_argument(
+        "--hardcoded-gait-frequency-scale",
+        type=float,
+        default=None,
+        help="trajectory cadence fraction in (0, 1]; YAML default is used when omitted",
+    )
     parser.add_argument(
         "--allow-policy-hash-mismatch",
         action="store_true",
@@ -7535,6 +7575,13 @@ def main():
         policy_activation=args.policy_activation,
         allow_policy_hash_mismatch=args.allow_policy_hash_mismatch,
     )
+    hardcoded_gait_player = None
+    if args.hardcoded_gait_config:
+        hardcoded_gait_player = HardcodedGaitPlayer.from_yaml(
+            args.hardcoded_gait_config,
+            amplitude_scale=args.hardcoded_gait_amplitude_scale,
+            frequency_scale=args.hardcoded_gait_frequency_scale,
+        )
     if args.policy_replay_csv:
         if not args.policy_shadow_mode:
             parser.error("--policy-replay-csv requires --policy-shadow-mode")
@@ -7933,6 +7980,12 @@ def main():
     print("Start control mode:", args.start_control_mode)
     print("Startup action:", args.startup_action)
     print("Policy:", runner.policy_path)
+    if hardcoded_gait_player is not None:
+        print(
+            "Hardcoded simulation gait: ENABLED",
+            f"amplitude={hardcoded_gait_player.amplitude_scale:.2f}",
+            f"frequency={hardcoded_gait_player.frequency_scale:.2f}",
+        )
     print("Policy SHA256:", runner.policy_sha256)
     print("Policy hash verified:", runner.policy_hash_matches)
     print("Policy format:", runner.policy_format)
@@ -8510,6 +8563,7 @@ def main():
             pose_test_only=bool(args.pose_test_only),
             sit_stand_trace_logger=sit_stand_trace_logger,
             pose_test_max_temperature_c=float(args.pose_test_max_temperature_c),
+            hardcoded_gait_player=hardcoded_gait_player,
         )
 
     except KeyboardInterrupt:
