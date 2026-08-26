@@ -17,23 +17,17 @@ sit_stand_gain_test:
 
   gains:
     sit:
-      hip:   {kp: 80.0,  kd: 4.0}
-      thigh: {kp: 130.0, kd: 4.0}
-      calf:  {kp: 130.0, kd: 4.0}
+      hip:   {kp: 250.0, kd: 4.0}
+      thigh: {kp: 250.0, kd: 4.0}
+      calf:  {kp: 250.0, kd: 4.0}
       joints: {}
 
     stand:
       # The physical stand target is the calibrated all-zero hardware frame.
-      # Keep the already-accurate front joints at Kp=200. Raise only the rear
-      # thigh/calf joints, where the loaded trace showed residual compliance.
-      hip:   {kp: 100.0, kd: 4.0}
-      thigh: {kp: 200.0, kd: 4.0}
-      calf:  {kp: 200.0, kd: 4.0}
-      joints:
-        BL_thigh_joint: {kp: 250.0, kd: 4.0}
-        BR_thigh_joint: {kp: 250.0, kd: 4.0}
-        BL_calf_joint:  {kp: 250.0, kd: 4.0}
-        BR_calf_joint:  {kp: 250.0, kd: 4.0}
+      hip:   {kp: 250.0, kd: 4.0}
+      thigh: {kp: 250.0, kd: 4.0}
+      calf:  {kp: 250.0, kd: 4.0}
+      joints: {}
 
   # Optional per-joint syntax under either phase:
   # joints:

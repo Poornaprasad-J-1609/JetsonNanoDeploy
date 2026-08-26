@@ -902,25 +902,16 @@ def test_200hz_sit_stand_trace_has_requested_order_raw_data_and_pd_terms(tmp_pat
     assert float(row["FL_hip_tau_total_predicted"]) == pytest.approx(5.0, abs=0.2)
 
 
-def test_loaded_stand_profile_raises_stiffness_without_raising_damping_or_torque_limit():
+def test_pure_pd_pose_profile_uses_uniform_250_kp_and_4_kd():
     profile = load_yaml(ROOT / "config" / "sit_stand_test_gains.yaml")[
         "sit_stand_gain_test"
     ]
     assert profile["torque_limit_nm"] == pytest.approx(100.0)
-    assert profile["gains"]["sit"]["thigh"] == {"kp": 130.0, "kd": 4.0}
-    assert profile["gains"]["stand"]["hip"] == {"kp": 100.0, "kd": 4.0}
-    assert profile["gains"]["stand"]["thigh"] == {"kp": 200.0, "kd": 4.0}
-    assert profile["gains"]["stand"]["calf"] == {"kp": 200.0, "kd": 4.0}
-    for joint_name in (
-        "BL_thigh_joint",
-        "BR_thigh_joint",
-        "BL_calf_joint",
-        "BR_calf_joint",
-    ):
-        assert profile["gains"]["stand"]["joints"][joint_name] == {
-            "kp": 250.0,
-            "kd": 4.0,
-        }
+    expected = {"kp": 250.0, "kd": 4.0}
+    for phase in ("sit", "stand"):
+        for group in ("hip", "thigh", "calf"):
+            assert profile["gains"][phase][group] == expected
+        assert profile["gains"][phase]["joints"] == {}
 
 
 def test_periodic_commands_update_independent_can_adapters_in_can_owner_thread():
