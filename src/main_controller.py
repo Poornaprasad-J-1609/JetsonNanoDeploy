@@ -4135,6 +4135,8 @@ def run_policy_loop(
         )
     )
     action_dim = len(runner.policy_order)
+    pure_pose_velocity_target = np.zeros(action_dim, dtype=np.float32)
+    pure_pose_feedforward_target = np.zeros(action_dim, dtype=np.float32)
     measured_torque_soft_limits = dict(
         measured_torque_soft_limits
         or {"hip": 35.0, "thigh": 40.0, "calf": 40.0, "default": 40.0}
@@ -5387,10 +5389,10 @@ def run_policy_loop(
                 q_safe_target,
                 phase=stand_command_phase,
                 feedback_by_joint=fresh_feedback_for_commands,
-                joint_velocity_target=pose_transition_velocity_target,
-                joint_feedforward_torque_target=(
-                    pose_support_scale * pose_support_tau_target
-                ),
+                # The smooth transition supplies position only. RS04 closes
+                # the pose loop internally as Kp*(q_des-q)-Kd*qdot.
+                joint_velocity_target=pure_pose_velocity_target,
+                joint_feedforward_torque_target=pure_pose_feedforward_target,
                 gain_blend_from_phase=pose_gain_blend_from_phase,
                 gain_blend_alpha=pose_gain_blend_alpha,
             )
@@ -5414,10 +5416,8 @@ def run_policy_loop(
                 q_safe_target,
                 phase="sit",
                 feedback_by_joint=fresh_feedback_for_commands,
-                joint_velocity_target=pose_transition_velocity_target,
-                joint_feedforward_torque_target=(
-                    pose_support_scale * pose_support_tau_target
-                ),
+                joint_velocity_target=pure_pose_velocity_target,
+                joint_feedforward_torque_target=pure_pose_feedforward_target,
                 gain_blend_from_phase=pose_gain_blend_from_phase,
                 gain_blend_alpha=pose_gain_blend_alpha,
             )

@@ -4,8 +4,8 @@
 #   tau_est = Kp * (q_des - q_measured)
 #           + Kd * (qd_des - qd_measured)
 #           + tau_ff
-# During a transition qd_des is the synchronized pose-trajectory velocity; it
-# becomes zero after settling. Existing gravity-support feedforward, physical
+# During both transitions and settled pose hold, qd_des and tau_ff are exactly
+# zero. The RS04 therefore applies Kp*(q_des-q)-Kd*qdot internally. Physical
 # joint limits, feedback freshness, temperature/fault, tilt, and absolute
 # torque safety remain active. Policy inference and walking are disabled by
 # scripts/run_sit_stand_gain_test.sh.

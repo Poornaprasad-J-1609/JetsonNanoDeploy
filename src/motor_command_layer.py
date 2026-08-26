@@ -1022,6 +1022,7 @@ class MotorCommandLayer:
         feedback_by_joint = feedback_by_joint or {}
 
         gain_phase = self._resolved_gain_phase(phase)
+        pure_position_pd_phase = str(phase) in ("sit", "stand")
         if gain_phase not in self.gains:
             raise ValueError(f"Unknown phase {phase}. Expected one of {list(self.gains.keys())}")
         command_proto = self.command_proto_for_phase(gain_phase)
@@ -1133,7 +1134,7 @@ class MotorCommandLayer:
                 "kd",
                 command_proto,
             )
-            joint_v_des = (
+            joint_v_des = 0.0 if pure_position_pd_phase else (
                 float(self.feedforward["v_des"])
                 if joint_velocity_target is None
                 else float(joint_velocity_target[i])
@@ -1197,7 +1198,7 @@ class MotorCommandLayer:
                         -preload_limit,
                         preload_limit,
                     )
-            joint_tau_ff = (
+            joint_tau_ff = 0.0 if pure_position_pd_phase else (
                 float(self.feedforward["tau_ff"])
                 + (
                     0.0

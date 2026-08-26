@@ -1046,7 +1046,11 @@ def test_configured_pose_path_uses_official_physical_gain_units():
     assert layer.pose_pd_torque_limits()["stand"] == pytest.approx(100.0)
     assert command["command_encoding"] == "official"
     assert command["q_des"] == pytest.approx(0.40)
-    assert command["joint_v_des"] == pytest.approx(0.25)
+    assert command["joint_v_des_requested"] == pytest.approx(0.0)
+    assert command["joint_v_des"] == pytest.approx(0.0)
+    assert command["v_des"] == pytest.approx(0.0)
+    assert command["joint_tau_ff"] == pytest.approx(0.0)
+    assert command["tau_ff"] == pytest.approx(0.0)
     assert not command["torque_limited"]
     assert command["kp"] == pytest.approx(130.0)
     assert command["kd"] == pytest.approx(4.0)
@@ -1054,7 +1058,7 @@ def test_configured_pose_path_uses_official_physical_gain_units():
     assert command["kd_effective"] == pytest.approx(4.0, abs=0.01)
 
 
-def test_loaded_pose_support_is_complete_and_enters_torque_budget():
+def test_loaded_pose_support_is_bypassed_for_pure_pd_stand():
     runner = PolicyRunner()
     motor_ids = load_yaml(ROOT / "config" / "motor_ids.yaml")["motor_ids"]
     control_cfg = load_yaml(ROOT / "config" / "mit_motor_control.yaml")
@@ -1087,10 +1091,88 @@ def test_loaded_pose_support_is_complete_and_enters_torque_budget():
         },
     )[0]
 
-    assert command["joint_tau_ff"] == pytest.approx(12.0, abs=1.0e-5)
-    assert command["tau_ff"] == pytest.approx(12.0, abs=0.05)
-    assert command["tau_pd_est"] == pytest.approx(12.0, abs=0.05)
+    assert command["joint_tau_ff"] == pytest.approx(0.0, abs=1.0e-8)
+    assert command["tau_ff"] == pytest.approx(0.0, abs=1.0e-8)
+    assert command["tau_pd_est"] == pytest.approx(0.0, abs=0.05)
     assert abs(command["tau_pd_est"]) < command["torque_limit_effective"]
+
+
+@pytest.mark.parametrize("phase", ["sit", "stand"])
+def test_pose_packet_forces_zero_velocity_and_feedforward_at_final_layer(phase):
+    runner = PolicyRunner()
+    motor_ids = load_yaml(ROOT / "config" / "motor_ids.yaml")["motor_ids"]
+    joint_name = "FR_thigh_joint"
+    joint_index = runner.policy_order.index(joint_name)
+    layer = MotorCommandLayer(
+        runner.policy_order,
+        motor_ids,
+        active_joints=[joint_name],
+        joint_can_bus=resolve_joint_can_bus(runner.policy_order, 2),
+    )
+    # Deliberately inject nonzero defaults and caller requests. The final
+    # sit/stand layer must still emit pure RS04 position-PD fields.
+    layer.feedforward["v_des"] = 2.0
+    layer.feedforward["tau_ff"] = 15.0
+    q_target = np.zeros(12, dtype=np.float32)
+    q_target[joint_index] = -0.25
+    qd_target = np.full(12, 1.5, dtype=np.float32)
+    tau_target = np.full(12, 20.0, dtype=np.float32)
+    command = layer.build_mit_commands(
+        q_target,
+        phase=phase,
+        joint_velocity_target=qd_target,
+        joint_feedforward_torque_target=tau_target,
+        feedback_by_joint={
+            joint_name: {
+                "position_raw": 0.0,
+                "joint_position": 0.0,
+                "joint_velocity": 0.2,
+            }
+        },
+    )[0]
+
+    assert command["bus_name"] == "front"
+    assert command["joint_v_des_requested"] == pytest.approx(0.0)
+    assert command["joint_v_des"] == pytest.approx(0.0)
+    assert command["v_des"] == pytest.approx(0.0)
+    assert command["joint_tau_ff"] == pytest.approx(0.0)
+    assert command["tau_ff"] == pytest.approx(0.0)
+    assert command["p_des"] == pytest.approx(
+        command["offset"] + command["direction"] * command["q_des"],
+        abs=1.0e-6,
+    )
+
+
+def test_runtime_pose_calls_use_zero_velocity_and_zero_feedforward_vectors():
+    source = (ROOT / "src" / "main_controller.py").read_text(encoding="utf-8")
+    assert source.count("joint_velocity_target=pure_pose_velocity_target") == 2
+    assert source.count(
+        "joint_feedforward_torque_target=pure_pose_feedforward_target"
+    ) == 2
+
+
+@pytest.mark.parametrize("phase", ["sit", "stand"])
+def test_pure_pd_pose_commands_cover_all_motors_on_two_can_buses(phase):
+    runner = PolicyRunner()
+    motor_ids = load_yaml(ROOT / "config" / "motor_ids.yaml")["motor_ids"]
+    layer = MotorCommandLayer(
+        runner.policy_order,
+        motor_ids,
+        joint_can_bus=resolve_joint_can_bus(runner.policy_order, 2),
+    )
+    commands = layer.build_mit_commands(
+        runner.q_crouch if phase == "sit" else runner.q_stand,
+        phase=phase,
+        joint_velocity_target=np.ones(12, dtype=np.float32),
+        joint_feedforward_torque_target=np.full(12, 25.0, dtype=np.float32),
+    )
+
+    assert len(commands) == 12
+    assert {command["motor_id"] for command in commands} == set(range(1, 13))
+    assert {command["motor_id"] for command in commands if command["bus_name"] == "front"} == set(range(1, 7))
+    assert {command["motor_id"] for command in commands if command["bus_name"] == "back"} == set(range(7, 13))
+    assert all(command["v_des"] == pytest.approx(0.0) for command in commands)
+    assert all(command["tau_ff"] == pytest.approx(0.0) for command in commands)
 
 
 def test_loaded_pose_support_remains_bumpless_through_policy_entry():
