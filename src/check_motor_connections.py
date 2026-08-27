@@ -350,8 +350,8 @@ def print_table(
     print("-" * 190)
     print(
         f"{'Joint':20s} | {'Bus':>5s} | {'Motor':>7s} | {'State':>13s} | {'Age ms':>8s} | "
-        f"{'Joint rad':>10s} | {'Raw rad':>10s} | {'Motor th':>10s} | {'J=dq/dth':>9s} | "
-        f"{'Vel rad/s':>10s} | {'Torque':>9s} | {'Temp C':>7s} | {'4bar':>5s} | Fault"
+        f"{'Joint rad':>10s} | {'Joint deg':>10s} | "
+        f"{'Vel rad/s':>10s} | {'Torque':>9s} | {'Temp C':>7s} | Fault"
     )
     print("-" * 190)
 
@@ -374,8 +374,8 @@ def print_table(
         if feedback is None:
             print(
                 f"{joint_name:20s} | {bus_name:>5s} | 0x{motor_id:02X}    | {state:>13s} | "
-                f"{'-':>8s} | {'-':>10s} | {'-':>10s} | {'-':>10s} | {'-':>9s} | "
-                f"{'-':>10s} | {'-':>9s} | {'-':>7s} | {'-':>5s} | -"
+                f"{'-':>8s} | {'-':>10s} | {'-':>10s} | "
+                f"{'-':>10s} | {'-':>9s} | {'-':>7s} | -"
             )
             continue
 
@@ -386,21 +386,15 @@ def print_table(
             feedback,
             pose_references=pose_references,
         )
-        motor_position = float(feedback.get("motor_position", q_joint))
-        transmission_jacobian = float(feedback.get("transmission_jacobian", 1.0))
-        transmission_enabled = bool(feedback.get("transmission_enabled", False))
         angles[joint_name] = q_joint
         print(
             f"{joint_name:20s} | {bus_name:>5s} | 0x{motor_id:02X}    | {state:>13s} | "
             f"{age_ms:8.1f} | "
             f"{q_joint:+10.4f} | "
-            f"{feedback['position']:+10.4f} | "
-            f"{motor_position:+10.4f} | "
-            f"{transmission_jacobian:+9.4f} | "
+            f"{math.degrees(q_joint):+10.2f} | "
             f"{feedback['velocity']:+10.4f} | "
             f"{feedback['torque']:+9.4f} | "
             f"{feedback['temperature_c']:7.1f} | "
-            f"{'yes' if transmission_enabled else 'no':>5s} | "
             f"0x{int(feedback['fault_bits']):02X}"
         )
 
@@ -810,7 +804,7 @@ def main():
         print("ERROR: four-bar transmission configuration is not usable:", exc)
         print(
             "For calibration-data collection, rerun this checker with "
-            "--disable-four-bar-transmission so it prints raw encoder/Motor th values."
+            "--disable-four-bar-transmission so it prints raw encoder values."
         )
         print(
             "For four-bar validation, fill at least 3 strictly monotonic "
