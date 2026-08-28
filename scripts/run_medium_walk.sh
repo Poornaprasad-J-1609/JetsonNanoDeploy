@@ -35,6 +35,7 @@ args=(
     --no-auto-stand-zero
     --no-auto-sit-zero
     --no-stand-policy-stabilization
+    --no-auto-policy-after-stand
     --no-imu-stabilization
     --no-gait-assist
     # SPACE settles in stand; W/A/S/D/Q/E then provide the trained velocity
