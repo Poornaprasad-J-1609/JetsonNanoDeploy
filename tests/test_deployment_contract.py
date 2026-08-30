@@ -2136,7 +2136,7 @@ def test_mevius_style_launcher_uses_direct_actor_and_simulation_pd():
     assert "--policy-action-smoothing 0" in launcher
     assert "--policy-action-delta-limit 0" in launcher
     assert "--policy-entry-ramp-seconds 3.0" in launcher
-    assert "--auto-policy-after-stand" in launcher
+    assert "--no-auto-policy-after-stand" in launcher
     assert "--policy-kp-override" not in launcher
     assert "--policy-kd-override" not in launcher
 

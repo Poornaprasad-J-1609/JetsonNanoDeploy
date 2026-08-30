@@ -1,680 +1,174 @@
-GRALLATOR_DEPLOY command guide
-==============================
+GRALLATOR MEVIUS-STYLE SLCAN TEST COMMANDS
+==========================================
 
-Run all commands from this folder:
+This folder keeps the Grallator policy/observation contract and hardware
+safety boundary while using the simpler MEVIUS-style actor-to-MIT target path.
 
-cd /path/to/GRALLATOR_DEPLOY
+The robot must be supported for initial tests. Keep physical emergency power
+removal accessible. Never run two motor controllers at the same time.
 
-For the official SocketCAN path, use Linux CAN channel names. The examples
-below work with slcan0/can0 style channels and select SocketCAN automatically:
 
-export CAN0=slcan0
-export FRONT_CAN=can0
-export BACK_CAN=can1
-export FR_CAN=can0
-export FL_CAN=can1
-export BR_CAN=can2
-export BL_CAN=can3
-export IMU_PORT=/dev/ttyUSB0
+0. ENTER THE FOLDER AND SET THE ENVIRONMENT
+-------------------------------------------
+
+cd ~/GRALLATOR_MEVIUS_STYLE
 export PYTHONPATH="$PWD/src"
-
-# Keep enough room for one 12-motor set without allowing hundreds of stale
-# position targets to queue behind a temporarily busy slcan adapter.
-sudo ip link set "$CAN0" txqueuelen 32
-
-All policy, feedback, enable, stop, and motor-check traffic now uses the same
-29-bit extended-ID SocketCAN framing as src/robstride_official_zero.py. Use
---can-backend socketcan explicitly when desired. The old /dev/ttyUSB AT packet
-transport remains available only with --can-backend serial-at.
-
-Motor rotation signs are configured only in config/motor_directions.yaml.
-+1 follows the motor's positive encoder direction (clockwise from the chosen
-motor viewpoint); -1 reverses it. The same sign is applied to command and
-feedback coordinates. Restart the controller after editing this file.
-
-CAN topology options:
-
-1 CAN, all 12 motors on one adapter:
-  --can-count 1 --can-ports "$CAN0" --can-backend socketcan --can-bitrate 1000000
-
-2 CAN, front legs on one adapter and back legs on one adapter:
-  --can-count 2 --can-ports "$FRONT_CAN" "$BACK_CAN" --can-backend socketcan --can-bitrate 1000000
-
-4 CAN, one adapter per leg. The port order is FR FL BR BL:
-  --can-count 4 --can-ports "$FR_CAN" "$FL_CAN" "$BR_CAN" "$BL_CAN" --can-backend socketcan --can-bitrate 1000000
-
-The examples below use the 2-CAN front/back topology. Replace only the
---can-count/--can-ports lines when your wiring is 1-CAN or 4-CAN.
-
-If the GUI does not open from a desktop terminal, check:
-
-echo $DISPLAY
-export DISPLAY=:0
-
-Install Python requirements:
-
-/usr/bin/python3 -m pip install -r requirements.txt
-
-Verify the approved policy artifact and fixed 48-observation contract:
-
-/usr/bin/python3 src/check_policy_contract.py
-
-Replay and compare IsaacLab policy/motor CSV logs against deployment:
-
-/usr/bin/python3 src/compare_sim_policy_logs.py \
-  grallator_sim_policy_input_log_20260701_065137.csv \
-  grallator_sim_motor_log_20260701_065137.csv \
-  --output logs/sim_replay_comparison_20260701_065137.csv
-
-Every main_controller CSV includes the complete policy data path in verified
-policy joint order: obs_000..047 (input), action_00..11 (raw policy output),
-sent_action_00..11 (output after optional filtering), q_target_00..11 (MIT
-position target), qd_target_00..11 (MIT joint-velocity target), and
-q_00..11/qd_00..11 (joint-radian feedback). Command, IMU status, torque
-summaries, policy SHA256, and policy_joint_order are also saved. Use
---log-every 1 when every 50 Hz control step must be recorded.
-
-Each main_controller run automatically commits and pushes only its completed
-CSV after motor stop frames are sent and CAN is closed. Use
---no-auto-push-log for an offline run. The Jetson must have Git SSH
-authentication configured. The publisher refuses to push if the branch
-contains any unpushed non-log commit, so source changes cannot be uploaded
-accidentally.
-
-The controller prints the selected policy SHA256 at startup. It refuses an
-unrecognized policy unless --allow-policy-hash-mismatch is passed explicitly
-after the replacement artifact has been independently verified.
-
-Ubuntu/Debian GUI dependency if tkinter is missing:
-
-sudo apt-get update
-sudo apt-get install -y python3-tk
+export CAN_FRONT=slcan0
+export CAN_BACK=slcan1
+export IMU_PORT=/dev/ttyUSB0
 
 
-1. Port check
--------------
+1. START AND VERIFY BOTH SLCAN INTERFACES
+-----------------------------------------
 
-ls -l /dev/ttyUSB* /dev/input/js* /dev/input/event* 2>/dev/null
+sudo systemctl restart slcan0.service slcan1.service
+sudo ip link set "$CAN_FRONT" up
+sudo ip link set "$CAN_BACK" up
+sudo ip link set "$CAN_FRONT" txqueuelen 32
+sudo ip link set "$CAN_BACK" txqueuelen 32
 
-/usr/bin/python3 src/check_can_routing.py --can-count 1
-/usr/bin/python3 src/check_can_routing.py --can-count 2
-/usr/bin/python3 src/check_can_routing.py --can-count 4
+ip -br link show "$CAN_FRONT"
+ip -br link show "$CAN_BACK"
+ip -details -statistics link show "$CAN_FRONT"
+ip -details -statistics link show "$CAN_BACK"
+
+Both interfaces must report UP before continuing.
 
 
-14. Official RobStride SocketCAN hardware-zero verification
------------------------------------------------------------
+2. PASSIVE MOTOR CONNECTION AND ENCODER CHECK
+---------------------------------------------
 
-This path requires SocketCAN interfaces such as slcan0 or can0/can1. Install
-the official SDK dependencies, bring the channels up, and verify them:
+This sends stop/poll frames only. It does not enable MIT torque.
 
-/usr/bin/python3 -m pip install -r requirements.txt
-
-sudo ip link set can0 down 2>/dev/null || true
-sudo ip link set can0 type can bitrate 1000000
-sudo ip link set can0 up
-
-sudo ip link set can1 down 2>/dev/null || true
-sudo ip link set can1 type can bitrate 1000000
-sudo ip link set can1 up
-
-ip -details link show can0
-ip -details link show can1
-
-Place every motor at the intended physical zero pose. Run the official raw
-reader and enter s only after all 12 MECHANICAL_POSITION reads are connected:
-
-/usr/bin/python3 src/robstride_official_zero.py \
+python3 src/check_motor_connections.py \
   --can-count 2 \
-  --channels "$FRONT_CAN" "$BACK_CAN" \
-  --model rs-04
+  --can-ports "$CAN_FRONT" "$CAN_BACK" \
+  --can-backend socketcan \
+  --can-bitrate 1000000 \
+  --all \
+  --rate 20 \
+  --print-every 0.5 \
+  --disable-set-zero-key \
+  --disable-crouch-key \
+  --disable-four-bar-transmission
 
-Power motors off and back on. Do not press s again. Verify persisted raw zero:
+Expected: 12/12 CONNECTED, fresh feedback, fault 0x00. Press q to quit.
 
-/usr/bin/python3 src/robstride_official_zero.py \
+
+3. PASSIVE FRONT-LEG CONNECTION CHECK
+-------------------------------------
+
+python3 src/check_motor_connections.py \
   --can-count 2 \
-  --channels "$FRONT_CAN" "$BACK_CAN" \
-  --model rs-04 \
-  --read-only
-
-The utility logs raw official mechanical position, measured position,
-mechanical offset, and zero state under logs/robstride_official_zero_*.csv.
-It deliberately performs no software-zero, direction conversion, pose snap,
-or modulo/2*pi correction.
-
-
-2. Joystick connection test
----------------------------
-
-/usr/bin/python3 src/joystick_interface.py \
-  --source joystick \
-  --list-joysticks \
-  --joystick-wait-seconds 10
-
-To see raw axes/buttons:
-
-/usr/bin/python3 src/joystick_interface.py \
-  --source joystick \
-  --joystick-wait-seconds 10 \
-  --seconds 30 \
-  --hz 20 \
-  --show-raw
-
-Main controller workflow:
-
-1. Set RobStride hardware zero once with the robot physically standing.
-2. Normal controller startup is passive: no software-zero and no MIT hold
-   command stream is sent when the program opens. Hardware stand zero is fixed.
-3. Keyboard controls: space = stand, c = crouch/default, h = hold current
-   position, up/down arrows = speed up/down, x = emergency stop.
-4. Press h only when you want to hold the current pose. Press space to command
-   stand q=0, or c to command config/default_pose.yaml crouch_pose. Walking is
-   blocked until stand reaches its target. No pose command changes motor zero.
+  --can-ports "$CAN_FRONT" "$CAN_BACK" \
+  --can-backend socketcan \
+  --can-bitrate 1000000 \
+  --active-joints \
+    FR_hip_joint FR_thigh_joint FR_calf_joint \
+    FL_hip_joint FL_thigh_joint FL_calf_joint \
+  --rate 20 \
+  --print-every 0.5 \
+  --disable-set-zero-key \
+  --disable-crouch-key \
+  --disable-four-bar-transmission
 
 
-3. IMU check without GUI
-------------------------
+4. PASSIVE 200 HZ TWO-ADAPTER TRANSPORT BENCHMARK
+-------------------------------------------------
 
-/usr/bin/python3 src/imu_interface.py \
+python3 scripts/benchmark_can_control_cycle.py \
+  --can-count 2 \
+  --can-interfaces "$CAN_FRONT" "$CAN_BACK" \
+  --motors 12 \
+  --rate 200 \
+  --duration 20 \
+  --bitrate 1000000 \
+  --feedback-freshness-window 0.040 \
+  --details
+
+Do not continue if transport qualification fails or feedback becomes stale.
+
+
+5. REAL XSENS IMU CHECK WITHOUT MOTOR CONTROL
+---------------------------------------------
+
+python3 src/imu_interface.py \
   --source xsens \
   --port "$IMU_PORT" \
   --seconds 20 \
-  --hz 20
+  --hz 100
 
 
-4. IMU check with GUI, no motors/CAN
-------------------------------------
+6. SIT/STAND-ONLY TEST: POLICY CANNOT START
+-------------------------------------------
 
-/usr/bin/python3 src/main_controller.py \
-  --mode print \
-  --feedback-source fake \
-  --command-source fixed \
-  --vx 0.0 \
-  --vy 0.0 \
-  --yaw 0.0 \
-  --imu-source xsens \
-  --imu-port "$IMU_PORT" \
-  --start-control-mode idle \
-  --startup-action hold \
-  --policy-steps 0 \
-  --log-every 5 \
-  --gui
+bash scripts/run_sit_stand_gain_test.sh
+
+Keys:
+  c       crouch
+  Space   stand
+  h       hold current pose
+  x       emergency stop
+
+Confirm crouch and stand are smooth, complete, and free of faults before any
+walking test. This runner uses --pose-test-only and disables policy takeover.
 
 
-5. Motor connection check, GUI encoder view only
-------------------------------------------------
+7. PRINT THE COMPLETE MEVIUS-STYLE WALK COMMAND WITHOUT HARDWARE
+---------------------------------------------------------------
 
-/usr/bin/python3 src/check_motor_connections.py \
-  --can-count 2 \
-  --can-ports "$FRONT_CAN" "$BACK_CAN" \
-  --all \
-  --rate 20 \
-  --print-every 1.0 \
-  --gui-only
+DRY_RUN=1 bash scripts/run_mevius_style_walk.sh \
+  --speed-scale-initial 0.03 \
+  --speed-scale-min 0.03 \
+  --speed-scale-max 0.05 \
+  --policy-command-vx-max 0.08 \
+  --policy-command-vy-max 0.06 \
+  --policy-command-yaw-max 0
+
+Verify the printed command contains:
+  --exact-policy-after-entry
+  --policy-action-smoothing 0
+  --policy-action-delta-limit 0
+  --no-auto-policy-after-stand
 
 
-6. Motor encoder check only, no hardware zero
+8. LOW-SPEED SUPPORTED MEVIUS-STYLE WALK TEST
 ---------------------------------------------
 
-This only polls encoder feedback and shows safe joint radians. It disables the
-hardware set-zero key so pressing s cannot write zero to the RobStride motors.
-
-/usr/bin/python3 src/check_motor_connections.py \
-  --can-count 2 \
-  --can-ports "$FRONT_CAN" "$BACK_CAN" \
-  --all \
-  --rate 20 \
-  --print-every 1.0 \
-  --disable-set-zero-key \
-  --disable-crouch-key \
-  --gui-only
-  
-
-Keyboard while this command is running:
-
-q = quit
-
-
-7. Optional YAML crouch pose capture, no hardware zero
------------------------------------------------------
-
-This still does not send RobStride hardware set-zero. Press c only if you want
-to save the current safe joint-radian feedback as config/default_pose.yaml
-crouch_pose.
-
-/usr/bin/python3 src/check_motor_connections.py \
-  --can-count 2 \
-  --can-ports "$FRONT_CAN" "$BACK_CAN" \
-  --all \
-  --rate 20 \
-  --print-every 1.0 \
-  --disable-set-zero-key \
-  --gui-only
-
-Keyboard while this command is running:
-
-c = save current feedback angles as crouch_pose in config/default_pose.yaml
-q = quit
-
-
-8. Dry run, no motors/CAN/real IMU
-----------------------------------
-
-/usr/bin/python3 src/main_controller.py \
-  --mode print \
-  --feedback-source fake \
-  --command-source fixed \
-  --vx 0.30 \
-  --vy 0.00 \
-  --yaw 0.00 \
-  --imu-source fake \
-  --no-stand-policy-stabilization \
-  --no-imu-stabilization \
-  --no-gait-assist \
-  --base-lin-vel-source zero \
-  --start-control-mode policy \
-  --startup-action hold \
-  --initial-zero-frame stand \
-  --no-auto-zero-on-startup \
-  --policy-steps 100 \
-  --log-every 5 \
-  --gui
-
-
-9. Keyboard sit/stand only, fake IMU
-------------------------------------
-
-This sends real MIT commands. Keep the robot suspended/secured.
-Walking is disabled by the huge walk threshold and zero velocity limits.
-Keys after launch: space = stand, c = crouch/default, h = hold current
-position, x = emergency stop. Startup is idle: no auto-zero and no auto-hold.
-
-/usr/bin/python3 src/main_controller.py \
-  --mode mit-signal \
-  --can-count 2 \
-  --can-ports "$FRONT_CAN" "$BACK_CAN" \
-  --can-backend socketcan \
-  --can-bitrate 1000000 \
-  --feedback-source mit \
-  --command-source keyboard \
-  --imu-source fake \
-  --no-stand-policy-stabilization \
-  --no-imu-stabilization \
-  --no-gait-assist \
-  --base-lin-vel-source zero \
-  --start-control-mode idle \
-  --startup-action hold \
-  --initial-zero-frame stand \
-  --no-auto-zero-on-startup \
-  --no-auto-stand-zero \
-  --no-auto-sit-zero \
-  --crouch-calibration-value 0.0 \
-  --stand-calibration-value 0.0 \
-  --policy-steps 0 \
-  --control-hz 50 \
-  --can-command-hz 200 \
-  --walk-command-threshold 999 \
-  --max-vx 0.0 \
-  --max-vy 0.0 \
-  --max-yaw 0.0 \
-  --speed-scale-initial 0.05 \
-  --speed-scale-min 0.05 \
-  --speed-scale-max 0.05 \
-  --keyboard-command-timeout 0.35 \
-  --enable-retries 3 \
-  --enable-retry-delay 0.05 \
-  --feedback-timeout 0.05 \
-  --hold-capture-seconds 0.50 \
-  --hold-command-repeats 1 \
-  --pose-sync-error-rad 0 \
-  --pose-transition-speed-rad-s 0.40 \
-  --pose-transition-min-seconds 1.50 \
-  --log-every 5 \
-  --joint-debug \
-  --auto-push-log \
-  --gui
-
-
-9a. Keyboard sit/stand only, two SocketCAN buses
--------------------------------------------------
-
-Use this with front motors 1-6 on slcan0 and back motors 7-12 on slcan1. The
-two physical buses transmit their six-frame command batches concurrently.
-The robot must be secured for the first run. Keys: c = crouch, space = stand,
-h = hold current joint-radian feedback, x = emergency stop.
-
-sudo ip link set "$FRONT_CAN" txqueuelen 32
-sudo ip link set "$BACK_CAN" txqueuelen 32
-
-/usr/bin/python3 src/main_controller.py \
-  --mode mit-signal \
-  --can-count 2 \
-  --can-ports "$FRONT_CAN" "$BACK_CAN" \
-  --can-backend socketcan \
-  --can-bitrate 1000000 \
-  --feedback-source mit \
-  --command-source keyboard \
-  --imu-source none \
-  --no-stand-policy-stabilization \
-  --no-imu-stabilization \
-  --no-gait-assist \
-  --base-lin-vel-source zero \
-  --start-control-mode idle \
-  --startup-action hold \
-  --initial-zero-frame stand \
-  --no-auto-zero-on-startup \
-  --no-auto-stand-zero \
-  --no-auto-sit-zero \
-  --policy-steps 0 \
-  --control-hz 50 \
-  --can-command-hz 200 \
-  --walk-command-threshold 999 \
-  --max-vx 0.0 \
-  --max-vy 0.0 \
-  --max-yaw 0.0 \
-  --keyboard-command-timeout 0.35 \
-  --feedback-timeout 0.02 \
-  --hold-capture-seconds 0.50 \
-  --hold-command-repeats 1 \
-  --pose-sync-error-rad 0 \
-  --pose-transition-speed-rad-s 0.40 \
-  --pose-transition-min-seconds 1.50 \
-  --log-every 5 \
-  --joint-debug \
-  --auto-push-log \
-  --gui
-
-
-9b. Keyboard stand-only RL IMU stabilization, real IMU
-------------------------------------------------------
-
-This sends real MIT commands. Walking is disabled, but after you press space
-and the stand target settles, the RL policy keeps running with zero velocity
-command. The policy receives live projected_gravity, gyro, encoder positions,
-encoder velocities, and previous_action exactly like walking mode. Use this to
-tilt/move the IMU gently and watch whether policy actions/leg targets respond.
-
-/usr/bin/python3 src/main_controller.py \
-  --mode mit-signal \
-  --can-count 2 \
-  --can-ports "$FRONT_CAN" "$BACK_CAN" \
-  --feedback-source mit \
-  --command-source keyboard \
-  --imu-source xsens \
-  --imu-port "$IMU_PORT" \
-  --no-stand-policy-stabilization \
-  --no-imu-stabilization \
-  --no-gait-assist \
-  --base-lin-vel-source zero \
-  --start-control-mode idle \
-  --startup-action hold \
-  --initial-zero-frame stand \
-  --no-auto-zero-on-startup \
-  --no-auto-stand-zero \
-  --no-auto-sit-zero \
-  --crouch-calibration-value 0.0 \
-  --stand-calibration-value 0.0 \
-  --policy-steps 0 \
-  --walk-command-threshold 999 \
-  --max-vx 0.0 \
-  --max-vy 0.0 \
-  --max-yaw 0.0 \
-  --speed-scale-initial 0.05 \
-  --speed-scale-min 0.05 \
-  --speed-scale-max 0.05 \
-  --keyboard-command-timeout 0.35 \
-  --policy-action-clip 1.0 \
-  --policy-action-smoothing 0.45 \
-  --enable-retries 3 \
-  --enable-retry-delay 0.05 \
-  --feedback-timeout 0.08 \
-  --hold-capture-seconds 0.50 \
-  --hold-command-repeats 2 \
-  --pose-sync-error-rad 0 \
-  --log-every 5 \
-  --joint-debug \
-  --gui
-
-
-10. Keyboard walk control with policy, real IMU, low-speed ground test
----------------------------------------------------------------------
-
-This sends real MIT commands with the ground walking gain profile.
-After launch: press space to stand and wait for "Policy walking is armed", then
-hold W/S for straight forward/back, A/D for lateral, and W+A/W+D/S+A/S+D for
-diagonal xy movement. Press up/down arrows to change speed scale. Press c to
-return to the configured crouch pose, h to hold current position, or x to
-emergency-stop. No runtime software-zero is performed.
-These settings are the gait-recovery ground profile. They intentionally lock out
-lateral/yaw input so W can only send +vx to the policy, but they use more
-command speed and less action damping than the first gentle profile. This is
-closer to the 08becfc hanging-test behavior while still keeping deployment-side
-action slew limiting active.
-
-/usr/bin/python3 src/main_controller.py \
-  --mode mit-signal \
-  --can-count 2 \
-  --can-ports "$FRONT_CAN" "$BACK_CAN" \
-  --feedback-source mit \
-  --command-source keyboard \
-  --imu-source xsens \
-  --imu-port "$IMU_PORT" \
-  --no-stand-policy-stabilization \
-  --no-imu-stabilization \
-  --no-gait-assist \
-  --base-lin-vel-source zero \
-  --start-control-mode idle \
-  --startup-action hold \
-  --initial-zero-frame stand \
-  --no-auto-zero-on-startup \
-  --no-auto-stand-zero \
-  --no-auto-sit-zero \
-  --crouch-calibration-value 0.0 \
-  --stand-calibration-value 0.0 \
-  --policy-steps 0 \
-  --walk-command-threshold 0.02 \
-  --max-vx 1.20 \
-  --max-vy 0.0 \
-  --max-yaw 0.0 \
-  --speed-scale-initial 0.06 \
+bash scripts/run_mevius_style_walk.sh \
+  --speed-scale-initial 0.03 \
   --speed-scale-min 0.03 \
-  --speed-scale-max 0.12 \
+  --speed-scale-max 0.05 \
   --speed-scale-step 0.01 \
-  --keyboard-command-timeout 0.35 \
-  --walk-command-grace-seconds 0.10 \
-  --policy-command-gain 1.5 \
-  --policy-command-vx-max 0.20 \
-  --policy-command-vy-max 0.0 \
-  --policy-command-yaw-max 0.0 \
-  --policy-action-clip 3.2 \
-  --policy-action-smoothing 0.25 \
-  --policy-action-delta-limit 0.32 \
-  --policy-entry-ramp-seconds 0.9 \
-  --policy-pd-torque-limit 60.0 \
-  --enable-retries 3 \
-  --enable-retry-delay 0.05 \
-  --feedback-timeout 0.05 \
-  --fresh-feedback-max-age 0 \
-  --hold-capture-seconds 0.50 \
-  --hold-command-repeats 2 \
-  --pose-sync-error-rad 0 \
-  --log-every 20 \
-  --no-auto-push-log
-
-
-11. Keyboard walk control with policy, fake IMU, low-speed ground test
----------------------------------------------------------------------
-
-This sends real MIT commands with the ground walking gain profile, but uses fake
-upright IMU values.
-After launch: press space to stand and wait for "Policy walking is armed", then
-hold W/S for straight forward/back, A/D for lateral, and W+A/W+D/S+A/S+D for
-diagonal xy movement. Press up/down arrows to change speed scale. Press c to
-return to the configured crouch pose, h to hold current position, or x to
-emergency-stop. No runtime software-zero is performed.
-These settings are the same gait-recovery profile as the real-IMU command, but
-with fake upright IMU values.
-
-/usr/bin/python3 src/main_controller.py \
-  --mode mit-signal \
-  --can-count 2 \
-  --can-ports "$FRONT_CAN" "$BACK_CAN" \
-  --feedback-source mit \
-  --command-source keyboard \
-  --imu-source fake \
-  --no-stand-policy-stabilization \
-  --no-imu-stabilization \
-  --no-gait-assist \
-  --base-lin-vel-source zero \
-  --start-control-mode idle \
-  --startup-action hold \
-  --initial-zero-frame stand \
-  --no-auto-zero-on-startup \
-  --no-auto-stand-zero \
-  --no-auto-sit-zero \
-  --crouch-calibration-value 0.0 \
-  --stand-calibration-value 0.0 \
-  --policy-steps 0 \
-  --walk-command-threshold 0.02 \
-  --max-vx 1.20 \
-  --max-vy 0.0 \
-  --max-yaw 0.0 \
-  --speed-scale-initial 0.06 \
-  --speed-scale-min 0.03 \
-  --speed-scale-max 0.12 \
-  --speed-scale-step 0.01 \
-  --keyboard-command-timeout 0.35 \
-  --walk-command-grace-seconds 0.10 \
-  --policy-command-gain 1.5 \
-  --policy-command-vx-max 0.20 \
-  --policy-command-vy-max 0.0 \
-  --policy-command-yaw-max 0.0 \
-  --policy-action-clip 3.2 \
-  --policy-action-smoothing 0.25 \
-  --policy-action-delta-limit 0.32 \
-  --policy-entry-ramp-seconds 0.9 \
-  --policy-pd-torque-limit 60.0 \
-  --enable-retries 3 \
-  --enable-retry-delay 0.05 \
-  --feedback-timeout 0.05 \
-  --fresh-feedback-max-age 0 \
-  --hold-capture-seconds 0.50 \
-  --hold-command-repeats 2 \
-  --pose-sync-error-rad 0 \
-  --log-every 20 \
-  --no-auto-push-log
-
-
-11A. Fake-IMU forward/back gait comparison against logs_sim
------------------------------------------------------------
-
-Use this after section 11 is electrically stable. It still uses fake upright
-IMU and keeps vy/yaw at zero, but raises W/S enough for the trot rhythm to
-appear. The policy-observed forward command is capped at 0.20 m/s:
-
-  policy_vx = clip(max_vx * speed_scale * policy_command_gain, +/-0.20)
-            = clip(1.20 * 0.12 * 1.5, +/-0.20)
-            = 0.20
-
-This is still below the IsaacSim log command of +/-0.60, but is much closer
-than the previous 0.108 command and is safer for first fake-IMU ground checks.
-
-/usr/bin/python3 src/main_controller.py \
-  --mode mit-signal \
-  --can-count 2 \
-  --can-ports "$FRONT_CAN" "$BACK_CAN" \
-  --feedback-source mit \
-  --command-source keyboard \
-  --imu-source fake \
-  --no-stand-policy-stabilization \
-  --no-imu-stabilization \
-  --no-gait-assist \
-  --base-lin-vel-source zero \
-  --start-control-mode idle \
-  --startup-action hold \
-  --initial-zero-frame stand \
-  --no-auto-zero-on-startup \
-  --no-auto-stand-zero \
-  --no-auto-sit-zero \
-  --crouch-calibration-value 0.0 \
-  --stand-calibration-value 0.0 \
-  --policy-steps 0 \
-  --walk-command-threshold 0.02 \
-  --max-vx 1.20 \
-  --max-vy 0.0 \
-  --max-yaw 0.0 \
-  --speed-scale-initial 0.12 \
-  --speed-scale-min 0.06 \
-  --speed-scale-max 0.14 \
-  --speed-scale-step 0.01 \
-  --keyboard-command-timeout 0.35 \
-  --walk-command-grace-seconds 0.10 \
-  --policy-command-gain 1.5 \
-  --policy-command-vx-max 0.20 \
-  --policy-command-vy-max 0.0 \
-  --policy-command-yaw-max 0.0 \
-  --policy-action-clip 3.2 \
-  --policy-action-smoothing 0.25 \
-  --policy-action-delta-limit 0.32 \
-  --policy-entry-ramp-seconds 0.9 \
-  --policy-pd-torque-limit 60.0 \
-  --enable-retries 3 \
-  --enable-retry-delay 0.05 \
-  --feedback-timeout 0.05 \
-  --fresh-feedback-max-age 0 \
-  --hold-capture-seconds 0.50 \
-  --hold-command-repeats 2 \
-  --pose-sync-error-rad 0 \
-  --log-every 20 \
-  --no-auto-push-log
-
-
-After a real run, compare it to the current forward/back simulation log:
-
-PYTHONPATH=src /usr/bin/python3 src/compare_real_sim_logs.py \
-  logs_sim/grallator_sim_policy_input_log_20260713_110634.csv \
-  logs_sim/grallator_sim_motor_log_20260713_110634.csv \
-  logs/YOUR_REAL_RUN.csv
-
-
-12. Simulation-match policy input switches
-------------------------------------------
-
-Use these only after the safe preview is behaving correctly. They make policy
-inference closer to play_grallator_keyboard.py by removing deploy-only command
-caps, action clipping, action slew limiting, and action smoothing. Keep the
-robot suspended/secured. Do not use --policy-sim-match for first ground walking:
-the raw actor can jump to 3-4+ action units and excite trunk shake.
-
-Replace these switches in section 10 or 11:
-
-  --max-vx 0.80 \
-  --max-vy 0.80 \
-  --max-yaw 0.80 \
-  --speed-scale-initial 1.0 \
-  --speed-scale-min 1.0 \
-  --speed-scale-max 1.0 \
-  --policy-command-gain 1.0 \
-  --policy-command-vx-max 0.0 \
-  --policy-command-vy-max 0.0 \
-  --policy-command-yaw-max 0.0 \
-  --policy-action-clip 0.0 \
-  --policy-action-smoothing 0.0 \
-  --policy-action-delta-limit 0.0 \
+  --policy-command-vx-max 0.08 \
+  --policy-command-vy-max 0.06 \
+  --policy-command-yaw-max 0 \
   --log-every 1 \
+  --no-auto-push-log
 
-With the switches above, keyboard W/S sends exactly +/-0.8 vx to the policy.
-A/D sends +/-0.8 vy and Q/E sends +/-0.8 yaw. Combined movement keys send
-translation/diagonal/yaw commands matching the logged IsaacSim convention.
+Sequence:
+  1. Press c and wait for crouch to complete.
+  2. Press Space and wait for stand to settle.
+  3. Confirm it remains in stand. Policy must not start automatically.
+  4. Press w once to request low-speed forward policy takeover.
+  5. Press h to stop walking and hold, c to crouch, or x for emergency stop.
+
+Movement keys:
+  w/s     forward/backward
+  a/d     left/right
+  q/e     yaw left/right
+  arrows  adjust speed scale
 
 
-13. Quick code checks after migration
--------------------------------------
+9. FIND THE LATEST LOG
+----------------------
 
-/usr/bin/python3 -m py_compile src/*.py
+find logs -type f -name 'grallator_run_*.csv' -size +0c \
+  -printf '%T@ %p\n' | sort -nr | head -n 5
 
-/usr/bin/python3 src/check_policy_limits.py \
-  --base-lin-vel-source zero
 
-/usr/bin/python3 src/check_can_routing.py --can-count 1
-/usr/bin/python3 src/check_can_routing.py --can-count 2
-/usr/bin/python3 src/check_can_routing.py --can-count 4
+10. STOP THE SLCAN SERVICES AFTER TESTING
+-----------------------------------------
+
+sudo systemctl stop slcan0.service slcan1.service
+ip -br link | grep -E 'can|slcan'
