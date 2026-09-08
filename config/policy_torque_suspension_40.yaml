@@ -1,0 +1,30 @@
+policy_torque_profile:
+  # Conservative suspended-test authority. The controller begins at 14 Nm
+  # and ramps each joint to 40 Nm only after its existing safety checks pass.
+  start_nm:
+    BL_hip_joint: 14.0
+    BR_hip_joint: 14.0
+    FL_hip_joint: 14.0
+    FR_hip_joint: 14.0
+    BL_thigh_joint: 14.0
+    BR_thigh_joint: 14.0
+    FL_thigh_joint: 14.0
+    FR_thigh_joint: 14.0
+    BL_calf_joint: 14.0
+    BR_calf_joint: 14.0
+    FL_calf_joint: 14.0
+    FR_calf_joint: 14.0
+
+  final_nm:
+    BL_hip_joint: 40.0
+    BR_hip_joint: 40.0
+    FL_hip_joint: 40.0
+    FR_hip_joint: 40.0
+    BL_thigh_joint: 40.0
+    BR_thigh_joint: 40.0
+    FL_thigh_joint: 40.0
+    FR_thigh_joint: 40.0
+    BL_calf_joint: 40.0
+    BR_calf_joint: 40.0
+    FL_calf_joint: 40.0
+    FR_calf_joint: 40.0

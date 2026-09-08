@@ -25,6 +25,7 @@ exec "$ROOT_DIR/scripts/run_medium_walk.sh" \
   --policy-entry-ramp-seconds 3.0 \
   --torque-profile-stage stage40 \
   --acknowledge-40nm-suspension-test \
+  --policy-pd-torque-profile "$ROOT_DIR/config/policy_torque_suspension_40.yaml" \
   --policy-absolute-torque-ceiling 40 \
   --pose-pd-torque-limit 40 \
   --policy-torque-ramp-max-measured-torque 35 \
