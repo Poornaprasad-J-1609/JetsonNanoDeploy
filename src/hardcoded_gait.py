@@ -16,6 +16,7 @@ class FourierGaitTemplate:
     name: str
     source_frequency_hz: float
     coefficients: np.ndarray
+    harmonic_weights: np.ndarray
 
     def __post_init__(self):
         coefficients = np.asarray(self.coefficients, dtype=np.float64)
@@ -28,7 +29,13 @@ class FourierGaitTemplate:
             raise ValueError(f"{self.name}: coefficients contain non-finite values")
         if not np.isfinite(self.source_frequency_hz) or self.source_frequency_hz <= 0.0:
             raise ValueError(f"{self.name}: source_frequency_hz must be finite and > 0")
+        harmonic_weights = np.asarray(self.harmonic_weights, dtype=np.float64)
+        if harmonic_weights.shape != (3,) or not np.all(np.isfinite(harmonic_weights)):
+            raise ValueError(f"{self.name}: harmonic_weights must contain 3 finite values")
+        if np.any(harmonic_weights < 0.0) or np.any(harmonic_weights > 1.0):
+            raise ValueError(f"{self.name}: harmonic_weights must be within [0, 1]")
         object.__setattr__(self, "coefficients", coefficients)
+        object.__setattr__(self, "harmonic_weights", harmonic_weights)
 
     def sample(self, phase_cycles):
         phase_cycles = float(phase_cycles)
@@ -37,8 +44,9 @@ class FourierGaitTemplate:
         phase = 2.0 * math.pi * phase_cycles
         result = self.coefficients[0].copy()
         for harmonic in range(1, 4):
-            result += self.coefficients[2 * harmonic - 1] * math.sin(harmonic * phase)
-            result += self.coefficients[2 * harmonic] * math.cos(harmonic * phase)
+            weight = self.harmonic_weights[harmonic - 1]
+            result += weight * self.coefficients[2 * harmonic - 1] * math.sin(harmonic * phase)
+            result += weight * self.coefficients[2 * harmonic] * math.cos(harmonic * phase)
         return result.astype(np.float32)
 
 
@@ -52,6 +60,8 @@ class HardcodedGaitPlayer:
         frequency_scale=0.5,
         direction_blend_seconds=2.0,
         max_target_step_rad=0.025,
+        max_target_velocity_rad_s=1.5,
+        max_target_acceleration_rad_s2=12.0,
     ):
         self.templates = dict(templates)
         self.amplitude_scale = self._bounded_scale(amplitude_scale, "amplitude_scale")
@@ -60,7 +70,20 @@ class HardcodedGaitPlayer:
         self.max_target_step_rad = float(max_target_step_rad)
         if not np.isfinite(self.max_target_step_rad) or self.max_target_step_rad <= 0.0:
             raise ValueError("max_target_step_rad must be finite and > 0")
+        self.max_target_velocity_rad_s = self._positive_finite(
+            max_target_velocity_rad_s, "max_target_velocity_rad_s"
+        )
+        self.max_target_acceleration_rad_s2 = self._positive_finite(
+            max_target_acceleration_rad_s2, "max_target_acceleration_rad_s2"
+        )
         self.reset()
+
+    @staticmethod
+    def _positive_finite(value, label):
+        value = float(value)
+        if not np.isfinite(value) or value <= 0.0:
+            raise ValueError(f"{label} must be finite and > 0")
+        return value
 
     @staticmethod
     def _bounded_scale(value, label):
@@ -76,6 +99,7 @@ class HardcodedGaitPlayer:
             cfg = yaml.safe_load(stream) or {}
         if list(cfg.get("joint_order", [])) != list(POLICY_JOINT_ORDER):
             raise ValueError("hardcoded gait joint_order does not match policy order")
+        defaults = cfg.get("deployment_defaults", {}) or {}
         templates = {}
         for name in ("forward", "backward"):
             item = (cfg.get("templates", {}) or {}).get(name, {}) or {}
@@ -83,8 +107,11 @@ class HardcodedGaitPlayer:
                 name=name,
                 source_frequency_hz=float(item["source_frequency_hz"]),
                 coefficients=np.asarray(item["coefficients"], dtype=np.float64),
+                harmonic_weights=np.asarray(
+                    item.get("harmonic_weights", defaults.get("harmonic_weights", [1, 1, 1])),
+                    dtype=np.float64,
+                ),
             )
-        defaults = cfg.get("deployment_defaults", {}) or {}
         return cls(
             templates,
             amplitude_scale=(
@@ -99,12 +126,19 @@ class HardcodedGaitPlayer:
             ),
             direction_blend_seconds=float(defaults.get("direction_blend_seconds", 2.0)),
             max_target_step_rad=float(defaults.get("max_target_step_rad", 0.025)),
+            max_target_velocity_rad_s=float(
+                defaults.get("max_target_velocity_rad_s", 1.5)
+            ),
+            max_target_acceleration_rad_s2=float(
+                defaults.get("max_target_acceleration_rad_s2", 12.0)
+            ),
         )
 
     def reset(self):
         self.direction = None
         self.phase_cycles = 0.0
         self.last_target = np.zeros(len(POLICY_JOINT_ORDER), dtype=np.float32)
+        self.last_velocity = np.zeros(len(POLICY_JOINT_ORDER), dtype=np.float32)
         self._blend_start = self.last_target.copy()
         self._blend_elapsed = 0.0
 
@@ -134,6 +168,7 @@ class HardcodedGaitPlayer:
                 raise ValueError("current_target contains NaN or Inf")
             self._blend_start = blend_start.copy()
             self.last_target = self._blend_start.copy()
+            self.last_velocity.fill(0.0)
         template = self.templates[direction]
         self.phase_cycles = (
             self.phase_cycles
@@ -146,12 +181,25 @@ class HardcodedGaitPlayer:
                 self._blend_elapsed + dt,
             )
             x = self._blend_elapsed / self.direction_blend_seconds
-            alpha = x * x * (3.0 - 2.0 * x)
+            alpha = x**3 * (10.0 - 15.0 * x + 6.0 * x * x)
             target = (1.0 - alpha) * self._blend_start + alpha * target
-        target = self.last_target + np.clip(
-            np.asarray(target, dtype=np.float32) - self.last_target,
-            -self.max_target_step_rad,
-            self.max_target_step_rad,
+        desired_velocity = (
+            np.asarray(target, dtype=np.float32) - self.last_target
+        ) / dt
+        desired_velocity = np.clip(
+            desired_velocity,
+            -self.max_target_velocity_rad_s,
+            self.max_target_velocity_rad_s,
         )
+        max_dv = self.max_target_acceleration_rad_s2 * dt
+        velocity = np.clip(
+            desired_velocity,
+            self.last_velocity - max_dv,
+            self.last_velocity + max_dv,
+        )
+        max_step_velocity = self.max_target_step_rad / dt
+        velocity = np.clip(velocity, -max_step_velocity, max_step_velocity)
+        target = self.last_target + velocity * dt
+        self.last_velocity = np.asarray(velocity, dtype=np.float32)
         self.last_target = np.asarray(target, dtype=np.float32)
         return self.last_target.copy()

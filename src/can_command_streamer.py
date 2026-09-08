@@ -27,6 +27,8 @@ class CanCommandStreamer:
         fault_consecutive_overruns=3,
         transport_label="CAN",
         cycle_callback=None,
+        interpolation_callback=None,
+        interpolation_steps=1,
         clock=time.monotonic,
         sleep=time.sleep,
     ):
@@ -41,6 +43,12 @@ class CanCommandStreamer:
         self.fault_consecutive_overruns = int(fault_consecutive_overruns)
         self.transport_label = str(transport_label).strip() or "CAN"
         self.cycle_callback = cycle_callback
+        self.interpolation_callback = interpolation_callback
+        self.interpolation_steps = int(interpolation_steps)
+        if self.interpolation_steps < 1:
+            raise ValueError("interpolation_steps must be >= 1")
+        if self.interpolation_steps > 1 and self.interpolation_callback is None:
+            raise ValueError("interpolation_steps > 1 requires interpolation_callback")
         if not math.isfinite(self.command_dt_s) or self.command_dt_s <= 0.0:
             raise ValueError("command_dt_s must be finite and > 0")
         if not math.isfinite(self.stale_timeout_s) or self.stale_timeout_s <= 0.0:
@@ -79,6 +87,11 @@ class CanCommandStreamer:
         self._maximum_receive_duration_s = 0.0
         self._applied_generation = -1
         self._cycle_count = 0
+        self._last_sent_commands = ()
+        self._interpolation_from = ()
+        self._interpolation_to = ()
+        self._interpolation_step = 0
+        self._interpolation_generation = -1
 
     @staticmethod
     def _freeze_commands(commands):
@@ -219,9 +232,40 @@ class CanCommandStreamer:
             send_started = self.clock()
             self._io_idle.clear()
             try:
-                if not self.send_only_on_change or generation != self._applied_generation:
-                    self.send_callback(commands)
-                    self._applied_generation = generation
+                if (
+                    self.interpolation_callback is not None
+                    and self._last_sent_commands
+                    and generation != self._interpolation_generation
+                ):
+                    self._interpolation_from = self._last_sent_commands
+                    self._interpolation_to = commands
+                    self._interpolation_step = 0
+                    self._interpolation_generation = generation
+                interpolation_active = bool(
+                    self._interpolation_to
+                    and self._interpolation_step < self.interpolation_steps
+                )
+                commands_to_send = commands
+                if interpolation_active:
+                    self._interpolation_step += 1
+                    alpha = self._interpolation_step / self.interpolation_steps
+                    commands_to_send = self._freeze_commands(
+                        self.interpolation_callback(
+                            self._interpolation_from,
+                            self._interpolation_to,
+                            alpha,
+                        )
+                    )
+                should_send = (
+                    not self.send_only_on_change
+                    or generation != self._applied_generation
+                    or interpolation_active
+                )
+                if should_send:
+                    self.send_callback(commands_to_send)
+                    self._last_sent_commands = commands_to_send
+                    if not interpolation_active or self._interpolation_step >= self.interpolation_steps:
+                        self._applied_generation = generation
             except Exception as exc:
                 self._set_fault(f"CAN command send failed: {exc}")
                 self._io_idle.set()
@@ -294,7 +338,7 @@ class CanCommandStreamer:
                         timestamp=self.clock(),
                         cycle_index=self._cycle_count,
                         generation=generation,
-                        commands=commands,
+                        commands=commands_to_send,
                         received_frames=received,
                     )
                 except Exception as exc:

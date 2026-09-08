@@ -5,6 +5,7 @@ import yaml
 
 from hardcoded_gait import HardcodedGaitPlayer
 from joint_mapping import POLICY_JOINT_ORDER
+from motor_command_layer import MotorCommandLayer
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -44,6 +45,24 @@ def test_target_step_guard_is_always_active():
     assert np.max(np.abs(changed - previous)) <= player.max_target_step_rad + 1.0e-7
 
 
+def test_velocity_and_acceleration_guards_are_always_active():
+    player = HardcodedGaitPlayer.from_yaml(config_path())
+    previous_velocity = player.last_velocity.copy()
+    for _ in range(300):
+        player.update(1.0, 0.02, player.last_target)
+        assert np.max(np.abs(player.last_velocity)) <= player.max_target_velocity_rad_s + 1e-6
+        acceleration = (player.last_velocity - previous_velocity) / 0.02
+        assert np.max(np.abs(acceleration)) <= player.max_target_acceleration_rad_s2 + 1e-5
+        previous_velocity = player.last_velocity.copy()
+
+
+def test_entry_blend_has_zero_endpoint_slope():
+    player = HardcodedGaitPlayer.from_yaml(config_path())
+    start = np.full(12, 0.1, dtype=np.float32)
+    first = player.update(1.0, 1e-4, start)
+    assert np.max(np.abs(first - start)) < 1e-6
+
+
 def test_all_templates_remain_inside_physical_joint_limits_at_full_scale():
     player = HardcodedGaitPlayer.from_yaml(
         config_path(), amplitude_scale=1.0, frequency_scale=1.0
@@ -79,3 +98,35 @@ def test_invalid_handoff_target_is_rejected(current_target):
     player = HardcodedGaitPlayer.from_yaml(config_path())
     with pytest.raises(ValueError, match="current_target"):
         player.update(1.0, 0.02, current_target)
+
+
+def test_hermite_substeps_repack_valid_mit_commands():
+    joint = "BL_hip_joint"
+    layer = MotorCommandLayer(
+        POLICY_JOINT_ORDER,
+        {name: index + 1 for index, name in enumerate(POLICY_JOINT_ORDER)},
+        active_joints=[joint],
+        joint_can_bus={joint: "back"},
+    )
+    base = {
+        "joint_name": joint,
+        "motor_id": 1,
+        "phase": "policy",
+        "command_encoding": "official",
+        "direction": -1.0,
+        "offset": 0.0,
+        "kp": 250.0,
+        "kd": 4.0,
+        "tau_ff": 0.0,
+    }
+    previous = [{**base, "q_des": 0.0, "joint_v_des": 0.0}]
+    current = [{**base, "q_des": 0.1, "joint_v_des": 0.0}]
+    samples = [
+        layer.interpolate_mit_commands(previous, current, alpha, 0.02)[0]
+        for alpha in (0.25, 0.5, 0.75, 1.0)
+    ]
+    assert [item["q_des"] for item in samples] == pytest.approx(
+        [0.015625, 0.05, 0.084375, 0.1]
+    )
+    assert all(len(item["data"]) == 8 for item in samples)
+    assert all(np.isfinite(item["joint_v_des"]) for item in samples)

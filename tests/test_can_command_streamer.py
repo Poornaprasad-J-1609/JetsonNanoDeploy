@@ -179,3 +179,30 @@ def test_streamer_calls_low_level_trace_callback_each_can_cycle():
         assert streamer.fault_reason is None
     finally:
         streamer.stop()
+
+
+def test_streamer_emits_four_interpolated_substeps_for_new_snapshot():
+    sent = []
+
+    def interpolate(previous, current, alpha):
+        start = previous[0]["target"]
+        end = current[0]["target"]
+        return [{"target": start + alpha * (end - start)}]
+
+    streamer = CanCommandStreamer(
+        send_callback=lambda commands: sent.append(commands[0]["target"]),
+        send_only_on_change=True,
+        interpolation_callback=interpolate,
+        interpolation_steps=4,
+        command_dt_s=0.005,
+        stale_timeout_s=0.100,
+    )
+    streamer.start()
+    try:
+        streamer.submit([{"target": 0.0}])
+        assert wait_until(lambda: sent)
+        streamer.submit([{"target": 1.0}])
+        assert wait_until(lambda: len(sent) >= 5)
+        assert sent[-4:] == [0.25, 0.5, 0.75, 1.0]
+    finally:
+        streamer.stop()

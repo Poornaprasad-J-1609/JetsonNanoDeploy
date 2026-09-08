@@ -1427,6 +1427,69 @@ class MotorCommandLayer:
 
         return commands
 
+    def interpolate_mit_commands(self, previous, current, alpha, duration_s):
+        """Interpolate one 50 Hz MIT snapshot into smooth 200 Hz substeps."""
+        alpha = clip_scalar(float(alpha), 0.0, 1.0)
+        duration_s = float(duration_s)
+        if not math.isfinite(duration_s) or duration_s <= 0.0:
+            raise ValueError("duration_s must be finite and > 0")
+        previous_by_joint = {item.get("joint_name"): item for item in previous}
+        if set(previous_by_joint) != {item.get("joint_name") for item in current}:
+            return [dict(item) for item in current]
+
+        a2 = alpha * alpha
+        a3 = a2 * alpha
+        h00 = 2.0 * a3 - 3.0 * a2 + 1.0
+        h10 = a3 - 2.0 * a2 + alpha
+        h01 = -2.0 * a3 + 3.0 * a2
+        h11 = a3 - a2
+        dh00 = (6.0 * a2 - 6.0 * alpha) / duration_s
+        dh10 = 3.0 * a2 - 4.0 * alpha + 1.0
+        dh01 = (-6.0 * a2 + 6.0 * alpha) / duration_s
+        dh11 = 3.0 * a2 - 2.0 * alpha
+
+        result = []
+        for destination in current:
+            source = previous_by_joint[destination["joint_name"]]
+            if source.get("phase") != "policy" or destination.get("phase") != "policy":
+                result.append(dict(destination))
+                continue
+            q0 = float(source["q_des"])
+            q1 = float(destination["q_des"])
+            v0 = float(source.get("joint_v_des", 0.0))
+            v1 = float(destination.get("joint_v_des", 0.0))
+            q_des = h00 * q0 + h10 * duration_s * v0 + h01 * q1 + h11 * duration_s * v1
+            q_des = clip_scalar(q_des, min(q0, q1), max(q0, q1))
+            joint_v_des = dh00 * q0 + dh10 * v0 + dh01 * q1 + dh11 * v1
+
+            command = dict(destination)
+            direction = float(command["direction"])
+            offset = float(command["offset"])
+            p_des = offset + direction * q_des
+            motor_v_des = direction * joint_v_des
+            kp = (1.0 - alpha) * float(source["kp"]) + alpha * float(destination["kp"])
+            kd = (1.0 - alpha) * float(source["kd"]) + alpha * float(destination["kd"])
+            tau_ff = (1.0 - alpha) * float(source["tau_ff"]) + alpha * float(destination["tau_ff"])
+            proto = self._command_proto_for_encoding(command["command_encoding"])
+            p_des, motor_v_des, kp, kd, tau_ff = self.apply_mit_parameter_limits(
+                p_des, motor_v_des, kp, kd, tau_ff
+            )
+            command.update(
+                q_des=q_des,
+                p_des=p_des,
+                v_des=motor_v_des,
+                joint_v_des=joint_v_des,
+                kp=kp,
+                kd=kd,
+                tau_ff=tau_ff,
+                can_id=mit_can_id(command["motor_id"], proto, tau_ff=tau_ff),
+                data=pack_mit_command(p_des, motor_v_des, kp, kd, proto),
+                interpolated=True,
+                interpolation_alpha=alpha,
+            )
+            result.append(command)
+        return result
+
     @staticmethod
     def _resolve_bus(buses, bus_name):
         """Return the CAN transport for bus_name, or the supplied single transport."""

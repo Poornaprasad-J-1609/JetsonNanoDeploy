@@ -23,6 +23,8 @@ exec "$ROOT_DIR/scripts/run_medium_walk.sh" \
   --policy-command-vy-max 0 \
   --policy-command-yaw-max 0 \
   --policy-entry-ramp-seconds 3.0 \
+  --policy-kp-override "${GAIT_KP:-250}" \
+  --policy-kd-override "${GAIT_KD:-4}" \
   --torque-profile-stage stage40 \
   --acknowledge-40nm-suspension-test \
   --policy-pd-torque-profile "$ROOT_DIR/config/policy_torque_suspension_40.yaml" \

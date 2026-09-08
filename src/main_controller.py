@@ -5561,6 +5561,12 @@ def run_policy_loop(
                     q_safe_target,
                     phase="policy",
                     feedback_by_joint=fresh_feedback_for_commands,
+                    joint_velocity_target=(
+                        hardcoded_gait_player.last_velocity
+                        if hardcoded_gait_player is not None
+                        and float(policy_entry_scale) >= 0.999
+                        else None
+                    ),
                     joint_feedforward_torque_target=policy_pose_support_tau,
                     prelimit_q_target=policy_prelimit_target_for_commands(
                         q_policy_target,
@@ -8459,6 +8465,24 @@ def main():
                     None
                     if sit_stand_trace_logger is None
                     else sit_stand_trace_logger.record_can_cycle
+                ),
+                interpolation_callback=(
+                    None
+                    if hardcoded_gait_player is None
+                    else lambda previous, current, alpha: motor_layer.interpolate_mit_commands(
+                        previous,
+                        current,
+                        alpha,
+                        duration_s=float(runner.control_dt),
+                    )
+                ),
+                interpolation_steps=(
+                    1
+                    if hardcoded_gait_player is None
+                    else max(
+                        1,
+                        int(round(float(runner.control_dt) * float(args.can_command_hz))),
+                    )
                 ),
             )
             can_streamer.start()
