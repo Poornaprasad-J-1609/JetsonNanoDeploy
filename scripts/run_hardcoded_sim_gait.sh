@@ -8,6 +8,12 @@ echo "First test must be suspended or substantially unloaded with a spotter."
 echo "W=forward, S=backward, SPACE=stand, C=sit, X=emergency stop."
 echo "Return to SPACE before changing direction."
 
+if [[ "${GAIT_ACKNOWLEDGE_100NM_SUSPENSION:-}" != "YES" ]]; then
+  echo "ERROR: this high-authority test requires a fully suspended robot." >&2
+  echo "Set GAIT_ACKNOWLEDGE_100NM_SUSPENSION=YES only after checking the rig and E-stop." >&2
+  exit 2
+fi
+
 exec "$ROOT_DIR/scripts/run_medium_walk.sh" \
   --hardcoded-gait-config "$ROOT_DIR/config/hardcoded_gait_sim_vx0p5.yaml" \
   --hardcoded-gait-amplitude-scale "${GAIT_AMPLITUDE_SCALE:-0.50}" \
@@ -25,13 +31,13 @@ exec "$ROOT_DIR/scripts/run_medium_walk.sh" \
   --policy-entry-ramp-seconds 3.0 \
   --policy-kp-override "${GAIT_KP:-250}" \
   --policy-kd-override "${GAIT_KD:-4}" \
-  --torque-profile-stage stage40 \
-  --acknowledge-40nm-suspension-test \
-  --policy-pd-torque-profile "$ROOT_DIR/config/policy_torque_suspension_40.yaml" \
-  --policy-absolute-torque-ceiling 40 \
-  --pose-pd-torque-limit 40 \
-  --policy-torque-ramp-max-measured-torque 35 \
-  --measured-torque-soft-hip 35 \
-  --measured-torque-soft-thigh 35 \
-  --measured-torque-soft-calf 35 \
+  --torque-profile-stage stage100 \
+  --acknowledge-100nm-suspension-test \
+  --policy-pd-torque-profile "$ROOT_DIR/config/policy_torque_suspension_100.yaml" \
+  --policy-absolute-torque-ceiling 100 \
+  --pose-pd-torque-limit 100 \
+  --policy-torque-ramp-max-measured-torque 95 \
+  --measured-torque-soft-hip 95 \
+  --measured-torque-soft-thigh 95 \
+  --measured-torque-soft-calf 95 \
   "$@"

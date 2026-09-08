@@ -2086,9 +2086,10 @@ def test_high_torque_stage_guards_are_present_in_main_controller_source():
     assert "--acknowledge-40nm-loaded-ground-test" in source
     assert 'args.torque_profile_stage == "stage40"' in source
     assert "stage40 requires --acknowledge-40nm-suspension-test or " in source
+    assert "--acknowledge-100nm-suspension-test" in source
     assert "--acknowledge-100nm-loaded-ground-test" in source
     assert 'args.torque_profile_stage == "stage100"' in source
-    assert "stage100 requires --acknowledge-100nm-loaded-ground-test" in source
+    assert "stage100 requires --acknowledge-100nm-suspension-test or " in source
 
 
 def test_medium_walk_uses_loaded_per_joint_support_profile():

@@ -7187,6 +7187,11 @@ def main():
         help="explicitly acknowledge a loaded-ground stage40 test",
     )
     parser.add_argument(
+        "--acknowledge-100nm-suspension-test",
+        action="store_true",
+        help="explicitly acknowledge a fully suspended stage100 test",
+    )
+    parser.add_argument(
         "--acknowledge-100nm-loaded-ground-test",
         action="store_true",
         help="explicitly acknowledge the 100 Nm loaded-ground authority ceiling",
@@ -7427,10 +7432,14 @@ def main():
         )
     if (
         args.torque_profile_stage == "stage100"
-        and not args.acknowledge_100nm_loaded_ground_test
+        and not (
+            args.acknowledge_100nm_suspension_test
+            or args.acknowledge_100nm_loaded_ground_test
+        )
     ):
         parser.error(
-            "stage100 requires --acknowledge-100nm-loaded-ground-test"
+            "stage100 requires --acknowledge-100nm-suspension-test or "
+            "--acknowledge-100nm-loaded-ground-test"
         )
     if not np.isfinite(args.pose_pd_torque_limit) or args.pose_pd_torque_limit < 0.0:
         parser.error("--pose-pd-torque-limit must be finite and >= 0")
