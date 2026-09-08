@@ -31,7 +31,10 @@ class FourierGaitTemplate:
         object.__setattr__(self, "coefficients", coefficients)
 
     def sample(self, phase_cycles):
-        phase = 2.0 * math.pi * float(phase_cycles)
+        phase_cycles = float(phase_cycles)
+        if not np.isfinite(phase_cycles):
+            raise ValueError("phase_cycles must be finite")
+        phase = 2.0 * math.pi * phase_cycles
         result = self.coefficients[0].copy()
         for harmonic in range(1, 4):
             result += self.coefficients[2 * harmonic - 1] * math.sin(harmonic * phase)
@@ -106,7 +109,10 @@ class HardcodedGaitPlayer:
         self._blend_elapsed = 0.0
 
     def update(self, direction, dt, current_target=None):
-        direction = "forward" if float(direction) > 0.0 else "backward"
+        direction_value = float(direction)
+        if not np.isfinite(direction_value) or direction_value == 0.0:
+            raise ValueError("direction must be a finite non-zero value")
+        direction = "forward" if direction_value > 0.0 else "backward"
         dt = float(dt)
         if not np.isfinite(dt) or dt <= 0.0:
             raise ValueError("dt must be finite and > 0")
@@ -114,10 +120,19 @@ class HardcodedGaitPlayer:
             self.direction = direction
             self.phase_cycles = 0.0
             self._blend_elapsed = 0.0
-            self._blend_start = np.asarray(
+            blend_start = np.asarray(
                 self.last_target if current_target is None else current_target,
                 dtype=np.float32,
-            ).copy()
+            )
+            expected_shape = (len(POLICY_JOINT_ORDER),)
+            if blend_start.shape != expected_shape:
+                raise ValueError(
+                    f"current_target must have shape {expected_shape}, got "
+                    f"{blend_start.shape}"
+                )
+            if not np.all(np.isfinite(blend_start)):
+                raise ValueError("current_target contains NaN or Inf")
+            self._blend_start = blend_start.copy()
             self.last_target = self._blend_start.copy()
         template = self.templates[direction]
         self.phase_cycles = (
