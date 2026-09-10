@@ -3471,6 +3471,22 @@ def policy_pose_support_scale(policy_entry_scale, support_floor):
     return 1.0 - entry * (1.0 - floor)
 
 
+def hardcoded_pose_support_torque(
+    pose_support_tau,
+    policy_order,
+    policy_entry_scale,
+):
+    """Fade hip feedforward out while retaining loaded leg support."""
+    support = np.asarray(pose_support_tau, dtype=np.float32).copy()
+    if support.shape != (len(policy_order),):
+        raise ValueError("pose support torque must match policy joint order")
+    hip_scale = 1.0 - float(np.clip(policy_entry_scale, 0.0, 1.0))
+    for index, joint_name in enumerate(policy_order):
+        if joint_name.endswith("_hip_joint"):
+            support[index] *= hip_scale
+    return support
+
+
 def constant_pose_like(runner, value):
     return np.full(len(runner.policy_order), float(value), dtype=np.float32)
 
@@ -5537,6 +5553,12 @@ def run_policy_loop(
                 )
                 * pose_support_tau_target
             )
+            if hardcoded_gait_player is not None:
+                policy_pose_support_tau = hardcoded_pose_support_torque(
+                    policy_pose_support_tau,
+                    runner.policy_order,
+                    policy_entry_scale,
+                )
             # Blend only the position target during policy entry. All phases
             # now use official physical gain units; policy impedance starts on
             # the first actor packet and pose recovery blends gains explicitly.

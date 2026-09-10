@@ -15,6 +15,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from hardcoded_gait import HardcodedGaitPlayer  # noqa: E402
 from joint_mapping import POLICY_JOINT_ORDER  # noqa: E402
+from main_controller import hardcoded_pose_support_torque  # noqa: E402
 from safety_monitor import SafetyMonitor  # noqa: E402
 
 
@@ -55,6 +56,11 @@ def run_audit(args):
     rng = np.random.default_rng(args.seed)
     safety = SafetyMonitor(POLICY_JOINT_ORDER, control_dt=0.02)
     kp, kd, tau_support = load_policy_gains()
+    tau_support = hardcoded_pose_support_torque(
+        tau_support,
+        POLICY_JOINT_ORDER,
+        policy_entry_scale=1.0,
+    )
     total_samples = 0
     position_clips = 0
     rate_clips = 0

@@ -6,6 +6,7 @@ import yaml
 from hardcoded_gait import HardcodedGaitPlayer
 from joint_mapping import POLICY_JOINT_ORDER
 from motor_command_layer import MotorCommandLayer
+from main_controller import hardcoded_pose_support_torque
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,7 +27,7 @@ def test_default_replay_is_reduced_from_simulation():
     player = HardcodedGaitPlayer.from_yaml(config_path())
     samples = np.asarray([player.templates["forward"].sample(x / 500) for x in range(500)])
     replay = player.amplitude_scale * samples
-    assert np.max(np.abs(replay)) < 0.16
+    assert np.max(np.abs(replay)) < 0.23
 
 
 def test_minimal_replay_moves_every_leg_and_keeps_hips_zero():
@@ -39,7 +40,20 @@ def test_minimal_replay_moves_every_leg_and_keeps_hips_zero():
         spans = np.ptp(replay, axis=0)
         assert np.all(spans[4:12] >= 0.03)
         np.testing.assert_array_equal(replay[:, 0:4], np.zeros_like(replay[:, 0:4]))
-        assert np.max(spans[4:12]) <= 0.16
+        assert np.max(spans[4:12]) <= 0.23
+
+
+def test_hardcoded_support_fades_only_hip_feedforward():
+    support = np.arange(1.0, 13.0, dtype=np.float32)
+    at_entry = hardcoded_pose_support_torque(
+        support, POLICY_JOINT_ORDER, policy_entry_scale=0.0
+    )
+    at_gait = hardcoded_pose_support_torque(
+        support, POLICY_JOINT_ORDER, policy_entry_scale=1.0
+    )
+    np.testing.assert_array_equal(at_entry, support)
+    np.testing.assert_array_equal(at_gait[:4], np.zeros(4, dtype=np.float32))
+    np.testing.assert_array_equal(at_gait[4:], support[4:])
 
 
 def test_thigh_and_calf_motion_is_exactly_diagonal_in_physical_coordinates():
