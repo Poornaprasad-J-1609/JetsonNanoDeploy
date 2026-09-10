@@ -2,9 +2,11 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export IMU_SOURCE="${GAIT_IMU_SOURCE:-fake}"
 
 echo "EXPERIMENTAL OPEN-LOOP SIMULATION GAIT"
 echo "First test must be suspended or substantially unloaded with a spotter."
+echo "IMU source: $IMU_SOURCE (hardcoded replay does not use an RL actor)."
 echo "Hold W=forward or S=backward; release the key to return to stand."
 echo "SPACE=stand, C=sit, X=emergency stop. Return to stand before reversing."
 

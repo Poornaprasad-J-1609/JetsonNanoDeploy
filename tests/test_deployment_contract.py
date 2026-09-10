@@ -627,6 +627,16 @@ def test_hardcoded_launcher_returns_to_stand_when_walk_key_is_released():
     assert "--keyboard-control-mode repeat" in launcher
     assert "--walk-command-grace-seconds 0.10" in launcher
     assert "--walk-stop-confirm-seconds 0.10" in launcher
+    assert 'GAIT_IMU_SOURCE:-fake' in launcher
+
+
+def test_medium_walk_checks_imu_device_only_for_xsens():
+    launcher = (ROOT / "scripts" / "run_medium_walk.sh").read_text(
+        encoding="utf-8"
+    )
+    assert 'IMU_SOURCE="${IMU_SOURCE:-xsens}"' in launcher
+    assert '--imu-source "$IMU_SOURCE"' in launcher
+    assert '[[ "$IMU_SOURCE" == "xsens" && ! -e "$IMU_PORT" ]]' in launcher
 
 
 def test_main_controller_safe_defaults_are_pinned():

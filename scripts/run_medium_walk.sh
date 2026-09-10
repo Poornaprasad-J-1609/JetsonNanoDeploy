@@ -6,6 +6,7 @@ PYTHON_BIN="${PYTHON_BIN:-/usr/bin/python3}"
 CAN_FRONT="${CAN_FRONT:-slcan0}"
 CAN_BACK="${CAN_BACK:-slcan1}"
 IMU_PORT="${IMU_PORT:-/dev/ttyUSB0}"
+IMU_SOURCE="${IMU_SOURCE:-xsens}"
 
 export PYTHONPATH="$ROOT_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
 
@@ -21,7 +22,7 @@ args=(
     # produced a more balanced gait than direct MIT velocity feedback.
     --joint-velocity-source finite-difference
     --command-source keyboard
-    --imu-source xsens
+    --imu-source "$IMU_SOURCE"
     --imu-port "$IMU_PORT"
     --imu-stale-timeout 0.10
     --control-hz 50
@@ -113,7 +114,7 @@ for interface in "$CAN_FRONT" "$CAN_BACK"; do
     fi
 done
 
-if [[ ! -e "$IMU_PORT" ]]; then
+if [[ "$IMU_SOURCE" == "xsens" && ! -e "$IMU_PORT" ]]; then
     echo "ERROR: Xsens IMU device $IMU_PORT does not exist." >&2
     exit 1
 fi
