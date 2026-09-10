@@ -753,6 +753,12 @@ def format_vector(values, precision=4):
     return "[" + ", ".join(f"{float(value):+.{precision}f}" for value in arr) + "]"
 
 
+def reported_control_mode(active_control_mode, hardcoded_gait_player):
+    if active_control_mode == "policy" and hardcoded_gait_player is not None:
+        return "hardcoded"
+    return active_control_mode
+
+
 def validate_required_policy_imu(estimator, max_roll_pitch_deg=60.0):
     if not hasattr(estimator, "imu_required") or not estimator.imu_required():
         return None
@@ -5239,7 +5245,12 @@ def run_policy_loop(
                     if not policy_was_started
                     else "movement re-entered after intentional stop"
                 )
-                print(f"[POLICY ENTRY] started: {policy_entry_restart_reason}")
+                entry_name = (
+                    "HARDCODED GAIT ENTRY"
+                    if hardcoded_gait_player is not None
+                    else "POLICY ENTRY"
+                )
+                print(f"[{entry_name}] started: {policy_entry_restart_reason}")
                 policy_entry_elapsed_s = 0.0
                 policy_entry_q_start = np.asarray(q_previous_target, dtype=np.float32).copy()
                 scheduler.request_resync("policy entry initialized")
@@ -6013,8 +6024,13 @@ def run_policy_loop(
                         "active; policy walking is armed."
                     )
                 else:
+                    motion_name = (
+                        "Hardcoded gait"
+                        if hardcoded_gait_player is not None
+                        else "Policy walking"
+                    )
                     print(
-                        "[POSE] stand settled. Policy walking is armed; "
+                        f"[POSE] stand settled. {motion_name} is armed; "
                         "stand target remains fixed until a movement command."
                     )
 
@@ -6080,9 +6096,13 @@ def run_policy_loop(
         if should_log_csv or should_print:
             logging_start = time.monotonic()
             timing = scheduler.last_snapshot
+            display_mode = reported_control_mode(
+                active_control_mode,
+                hardcoded_gait_player,
+            )
             telemetry_record = compact_telemetry_record(
                 step=step,
-                mode=active_control_mode,
+                mode=display_mode,
                 command=command,
                 command_source=command_source,
                 commands=commands,
@@ -6252,7 +6272,7 @@ def run_policy_loop(
                 )
                 print(
                     "[SUSPENSION] "
-                    f"mode={active_control_mode} "
+                    f"mode={reported_control_mode(active_control_mode, hardcoded_gait_player)} "
                     f"imu={estimator_imu_status(estimator)} "
                     f"command=[{float(policy_command[0]):+.3f},"
                     f"{float(policy_command[1]):+.3f},"
@@ -6300,7 +6320,7 @@ def run_policy_loop(
         if telemetry is not None and step % 2 == 0:
             telemetry.send(
                 step=step,
-                mode=active_control_mode,
+                mode=reported_control_mode(active_control_mode, hardcoded_gait_player),
                 command=command,
                 command_source=command_source,
                 commands=commands,
@@ -8003,13 +8023,16 @@ def main():
     print("Walk command grace:", f"{args.walk_command_grace_seconds:.2f} s")
     print("Start control mode:", args.start_control_mode)
     print("Startup action:", args.startup_action)
-    print("Policy:", runner.policy_path)
     if hardcoded_gait_player is not None:
+        print("Policy inference: DISABLED")
+        print("Coordinate/reference artifact:", runner.policy_path)
         print(
             "Hardcoded simulation gait: ENABLED",
             f"amplitude={hardcoded_gait_player.amplitude_scale:.2f}",
             f"frequency={hardcoded_gait_player.frequency_scale:.2f}",
         )
+    else:
+        print("Policy:", runner.policy_path)
     print("Policy SHA256:", runner.policy_sha256)
     print("Policy hash verified:", runner.policy_hash_matches)
     print("Policy format:", runner.policy_format)

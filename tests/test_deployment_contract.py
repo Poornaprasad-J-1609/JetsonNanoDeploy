@@ -35,6 +35,7 @@ from main_controller import (
     policy_previous_action_observation,
     policy_pose_support_scale,
     policy_prelimit_target_for_commands,
+    reported_control_mode,
     compact_telemetry_record,
     constant_joint_map,
     requires_calf_endpoint_gate,
@@ -628,6 +629,18 @@ def test_hardcoded_launcher_returns_to_stand_when_walk_key_is_released():
     assert "--walk-command-grace-seconds 0.10" in launcher
     assert "--walk-stop-confirm-seconds 0.10" in launcher
     assert 'GAIT_IMU_SOURCE:-fake' in launcher
+    profile = load_yaml(ROOT / "config" / "policy_torque_suspension_100.yaml")[
+        "policy_torque_profile"
+    ]
+    for joint_name in PolicyRunner().policy_order:
+        assert profile["start_nm"][joint_name] == pytest.approx(100.0)
+        assert profile["final_nm"][joint_name] == pytest.approx(100.0)
+
+
+def test_hardcoded_runtime_is_reported_without_policy_takeover_label():
+    assert reported_control_mode("policy", object()) == "hardcoded"
+    assert reported_control_mode("policy", None) == "policy"
+    assert reported_control_mode("stand", object()) == "stand"
 
 
 def test_medium_walk_checks_imu_device_only_for_xsens():
