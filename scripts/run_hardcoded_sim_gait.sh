@@ -18,8 +18,8 @@ fi
 
 exec "$ROOT_DIR/scripts/run_medium_walk.sh" \
   --hardcoded-gait-config "$ROOT_DIR/config/hardcoded_gait_july13_minimal.yaml" \
-  --hardcoded-gait-amplitude-scale "${GAIT_AMPLITUDE_SCALE:-0.70}" \
-  --hardcoded-gait-frequency-scale "${GAIT_FREQUENCY_SCALE:-0.40}" \
+  --hardcoded-gait-amplitude-scale "${GAIT_AMPLITUDE_SCALE:-0.80}" \
+  --hardcoded-gait-frequency-scale "${GAIT_FREQUENCY_SCALE:-0.55}" \
   --max-vx 1.0 \
   --max-vy 0 \
   --max-yaw 0 \

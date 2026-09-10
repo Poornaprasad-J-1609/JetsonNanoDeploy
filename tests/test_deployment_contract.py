@@ -628,8 +628,8 @@ def test_hardcoded_launcher_returns_to_stand_when_walk_key_is_released():
     assert "--keyboard-control-mode repeat" in launcher
     assert "--walk-command-grace-seconds 0.10" in launcher
     assert "--walk-stop-confirm-seconds 0.10" in launcher
-    assert 'GAIT_AMPLITUDE_SCALE:-0.70' in launcher
-    assert 'GAIT_FREQUENCY_SCALE:-0.40' in launcher
+    assert 'GAIT_AMPLITUDE_SCALE:-0.80' in launcher
+    assert 'GAIT_FREQUENCY_SCALE:-0.55' in launcher
     assert 'GAIT_IMU_SOURCE:-fake' in launcher
     profile = load_yaml(ROOT / "config" / "policy_torque_suspension_100.yaml")[
         "policy_torque_profile"

@@ -27,7 +27,7 @@ def test_default_replay_is_reduced_from_simulation():
     player = HardcodedGaitPlayer.from_yaml(config_path())
     samples = np.asarray([player.templates["forward"].sample(x / 500) for x in range(500)])
     replay = player.amplitude_scale * samples
-    assert np.max(np.abs(replay)) < 0.23
+    assert np.max(np.abs(replay)) < 0.26
 
 
 def test_minimal_replay_moves_every_leg_and_keeps_hips_zero():
@@ -40,7 +40,7 @@ def test_minimal_replay_moves_every_leg_and_keeps_hips_zero():
         spans = np.ptp(replay, axis=0)
         assert np.all(spans[4:12] >= 0.03)
         np.testing.assert_array_equal(replay[:, 0:4], np.zeros_like(replay[:, 0:4]))
-        assert np.max(spans[4:12]) <= 0.23
+        assert np.max(spans[4:12]) <= 0.26
 
 
 def test_hardcoded_support_fades_only_hip_feedforward():
