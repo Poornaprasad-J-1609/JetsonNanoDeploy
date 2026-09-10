@@ -1,0 +1,17 @@
+# Pose gains used only by scripts/run_hardcoded_sim_gait.sh.
+sit_stand_gain_test:
+  # Total estimated impedance plus feedforward ceiling per joint.
+  torque_limit_nm: 100.0
+
+  gains:
+    sit:
+      hip:   {kp: 250.0, kd: 4.0}
+      thigh: {kp: 250.0, kd: 4.0}
+      calf:  {kp: 250.0, kd: 4.0}
+      joints: {}
+
+    stand:
+      hip:   {kp: 250.0, kd: 4.0}
+      thigh: {kp: 250.0, kd: 4.0}
+      calf:  {kp: 250.0, kd: 4.0}
+      joints: {}

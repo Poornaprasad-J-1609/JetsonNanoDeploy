@@ -31,6 +31,7 @@ exec "$ROOT_DIR/scripts/run_medium_walk.sh" \
   --policy-entry-ramp-seconds 3.0 \
   --policy-kp-override "${GAIT_KP:-250}" \
   --policy-kd-override "${GAIT_KD:-4}" \
+  --pose-gains-config "$ROOT_DIR/config/hardcoded_sit_stand_kp250_kd4.yaml" \
   --torque-profile-stage stage100 \
   --acknowledge-100nm-suspension-test \
   --policy-pd-torque-profile "$ROOT_DIR/config/policy_torque_suspension_100.yaml" \
