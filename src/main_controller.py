@@ -7249,7 +7249,10 @@ def main():
     parser.add_argument(
         "--pose-gains-config",
         default=None,
-        help="dedicated sit/stand gain YAML used only by --pose-test-only",
+        help=(
+            "dedicated sit/stand gain YAML used by --pose-test-only or an "
+            "explicit --hardcoded-gait-config run"
+        ),
     )
     parser.add_argument(
         "--sit-stand-trace-200hz",
@@ -7355,8 +7358,11 @@ def main():
         if not args.pose_gains_config:
             parser.error("--pose-test-only requires --pose-gains-config")
         args.auto_policy_after_stand = False
-    elif args.pose_gains_config:
-        parser.error("--pose-gains-config is valid only with --pose-test-only")
+    elif args.pose_gains_config and not args.hardcoded_gait_config:
+        parser.error(
+            "--pose-gains-config requires --pose-test-only or "
+            "--hardcoded-gait-config"
+        )
     if args.policy_shadow_mode:
         args.startup_action = "hold"
         args.start_control_mode = "policy"
@@ -7906,7 +7912,10 @@ def main():
         else:
             print("40 Nm suspended stage explicitly acknowledged.")
     elif args.torque_profile_stage == "stage100":
-        print("100 Nm loaded-ground stage explicitly acknowledged.")
+        if args.acknowledge_100nm_loaded_ground_test:
+            print("100 Nm loaded-ground stage explicitly acknowledged.")
+        else:
+            print("100 Nm fully suspended stage explicitly acknowledged.")
     print(
         "Exact policy after entry:",
         "enabled" if args.exact_policy_after_entry else "disabled",

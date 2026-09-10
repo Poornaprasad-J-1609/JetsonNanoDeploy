@@ -2092,6 +2092,12 @@ def test_high_torque_stage_guards_are_present_in_main_controller_source():
     assert "stage100 requires --acknowledge-100nm-suspension-test or " in source
 
 
+def test_pose_gain_profile_is_scoped_to_pose_or_hardcoded_gait_mode():
+    source = (ROOT / "src" / "main_controller.py").read_text(encoding="utf-8")
+    assert "args.pose_gains_config and not args.hardcoded_gait_config" in source
+    assert "--pose-gains-config requires --pose-test-only or " in source
+
+
 def test_medium_walk_uses_loaded_per_joint_support_profile():
     launcher = (ROOT / "scripts" / "run_medium_walk.sh").read_text(
         encoding="utf-8"
