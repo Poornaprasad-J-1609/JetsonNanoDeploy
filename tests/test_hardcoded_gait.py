@@ -29,7 +29,7 @@ def test_default_replay_is_reduced_from_simulation():
     assert np.max(np.abs(replay)) < 0.16
 
 
-def test_minimal_replay_moves_every_leg_and_limits_hip_excursion():
+def test_minimal_replay_moves_every_leg_and_keeps_hips_zero():
     player = HardcodedGaitPlayer.from_yaml(config_path())
     for direction in ("forward", "backward"):
         samples = np.asarray(
@@ -38,8 +38,28 @@ def test_minimal_replay_moves_every_leg_and_limits_hip_excursion():
         replay = player.amplitude_scale * samples
         spans = np.ptp(replay, axis=0)
         assert np.all(spans[4:12] >= 0.03)
-        assert np.max(spans[0:4]) <= 0.015
+        np.testing.assert_array_equal(replay[:, 0:4], np.zeros_like(replay[:, 0:4]))
         assert np.max(spans[4:12]) <= 0.16
+
+
+def test_thigh_and_calf_motion_is_exactly_diagonal_in_physical_coordinates():
+    player = HardcodedGaitPlayer.from_yaml(config_path(), amplitude_scale=1.0)
+    # Right-side logical joint signs are mirrored relative to physical flexion.
+    physical_sign = np.asarray([1.0, -1.0, 1.0, -1.0])
+    for template in player.templates.values():
+        for first_index in (4, 8):
+            for phase in np.linspace(0.0, 1.0, 257, endpoint=False):
+                physical = (
+                    template.sample(phase)[first_index:first_index + 4]
+                    * physical_sign
+                )
+                ac = physical - (
+                    template.coefficients[0, first_index:first_index + 4]
+                    * physical_sign
+                )
+                assert ac[0] == pytest.approx(ac[3], abs=1e-7)  # BL + FR
+                assert ac[1] == pytest.approx(ac[2], abs=1e-7)  # BR + FL
+                assert ac[0] == pytest.approx(-ac[1], abs=1e-7)
 
 
 def test_minimal_profile_uses_only_the_smooth_fundamental():
