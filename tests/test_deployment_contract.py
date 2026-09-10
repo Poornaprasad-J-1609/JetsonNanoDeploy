@@ -619,6 +619,16 @@ def test_medium_walk_launcher_latches_terminal_movement_commands():
     assert "--keyboard-control-mode latched" in launcher
 
 
+def test_hardcoded_launcher_returns_to_stand_when_walk_key_is_released():
+    launcher = (ROOT / "scripts" / "run_hardcoded_sim_gait.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "hardcoded_gait_july13_minimal.yaml" in launcher
+    assert "--keyboard-control-mode repeat" in launcher
+    assert "--walk-command-grace-seconds 0.10" in launcher
+    assert "--walk-stop-confirm-seconds 0.10" in launcher
+
+
 def test_main_controller_safe_defaults_are_pinned():
     source = (ROOT / "src" / "main_controller.py").read_text(encoding="utf-8")
     assert "--auto-push-log" in source

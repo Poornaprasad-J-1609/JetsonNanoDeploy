@@ -1,0 +1,51 @@
+version: 1
+source:
+  simulator: isaac_lab
+  log: logs_sim/grallator_sim_motor_log_20260713_124106.csv
+  fit: single_fundamental_on_achieved_joint_positions
+  note: >-
+    Frequencies and coefficients were fitted to measured q, not the much larger
+    actor targets. Hip AC terms are reduced to 60 percent. One fundamental is
+    retained to avoid high-harmonic acceleration on hardware.
+joint_order:
+  - BL_hip_joint
+  - BR_hip_joint
+  - FL_hip_joint
+  - FR_hip_joint
+  - BL_thigh_joint
+  - BR_thigh_joint
+  - FL_thigh_joint
+  - FR_thigh_joint
+  - BL_calf_joint
+  - BR_calf_joint
+  - FL_calf_joint
+  - FR_calf_joint
+deployment_defaults:
+  amplitude_scale: 0.50
+  frequency_scale: 0.50
+  direction_blend_seconds: 2.5
+  max_target_step_rad: 0.025
+  max_target_velocity_rad_s: 1.50
+  max_target_acceleration_rad_s2: 10.0
+  harmonic_weights: [1.0, 0.0, 0.0]
+templates:
+  forward:
+    source_frequency_hz: 1.810
+    coefficients:
+      - [+0.01091534, -0.07090770, +0.02872456, +0.05362067, +0.10675088, -0.19090635, +0.07417560, -0.11127903, +0.16161608, -0.16291213, +0.15780477, -0.15666073]
+      - [+0.00163158, -0.00148907, -0.00362544, +0.00176125, +0.09108715, +0.03199149, -0.05532006, -0.06793160, -0.09152792, -0.10766158, +0.14351817, +0.15155686]
+      - [+0.00360142, -0.00169227, -0.00786295, -0.01249469, -0.08614090, -0.10856896, +0.11875155, +0.09237862, -0.06442569, -0.02564931, +0.05245791, +0.00561209]
+      - [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+      - [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+      - [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+      - [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+  backward:
+    source_frequency_hz: 2.270
+    coefficients:
+      - [-0.07481828, -0.02758071, +0.02503767, +0.04599556, +0.10410540, -0.07261959, -0.01815498, +0.07841366, +0.21001154, -0.21215400, +0.10541059, -0.11080710]
+      - [+0.01246950, +0.00381695, -0.00459373, -0.00660385, -0.03769055, -0.04389841, +0.00059253, -0.02431517, -0.04187212, -0.04470371, +0.06556152, +0.08744193]
+      - [-0.00179446, +0.00036570, -0.00386354, -0.00334851, +0.09871876, +0.13011607, -0.13003339, -0.11756945, -0.01326768, +0.01755633, -0.06646105, -0.05747976]
+      - [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+      - [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+      - [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+      - [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]

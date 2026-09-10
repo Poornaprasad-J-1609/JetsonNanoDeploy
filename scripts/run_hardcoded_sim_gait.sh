@@ -5,8 +5,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 echo "EXPERIMENTAL OPEN-LOOP SIMULATION GAIT"
 echo "First test must be suspended or substantially unloaded with a spotter."
-echo "W=forward, S=backward, SPACE=stand, C=sit, X=emergency stop."
-echo "Return to SPACE before changing direction."
+echo "Hold W=forward or S=backward; release the key to return to stand."
+echo "SPACE=stand, C=sit, X=emergency stop. Return to stand before reversing."
 
 if [[ "${GAIT_ACKNOWLEDGE_100NM_SUSPENSION:-}" != "YES" ]]; then
   echo "ERROR: this high-authority test requires a fully suspended robot." >&2
@@ -15,7 +15,7 @@ if [[ "${GAIT_ACKNOWLEDGE_100NM_SUSPENSION:-}" != "YES" ]]; then
 fi
 
 exec "$ROOT_DIR/scripts/run_medium_walk.sh" \
-  --hardcoded-gait-config "$ROOT_DIR/config/hardcoded_gait_sim_vx0p5.yaml" \
+  --hardcoded-gait-config "$ROOT_DIR/config/hardcoded_gait_july13_minimal.yaml" \
   --hardcoded-gait-amplitude-scale "${GAIT_AMPLITUDE_SCALE:-0.50}" \
   --hardcoded-gait-frequency-scale "${GAIT_FREQUENCY_SCALE:-0.50}" \
   --max-vx 1.0 \
@@ -28,6 +28,10 @@ exec "$ROOT_DIR/scripts/run_medium_walk.sh" \
   --policy-command-vx-max 0.25 \
   --policy-command-vy-max 0 \
   --policy-command-yaw-max 0 \
+  --keyboard-control-mode repeat \
+  --keyboard-command-timeout 0.20 \
+  --walk-command-grace-seconds 0.10 \
+  --walk-stop-confirm-seconds 0.10 \
   --policy-entry-ramp-seconds 3.0 \
   --policy-kp-override "${GAIT_KP:-250}" \
   --policy-kd-override "${GAIT_KD:-4}" \

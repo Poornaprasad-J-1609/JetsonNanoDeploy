@@ -20,7 +20,10 @@ from safety_monitor import SafetyMonitor  # noqa: E402
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", default=str(ROOT / "config" / "hardcoded_gait_sim_vx0p5.yaml"))
+    parser.add_argument(
+        "--config",
+        default=str(ROOT / "config" / "hardcoded_gait_july13_minimal.yaml"),
+    )
     parser.add_argument("--runs", type=int, default=500)
     parser.add_argument("--seconds", type=float, default=12.0)
     parser.add_argument("--seed", type=int, default=8675)

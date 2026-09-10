@@ -168,7 +168,9 @@ class HardcodedGaitPlayer:
                 raise ValueError("current_target contains NaN or Inf")
             self._blend_start = blend_start.copy()
             self.last_target = self._blend_start.copy()
-            self.last_velocity.fill(0.0)
+            # Preserve velocity across an accidental direct direction change.
+            # The acceleration guard will brake it smoothly while the quintic
+            # target blend turns toward the new periodic trajectory.
         template = self.templates[direction]
         self.phase_cycles = (
             self.phase_cycles

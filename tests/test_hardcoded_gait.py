@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def config_path():
-    return ROOT / "config" / "hardcoded_gait_sim_vx0p5.yaml"
+    return ROOT / "config" / "hardcoded_gait_july13_minimal.yaml"
 
 
 def test_templates_are_finite_and_periodic():
@@ -26,7 +26,27 @@ def test_default_replay_is_reduced_from_simulation():
     player = HardcodedGaitPlayer.from_yaml(config_path())
     samples = np.asarray([player.templates["forward"].sample(x / 500) for x in range(500)])
     replay = player.amplitude_scale * samples
-    assert np.max(np.abs(replay)) < 0.15
+    assert np.max(np.abs(replay)) < 0.16
+
+
+def test_minimal_replay_moves_every_leg_and_limits_hip_excursion():
+    player = HardcodedGaitPlayer.from_yaml(config_path())
+    for direction in ("forward", "backward"):
+        samples = np.asarray(
+            [player.templates[direction].sample(x / 2000) for x in range(2000)]
+        )
+        replay = player.amplitude_scale * samples
+        spans = np.ptp(replay, axis=0)
+        assert np.all(spans[4:12] >= 0.03)
+        assert np.max(spans[0:4]) <= 0.015
+        assert np.max(spans[4:12]) <= 0.16
+
+
+def test_minimal_profile_uses_only_the_smooth_fundamental():
+    player = HardcodedGaitPlayer.from_yaml(config_path())
+    for template in player.templates.values():
+        np.testing.assert_array_equal(template.harmonic_weights, [1.0, 0.0, 0.0])
+        np.testing.assert_array_equal(template.coefficients[3:], np.zeros((4, 12)))
 
 
 def test_direction_change_blends_without_target_jump():
@@ -34,7 +54,18 @@ def test_direction_change_blends_without_target_jump():
     for _ in range(200):
         previous = player.update(1.0, 0.02, np.zeros(12, dtype=np.float32))
     changed = player.update(-1.0, 0.02, previous)
-    assert np.max(np.abs(changed - previous)) < 0.002
+    assert np.max(np.abs(changed - previous)) <= player.max_target_step_rad
+
+
+def test_direction_change_preserves_acceleration_bound():
+    player = HardcodedGaitPlayer.from_yaml(config_path())
+    dt = 0.02
+    for _ in range(200):
+        player.update(1.0, dt, player.last_target)
+    velocity_before = player.last_velocity.copy()
+    player.update(-1.0, dt, player.last_target)
+    acceleration = (player.last_velocity - velocity_before) / dt
+    assert np.max(np.abs(acceleration)) <= player.max_target_acceleration_rad_s2 + 1e-5
 
 
 def test_target_step_guard_is_always_active():
