@@ -28,6 +28,7 @@ args=(
     --can-command-hz 200
     --can-command-stale-timeout 0.25
     --base-lin-vel-source zero
+    --policy-path "$ROOT_DIR/policy/policy.pt"
     --start-control-mode idle
     --startup-action hold
     --initial-zero-frame stand
@@ -35,11 +36,11 @@ args=(
     --no-auto-stand-zero
     --no-auto-sit-zero
     --no-stand-policy-stabilization
-    --no-auto-policy-after-stand
+    --auto-policy-after-stand
     --no-imu-stabilization
     --no-gait-assist
-    # SPACE settles in stand; W/A/S/D/Q/E then provide the trained velocity
-    # command observation and trigger locomotion-policy takeover.
+    # SPACE settles in stand and then enters the policy with a zero velocity
+    # command. W/A/S/D/Q/E update the trained command observation afterward.
     --walk-command-threshold 0.02
     --max-vx 1.80
     --max-vy 0.80
@@ -58,13 +59,14 @@ args=(
     --policy-command-vy-max 0.12
     --policy-command-yaw-max 0
     # Preserve the validated actor-to-target equation after policy entry.
-    # A two-second position blend handles takeover; physical joint and torque
+    # A three-second position blend handles takeover; physical joint and torque
     # guards remain the final protection layer.
-    --policy-action-clip 0
+    --policy-action-clip 100
+    --policy-hip-action-clip 0
     --policy-hip-action-scale 1.0
     --policy-action-smoothing 0
     --policy-action-delta-limit 0
-    --policy-entry-ramp-seconds 2.0
+    --policy-entry-ramp-seconds 3.0
     --exact-policy-after-entry
     # Use the requested common 100 Nm authority ceiling for every joint. This
     # does not command 100 Nm continuously; Kp/Kd and tracking error determine

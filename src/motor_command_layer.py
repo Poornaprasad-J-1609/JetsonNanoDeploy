@@ -240,7 +240,7 @@ class MotorCommandLayer:
             phase: self._command_proto_for_encoding(encoding)
             for phase, encoding in self.phase_command_encoding.items()
         }
-        self.gains = self.cfg["gains"]
+        self.gains = self._expand_shared_gains(self.cfg["gains"])
         self.feedforward = self.cfg["feedforward"]
         virtual_stop_cfg = self.cfg.get("virtual_joint_stop", {}) or {}
         self.virtual_joint_stop_enabled = bool(virtual_stop_cfg.get("enabled", False))
@@ -263,6 +263,38 @@ class MotorCommandLayer:
         self.joint_coordinate_shifts = {joint_name: 0.0 for joint_name in self.policy_order}
         self.reload_joint_limits(force=True)
         self.reload_control_limits(force=True)
+
+    @staticmethod
+    def _expand_shared_gains(configured_gains):
+        """Apply one hip/thigh/calf gain table to every MIT control phase."""
+        if not isinstance(configured_gains, dict):
+            raise ValueError("gains must be a mapping")
+        groups = ("hip", "thigh", "calf")
+        if not all(group in configured_gains for group in groups):
+            return configured_gains
+
+        shared = {}
+        for group in groups:
+            group_cfg = configured_gains[group]
+            if not isinstance(group_cfg, dict):
+                raise ValueError(f"gains.{group} must be a mapping")
+            shared[group] = {
+                field: float(group_cfg[field])
+                for field in ("kp", "kd")
+            }
+            if not all(
+                math.isfinite(value) and value >= 0.0
+                for value in shared[group].values()
+            ):
+                raise ValueError(f"gains.{group} values must be finite and >= 0")
+
+        return {
+            phase: {
+                group: dict(shared[group])
+                for group in groups
+            }
+            for phase in ("startup", "sit", "stand", "hold", "policy", "leveling")
+        }
 
     def close(self):
         return None

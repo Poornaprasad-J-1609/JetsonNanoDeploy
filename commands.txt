@@ -126,10 +126,11 @@ DRY_RUN=1 bash scripts/run_mevius_style_walk.sh \
   --policy-command-yaw-max 0
 
 Verify the printed command contains:
+  --policy-path <this folder>/policy/policy.pt
   --exact-policy-after-entry
   --policy-action-smoothing 0
   --policy-action-delta-limit 0
-  --no-auto-policy-after-stand
+  --auto-policy-after-stand
 
 
 8. LOW-SPEED SUPPORTED MEVIUS-STYLE WALK TEST
@@ -149,9 +150,10 @@ bash scripts/run_mevius_style_walk.sh \
 Sequence:
   1. Press c and wait for crouch to complete.
   2. Press Space and wait for stand to settle.
-  3. Confirm it remains in stand. Policy must not start automatically.
-  4. Press w once to request low-speed forward policy takeover.
-  5. Press h to stop walking and hold, c to crouch, or x for emergency stop.
+  3. Confirm the controller reports automatic policy entry at zero command.
+  4. Wait for the 3-second entry blend to reach 100 percent.
+  5. Press w once to request low-speed forward movement.
+  6. Press h to stop walking and hold, c to crouch, or x for emergency stop.
 
 Movement keys:
   w/s     forward/backward

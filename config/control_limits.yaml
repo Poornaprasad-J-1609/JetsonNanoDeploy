@@ -38,26 +38,18 @@ policy_deployment:
   command_vx_abs_max: 0.0
   command_vy_abs_max: 0.0
   command_yaw_abs_max: 0.0
-  # Ground-safe defaults: preserve the trained action_scale from joint_map.yaml,
-  # but do not let the first walking key press jump straight from stand to a
-  # full actor output. Use --policy-sim-match only for controlled comparisons.
-  action_clip_abs: 2.8
-  # The latest loaded-ground log drove raw hip actions to |8.33| while the
-  # matching MuJoCo run stayed near |3.23| maximum. This clip is followed by
-  # hip_action_scale below; together they cap hip target contributions at
-  # +/-0.12 rad without reducing thigh/calf gait range.
-  hip_action_clip_abs: 1.6
-  # The 2026-08-01 loaded runs produced 0.50-0.62 rad measured hip travel,
-  # while the matching simulation envelope was 0.24-0.36 rad. Apply this
-  # after the hip clip at the motor boundary. Observation slots obs[36:48]
-  # always contain the previous raw actor output from the training contract.
-  hip_action_scale: 0.30
-  action_smoothing: 0.20
-  action_delta_limit_abs: 0.15
-  policy_entry_ramp_seconds: 2.0
-  # Before packing a walking MIT command, constrain its estimated joint-space
-  # PD torque around fresh encoder feedback. The independent measured-feedback
-  # emergency stop remains in config/safety_limits.yaml.
+  # Match the broad upstream MEVIUS action clamp. For model 8675, target
+  # conversion still uses its trained 0.25 scale from joint_map.yaml. Only the
+  # stand-to-policy entry blend is rate limited; steady policy targets are not.
+  action_clip_abs: 100.0
+  hip_action_clip_abs: 0.0
+  hip_action_scale: 1.0
+  action_smoothing: 0.0
+  action_delta_limit_abs: 0.0
+  policy_entry_ramp_seconds: 3.0
+  # Before packing a walking MIT command, retain one final estimated
+  # joint-space authority ceiling around fresh encoder feedback. The
+  # independent measured-feedback emergency stop remains in safety_limits.yaml.
   # Common requested torque ceiling for loaded sit, stand, hold, and walking.
   # This is an authority ceiling, not a continuously commanded torque.
   estimated_pd_torque_limit: 100.0
@@ -95,16 +87,12 @@ mit_parameters:
   v_min: -15.0
   v_max: 15.0
   kp_min: 0.0
-  # Permit the independently tested loaded-stand profile to use Kp=250 on the
-  # rear load-bearing joints. This remains far below the accidental effective
-  # Kp of the legacy encoding path.
+  # Leave tuning room above the three shared gains without changing them.
   kp_max: 250.0
   kd_min: 0.0
   kd_max: 10.0
-  # Accommodate loaded-pose gravity support and the simulated one-sided joint
-  # stop reaction. Total position + damping + feedforward torque remains
-  # bounded by the selected 100 Nm phase limit; this is only the packet-field
-  # range and does not raise overall torque authority.
+  # Packet-field bounds only. The MEVIUS-style profile sends tau_ff=0 and the
+  # total estimated command authority remains bounded by 100 Nm.
   tau_ff_min: -50.0
   tau_ff_max: 50.0
 

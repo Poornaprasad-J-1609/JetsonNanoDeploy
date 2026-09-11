@@ -62,107 +62,27 @@ communication:
   frame_gap_s: 0.0010
 
 gains:
-  # Values below are physical RS04 gains because every phase uses the official
-  # operation-control range.
-  startup:
-    hip:
-      kp: 80.0
-      kd: 4.0
-    thigh:
-      # Loaded stand logs show stable feedback but persistent static sag at
-      # Kp=110. Match the rear policy impedance without changing damping.
-      kp: 130.0
-      kd: 4.0
-    calf:
-      kp: 130.0
-      kd: 4.0
-
-  hold:
-    hip:
-      kp: 80.0
-      kd: 4.0
-    thigh:
-      kp: 130.0
-      kd: 4.0
-    calf:
-      kp: 130.0
-      kd: 4.0
-
-  policy:
-    hip:
-      # Restore the actuator impedance used by the comparatively successful
-      # 0c17450 hardware run. Policy packets remain in official RS04 units.
-      kp: 80.0
-      kd: 5.0
-    thigh:
-      kp: 110.0
-      kd: 6.5
-    calf:
-      kp: 110.0
-      kd: 6.5
-    joints:
-      BL_hip_joint: {kp: 80.0, kd: 5.0}
-      BR_hip_joint: {kp: 80.0, kd: 5.0}
-      FL_hip_joint: {kp: 80.0, kd: 5.0}
-      FR_hip_joint: {kp: 80.0, kd: 5.0}
-      BL_thigh_joint: {kp: 130.0, kd: 8.0}
-      BR_thigh_joint: {kp: 130.0, kd: 8.0}
-      FL_thigh_joint: {kp: 110.0, kd: 6.5}
-      FR_thigh_joint: {kp: 110.0, kd: 6.5}
-      BL_calf_joint: {kp: 130.0, kd: 8.0}
-      BR_calf_joint: {kp: 130.0, kd: 8.0}
-      FL_calf_joint: {kp: 110.0, kd: 6.5}
-      FR_calf_joint: {kp: 110.0, kd: 6.5}
-
-  # These take over only after stand has settled and direct IMU stabilization
-  # is explicitly enabled.
-  leveling:
-    hip:
-      kp: 80.0
-      kd: 2.0
-    thigh:
-      kp: 80.0
-      kd: 2.0
-    calf:
-      kp: 80.0
-      kd: 2.0
+  # One physical RS04 gain pair per joint class, shared by startup, sit,
+  # stand, hold, policy, and leveling. Requested tuning values; these differ
+  # from model 8675's training gains and require hardware validation.
+  hip:   {kp: 250.0, kd: 4.0}
+  thigh: {kp: 250.0, kd: 4.0}
+  calf:  {kp: 250.0, kd: 4.0}
 
 feedforward:
   tau_ff: 0.0
   v_des: 0.0
 
-# Smooth gravity-support bias for loaded sit/stand. The Aug 5 19:07 loaded
-# stand used only 35 Nm median / 46 Nm peak but retained 0.15-0.24 rad calf
-# error. Add a small amount of support while staying well below the earlier
-# 14-38 Nm map that distorted the pose. The remaining load stays with PD.
+# MEVIUS-style operation sends only q_des, zero qd_des, the configured gains,
+# and zero feedforward. Gravity/load support therefore comes from impedance
+# error exactly as it does in the upstream controller.
 pose_support:
-  enabled: true
-  # Keep the calibrated gravity bias during zero-command policy takeover and
-  # walking. This does not alter q_default or actor targets; it only prevents
-  # the loaded 50 kg body support from vanishing when entry reaches 100%.
-  policy_scale: 1.0
-  stand_joint_tau_ff:
-    BL_hip_joint: -1.30
-    BR_hip_joint: 6.70
-    FL_hip_joint: -1.83
-    FR_hip_joint: -4.35
-    BL_thigh_joint: 12.00
-    BR_thigh_joint: -12.00
-    FL_thigh_joint: 7.82
-    FR_thigh_joint: -12.00
-    BL_calf_joint: -12.00
-    BR_calf_joint: 12.00
-    FL_calf_joint: -8.00
-    FR_calf_joint: 12.00
+  enabled: false
+  policy_scale: 0.0
+  stand_joint_tau_ff: {}
 
-# Isaac/MuJoCo computes actuator torque from the raw policy target before the
-# physical joint constraint is solved. On hardware we keep q_des inside the
-# measured envelope and reproduce only that discarded position error as a
-# bounded feedforward preload. The normal per-stage total torque limiter still
-# applies after this contribution is added.
+# No software joint-stop torque is added. Physical target clamping remains the
+# final protection against commands outside the measured joint envelope.
 virtual_joint_stop:
-  enabled: true
-  # The model_11078 real run requested 26-45 Nm at the simulated calf stops.
-  # Preserve that constraint reaction while the common total PD + damping +
-  # feedforward estimator remains capped at 100 Nm.
-  max_preload_nm: 50.0
+  enabled: false
+  max_preload_nm: 0.0

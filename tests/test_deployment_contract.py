@@ -1027,7 +1027,7 @@ def test_configured_pose_path_uses_official_physical_gain_units():
         joint_can_bus=resolve_joint_can_bus(runner.policy_order, 1),
     )
     q_target = np.zeros(12, dtype=np.float32)
-    q_target[joint_index] = 0.40
+    q_target[joint_index] = 0.20
     qd_target = np.zeros(12, dtype=np.float32)
     qd_target[joint_index] = 0.25
     command = layer.build_mit_commands(
@@ -1045,29 +1045,27 @@ def test_configured_pose_path_uses_official_physical_gain_units():
 
     assert layer.pose_pd_torque_limits()["stand"] == pytest.approx(100.0)
     assert command["command_encoding"] == "official"
-    assert command["q_des"] == pytest.approx(0.40)
+    assert command["q_des"] == pytest.approx(0.20)
     assert command["joint_v_des"] == pytest.approx(0.25)
     assert not command["torque_limited"]
-    assert command["kp"] == pytest.approx(130.0)
+    assert command["kp"] == pytest.approx(250.0)
     assert command["kd"] == pytest.approx(4.0)
-    assert command["kp_effective"] == pytest.approx(130.0, abs=0.1)
+    assert command["kp_effective"] == pytest.approx(250.0, abs=0.1)
     assert command["kd_effective"] == pytest.approx(4.0, abs=0.01)
 
 
-def test_loaded_pose_support_is_complete_and_enters_torque_budget():
+def test_mevius_style_pose_support_is_disabled_and_adds_no_feedforward():
     runner = PolicyRunner()
     motor_ids = load_yaml(ROOT / "config" / "motor_ids.yaml")["motor_ids"]
     control_cfg = load_yaml(ROOT / "config" / "mit_motor_control.yaml")
     support_cfg = control_cfg["pose_support"]
 
-    assert support_cfg["enabled"] is True
-    assert support_cfg["policy_scale"] == pytest.approx(1.0)
-    assert set(support_cfg["stand_joint_tau_ff"]) == set(runner.policy_order)
+    assert support_cfg["enabled"] is False
+    assert support_cfg["policy_scale"] == pytest.approx(0.0)
+    assert support_cfg["stand_joint_tau_ff"] == {}
 
     joint_name = "BR_calf_joint"
     joint_index = runner.policy_order.index(joint_name)
-    support_tau = np.zeros(12, dtype=np.float32)
-    support_tau[joint_index] = support_cfg["stand_joint_tau_ff"][joint_name]
     layer = MotorCommandLayer(
         runner.policy_order,
         motor_ids,
@@ -1077,7 +1075,6 @@ def test_loaded_pose_support_is_complete_and_enters_torque_budget():
     command = layer.build_mit_commands(
         np.zeros(12, dtype=np.float32),
         phase="stand",
-        joint_feedforward_torque_target=support_tau,
         feedback_by_joint={
             joint_name: {
                 "position_raw": 0.0,
@@ -1087,9 +1084,9 @@ def test_loaded_pose_support_is_complete_and_enters_torque_budget():
         },
     )[0]
 
-    assert command["joint_tau_ff"] == pytest.approx(12.0, abs=1.0e-5)
-    assert command["tau_ff"] == pytest.approx(12.0, abs=0.05)
-    assert command["tau_pd_est"] == pytest.approx(12.0, abs=0.05)
+    assert command["joint_tau_ff"] == pytest.approx(0.0)
+    assert command["tau_ff"] == pytest.approx(0.0, abs=0.05)
+    assert command["tau_pd_est"] == pytest.approx(0.0, abs=0.05)
     assert abs(command["tau_pd_est"]) < command["torque_limit_effective"]
 
 
@@ -1142,10 +1139,10 @@ def test_policy_and_pose_use_official_physical_gains():
     )[0]
 
     assert policy_command["command_encoding"] == "official"
-    assert policy_command["kp_effective"] == pytest.approx(110.0, abs=0.1)
-    assert policy_command["kd_effective"] == pytest.approx(6.5, abs=0.01)
+    assert policy_command["kp_effective"] == pytest.approx(250.0, abs=0.1)
+    assert policy_command["kd_effective"] == pytest.approx(4.0, abs=0.01)
     assert pose_command["command_encoding"] == "official"
-    assert pose_command["kp_effective"] == pytest.approx(130.0, abs=0.1)
+    assert pose_command["kp_effective"] == pytest.approx(250.0, abs=0.1)
     assert pose_command["kd_effective"] == pytest.approx(4.0, abs=0.01)
 
     back_joint = "BL_calf_joint"
@@ -1165,8 +1162,8 @@ def test_policy_and_pose_use_official_physical_gains():
             }
         },
     )[0]
-    assert back_command["kp_effective"] == pytest.approx(130.0, abs=0.1)
-    assert back_command["kd_effective"] == pytest.approx(8.0, abs=0.01)
+    assert back_command["kp_effective"] == pytest.approx(250.0, abs=0.1)
+    assert back_command["kd_effective"] == pytest.approx(4.0, abs=0.01)
 
 
 def test_uniform_policy_gain_override_does_not_change_pose_gains():
@@ -1203,7 +1200,7 @@ def test_uniform_policy_gain_override_does_not_change_pose_gains():
     assert policy_command["kd_effective"] == pytest.approx(2.0, abs=0.01)
     assert policy_command["joint_v_des"] == pytest.approx(0.0)
     assert policy_command["joint_tau_ff"] == pytest.approx(0.0)
-    assert pose_command["kp_effective"] == pytest.approx(130.0, abs=0.1)
+    assert pose_command["kp_effective"] == pytest.approx(250.0, abs=0.1)
     assert pose_command["kd_effective"] == pytest.approx(4.0, abs=0.01)
 
 
@@ -1236,8 +1233,8 @@ def test_policy_entry_uses_official_policy_gains_while_target_ramps():
         )[0]
         assert command["command_encoding"] == "official"
         assert command["gain_blend_from_phase"] is None
-        assert command["kp_effective"] == pytest.approx(110.0, abs=0.2)
-        assert command["kd_effective"] == pytest.approx(6.5, abs=0.02)
+        assert command["kp_effective"] == pytest.approx(250.0, abs=0.2)
+        assert command["kd_effective"] == pytest.approx(4.0, abs=0.02)
 
 
 def test_policy_packets_reject_pose_gain_encoding_blends():
@@ -1316,12 +1313,12 @@ def test_pose_recovery_blends_effective_policy_gains_without_a_gain_step(
 
     assert recovery_start["command_encoding"] == "official"
     assert recovery_start["gain_blend_from_phase"] == "policy"
-    assert recovery_start["kp_effective"] == pytest.approx(110.0, abs=0.2)
-    assert recovery_start["kd_effective"] == pytest.approx(6.5, abs=0.02)
-    assert recovery_middle["kp_effective"] == pytest.approx(120.0, abs=0.2)
-    assert recovery_middle["kd_effective"] == pytest.approx(5.25, abs=0.02)
+    assert recovery_start["kp_effective"] == pytest.approx(250.0, abs=0.2)
+    assert recovery_start["kd_effective"] == pytest.approx(4.0, abs=0.02)
+    assert recovery_middle["kp_effective"] == pytest.approx(250.0, abs=0.2)
+    assert recovery_middle["kd_effective"] == pytest.approx(4.0, abs=0.02)
     assert recovery_end["gain_blend_from_phase"] is None
-    assert recovery_end["kp_effective"] == pytest.approx(130.0, abs=0.2)
+    assert recovery_end["kp_effective"] == pytest.approx(250.0, abs=0.2)
     assert recovery_end["kd_effective"] == pytest.approx(4.0, abs=0.02)
 
 
@@ -1448,8 +1445,8 @@ def test_policy_torque_limit_preserves_target_and_scales_impedance():
     assert command["q_des"] == pytest.approx(0.60)
     assert command["joint_v_des"] == pytest.approx(0.0)
     assert command["impedance_scale"] < 1.0
-    assert command["kp_effective"] < 110.0
-    assert command["kd_effective"] == pytest.approx(6.5, abs=0.01)
+    assert command["kp_effective"] < 120.0
+    assert command["kd_effective"] == pytest.approx(4.0, abs=0.01)
     assert command["kp_scale"] < 1.0
     assert command["kd_scale"] == pytest.approx(1.0)
     assert abs(command["tau_pd_est"]) <= 12.05
@@ -1467,6 +1464,8 @@ def test_policy_torque_limit_prioritizes_damping_during_fast_reversal():
         active_joints=[joint_name],
         joint_can_bus=resolve_joint_can_bus(runner.policy_order, 1),
     )
+    # Use a damping demand above this test's 14 Nm budget explicitly.
+    layer.set_policy_gains(kp=250.0, kd=5.0)
     layer.set_policy_pd_torque_limit(14.0)
     q_target = np.zeros(12, dtype=np.float32)
     q_target[joint_index] = 0.50
@@ -1524,16 +1523,15 @@ def test_policy_packet_boundary_uses_physical_not_diagnostic_limits():
 
 
 @pytest.mark.parametrize(
-    ("joint_name", "actor_target", "expected_preload_sign"),
+    ("joint_name", "actor_target"),
     (
-        ("FL_calf_joint", -0.50, -1.0),
-        ("BR_calf_joint", +0.50, +1.0),
+        ("FL_calf_joint", -0.50),
+        ("BR_calf_joint", +0.50),
     ),
 )
-def test_virtual_joint_stop_preserves_bounded_policy_torque_at_physical_limit(
+def test_mevius_style_virtual_joint_stop_adds_no_policy_preload(
     joint_name,
     actor_target,
-    expected_preload_sign,
 ):
     runner = PolicyRunner()
     motor_ids = load_yaml(ROOT / "config" / "motor_ids.yaml")["motor_ids"]
@@ -1563,15 +1561,9 @@ def test_virtual_joint_stop_preserves_bounded_policy_torque_at_physical_limit(
 
     assert command["q_des"] == pytest.approx(0.0)
     assert command["q_prelimit_requested"] == pytest.approx(actor_target)
-    assert command["joint_limit_preload_error"] == pytest.approx(actor_target)
-    # The per-phase 14 Nm authority is tighter than the configured 50 Nm
-    # preload range, so this test remains bounded by its phase limit.
-    assert abs(command["joint_limit_preload_tau_ff"]) == pytest.approx(14.0)
-    assert np.sign(command["joint_limit_preload_tau_ff"]) == expected_preload_sign
-    assert abs(command["tau_ff"]) == pytest.approx(14.0)
-    assert np.sign(command["tau_ff"]) == (
-        expected_preload_sign * layer.joint_directions[joint_name]
-    )
+    assert command["joint_limit_preload_error"] == pytest.approx(0.0)
+    assert command["joint_limit_preload_tau_ff"] == pytest.approx(0.0)
+    assert command["tau_ff"] == pytest.approx(0.0)
     assert abs(command["tau_pd_est"]) <= 14.05
 
 
@@ -2091,14 +2083,15 @@ def test_high_torque_stage_guards_are_present_in_main_controller_source():
     assert "stage100 requires --acknowledge-100nm-loaded-ground-test" in source
 
 
-def test_medium_walk_uses_loaded_per_joint_support_profile():
+def test_medium_walk_uses_direct_actor_with_fixed_final_authority_guard():
     launcher = (ROOT / "scripts" / "run_medium_walk.sh").read_text(
         encoding="utf-8"
     )
     assert "--joint-velocity-source finite-difference" in launcher
     assert "--exact-policy-after-entry" in launcher
     assert "--no-exact-policy-after-entry" not in launcher
-    assert "--policy-action-clip 0" in launcher
+    assert "--policy-action-clip 100" in launcher
+    assert "--policy-hip-action-clip 0" in launcher
     assert "--policy-hip-action-scale 1.0" in launcher
     assert "--policy-action-smoothing 0" in launcher
     assert "--policy-action-delta-limit 0" in launcher
@@ -2110,6 +2103,7 @@ def test_medium_walk_uses_loaded_per_joint_support_profile():
     assert "--policy-torque-ramp-max-measured-torque 100.0" in launcher
     assert "--policy-torque-ramp-max-feedback-age 0.060" in launcher
     assert "--pose-pd-torque-limit 100" in launcher
+    assert "--auto-policy-after-stand" in launcher
     profile = load_yaml(ROOT / "config" / "policy_torque_loaded.yaml")[
         "policy_torque_profile"
     ]
@@ -2136,9 +2130,45 @@ def test_mevius_style_launcher_uses_direct_actor_and_simulation_pd():
     assert "--policy-action-smoothing 0" in launcher
     assert "--policy-action-delta-limit 0" in launcher
     assert "--policy-entry-ramp-seconds 3.0" in launcher
-    assert "--no-auto-policy-after-stand" in launcher
+    assert "--auto-policy-after-stand" in launcher
+    assert "--no-auto-policy-after-stand" not in launcher
+    assert '--policy-path "$ROOT_DIR/policy/policy.pt"' in launcher
     assert "--policy-kp-override" not in launcher
     assert "--policy-kd-override" not in launcher
+
+
+def test_medium_walk_enters_policy_automatically_after_settled_stand():
+    launcher = (ROOT / "scripts" / "run_medium_walk.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "--auto-policy-after-stand" in launcher
+    assert "--no-auto-policy-after-stand" not in launcher
+
+
+def test_exact_policy_motor_target_rate_limit_only_applies_during_entry():
+    source = (ROOT / "src" / "main_controller.py").read_text(encoding="utf-8")
+    assert source.count(
+        "q_previous_target if policy_entry_rate_limit_active else None"
+    ) == 2
+    assert source.count(
+        "safety.dq_max if policy_entry_rate_limit_active else None"
+    ) == 2
+
+
+def test_mevius_style_uses_three_shared_gain_pairs_and_no_extra_feedforward():
+    config = load_yaml(ROOT / "config" / "mit_motor_control.yaml")
+    assert set(config["gains"]) == {"hip", "thigh", "calf"}
+    layer = MotorCommandLayer(
+        PolicyRunner().policy_order,
+        load_yaml(ROOT / "config" / "motor_ids.yaml")["motor_ids"],
+        active_joints=PolicyRunner().policy_order,
+    )
+    for phase in ("startup", "sit", "stand", "hold", "policy", "leveling"):
+        for group in ("hip", "thigh", "calf"):
+            assert layer.gains[phase][group] == config["gains"][group]
+    assert config["feedforward"] == {"tau_ff": 0.0, "v_des": 0.0}
+    assert config["pose_support"]["enabled"] is False
+    assert config["virtual_joint_stop"]["enabled"] is False
 
 
 def test_automatic_policy_takeover_requires_settled_stand():

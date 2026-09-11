@@ -171,7 +171,7 @@ def run_case(
         layer.policy_pd_torque_limit_for_joint(name)
         for name in layer.policy_order
     )
-    entry_steps = int(round(2.0 / dt))
+    entry_steps = int(round(3.0 / dt))
     steady_steps = int(round(1.5 / dt))
     return_steps = int(round(2.0 / dt))
     plant_response = float(rng.uniform(0.08, 0.24))
@@ -308,12 +308,13 @@ def run_case(
                 maximum_requested_target_excursion,
                 float(np.max(np.abs(q_requested - runner.q_stand))),
             )
+            entry_rate_limit_active = alpha < 0.999
             q_safe = shifted_safety_filter(
                 safety,
                 q_requested,
                 q_previous_target,
                 np.zeros(12, dtype=np.float32),
-                apply_rate_limit=True,
+                apply_rate_limit=entry_rate_limit_active,
                 use_policy_limits=False,
             )
             last_policy_gain_alpha = 1.0
@@ -322,8 +323,12 @@ def run_case(
                 phase="policy",
                 feedback_by_joint=feedback,
                 prelimit_q_target=q_requested,
-                previous_command_q=q_previous_target,
-                max_command_delta=safety.dq_max,
+                previous_command_q=(
+                    q_previous_target if entry_rate_limit_active else None
+                ),
+                max_command_delta=(
+                    safety.dq_max if entry_rate_limit_active else None
+                ),
             )
             previous_raw_action = raw_action.astype(np.float32)
             previous_sent_action = sent_action
@@ -422,7 +427,21 @@ def run_case(
             takeover_torque_step = torque_step
         if step == total_policy_steps:
             return_target_step = target_step
-            return_torque_step = torque_step
+            # Isolate the phase/target handoff from plant motion between two
+            # samples by evaluating the prior policy command at this cycle's
+            # exact same feedback snapshot.
+            same_feedback_policy = layer.build_mit_commands(
+                q_previous_target,
+                phase="policy",
+                feedback_by_joint=feedback,
+                prelimit_q_target=q_previous_target,
+            )
+            _, same_feedback_tau, _, _ = command_arrays(
+                layer,
+                same_feedback_policy,
+                q_previous_target,
+            )
+            return_torque_step = float(np.max(np.abs(tau - same_feedback_tau)))
 
         values = np.concatenate((q_sent, tau, kp, kd))
         nonfinite = nonfinite or not bool(np.all(np.isfinite(values)))
@@ -434,9 +453,10 @@ def run_case(
             np.any(q_sent < safety.q_min - 1.0e-6)
             or np.any(q_sent > safety.q_max + 1.0e-6)
         )
-        command_rate_violation = command_rate_violation or bool(
-            np.any(np.abs(q_sent - previous_q_sent) > safety.dq_max + 1.0e-5)
-        )
+        if step < entry_steps or step >= total_policy_steps:
+            command_rate_violation = command_rate_violation or bool(
+                np.any(np.abs(q_sent - previous_q_sent) > safety.dq_max + 1.0e-5)
+            )
 
         # First-order loaded-joint model. Net motor-plus-body torque changes
         # joint position relative to the commanded impedance. It is deliberately

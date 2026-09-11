@@ -5554,8 +5554,12 @@ def run_policy_loop(
                         q_safe_target,
                         exact_policy_after_entry=exact_policy_after_entry,
                     ),
-                    previous_command_q=q_previous_target,
-                    max_command_delta=safety.dq_max,
+                    previous_command_q=(
+                        q_previous_target if policy_entry_rate_limit_active else None
+                    ),
+                    max_command_delta=(
+                        safety.dq_max if policy_entry_rate_limit_active else None
+                    ),
                 )
             )
             if (
@@ -5675,8 +5679,12 @@ def run_policy_loop(
                         feedback_by_joint=fresh_feedback_for_commands,
                         joint_feedforward_torque_target=policy_pose_support_tau,
                         prelimit_q_target=q_policy_target,
-                        previous_command_q=q_previous_target,
-                        max_command_delta=safety.dq_max,
+                        previous_command_q=(
+                            q_previous_target if policy_entry_rate_limit_active else None
+                        ),
+                        max_command_delta=(
+                            safety.dq_max if policy_entry_rate_limit_active else None
+                        ),
                     )
             if float(policy_entry_scale) >= 0.999:
                 policy_steady_cycles += 1
